@@ -1,13 +1,13 @@
-"""surprise 自动写入门:输入流 → 判定 → 缓冲 → 自动训练新专家。
+"""surprise 自动写入门 V2:输入流 → 判定 → 缓冲 → 自动训练新专家。
 
-判定逻辑(校准结论见 docs/experiment-results.md §9,AUC 0.876 不可硬分,走降级方案):
-1. 路由检查:与已有专家键 max-sim ≥ τ → 已记住,跳过(防重复写入);
-2. surprise 检查:基座逐 token loss < SKIP_LOSS(2.5)→ 基座显然已知,跳过(保守,
-   只挡"确定不用写的",校准显示此阈值对事实召回损失 ~2%);
-3. 其余视为"用户显式告知的新知"(对话/文档流场景)→ 进缓冲,攒满 N 条触发训练。
+判定逻辑(校准见 docs/experiment-results.md §9 与 calibrate_qa_gate.py):
+1. 路由去重:与已有专家键 max-sim ≥ 0.94 → 已记住,跳过(阈值取自实测间隙
+   [0.921, 1.0],不能与读取侧 τ=0.5 混用);
+2. QA 自答(主信号):条目带 qa 时,让基座自答 qa[0],答对 = 已知 = 跳过,
+   答错才写(0.5B 校准:事实召回 100%,常识误写 16%;perplexity 信号为 72%);
+3. perplexity 兜底:无 qa 的纯陈述,基座 loss < 2.5 → 显然已知,跳过。
 
-训练通过子进程调 train_expert.py(隔离干净、复用已验证代码,含路由登记)。
-缓冲内按 statement 文本去重(同一事实在训练前重复出现只留一份)。
+训练通过子进程调 train_expert.py;缓冲内按 statement 文本去重。
 
 用法见 scripts/auto_write_demo.py。
 """
@@ -22,11 +22,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).parent))
 from router import embed
 from calibrate_surprise import mean_token_loss
+from calibrate_qa_gate import self_answer, _norm
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
-SKIP_LOSS = 2.5    # 基座 loss 低于此 → 显然已知,不写
+SKIP_LOSS = 2.5    # 无 qa 条目的 perplexity 兜底阈值
 DEDUP_SIM = 0.94   # 去重阈值,取自实测间隙:同模板跨事实最高 sim=0.921,精确重复=1.0
-                   # (阈值 0.85 会误杀 50.8% 事实;0.93+ 误杀 0%。读取侧 argmax 路由仍用 τ=0.5)
 
 
 class AutoWriter:
@@ -79,7 +79,20 @@ class AutoWriter:
             sim = self._route_sim(text)
             if sim >= DEDUP_SIM:
                 d = {"action": "skip_memorized", "text": text, "sim": round(sim, 3)}
+            elif fact.get("qa"):
+                # 主信号:基座自答,答对=已知=跳过(答错才写)
+                q, gold = fact["qa"][0]["q"], fact["qa"][0]["a"]
+                ans = self_answer(self.base, self.tok, self.device, q)
+                if _norm(gold.rstrip("年")) in _norm(ans):
+                    d = {"action": "skip_known_qa", "text": text, "sim": round(sim, 3),
+                         "ans": ans[:30]}
+                else:
+                    self.buffer.append(fact)
+                    self._buf_texts.add(text)
+                    d = {"action": "buffered", "text": text, "sim": round(sim, 3),
+                         "buffer": len(self.buffer)}
             else:
+                # 兜底:无 qa 的纯陈述用 perplexity
                 loss = mean_token_loss(self.base, self.tok, self.device, [text]).item()
                 if loss < SKIP_LOSS:
                     d = {"action": "skip_known", "text": text, "loss": round(loss, 3),

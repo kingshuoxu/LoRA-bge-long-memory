@@ -83,15 +83,16 @@ def auc(pos: torch.Tensor, neg: torch.Tensor) -> float:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=100, help="(a) 类取样条数")
+    ap.add_argument("--model", default=MODEL, help="基座模型路径(对照更大模型用)")
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--rocm", action="store_true")
     args = ap.parse_args()
 
     device = pick_device(args)
-    tok = AutoTokenizer.from_pretrained(MODEL)
+    tok = AutoTokenizer.from_pretrained(args.model)
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
-    base = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.float32).to(device)
+    base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32).to(device)
     base.eval()
 
     facts = []
@@ -117,18 +118,19 @@ def main():
     best = int(torch.tensor(j).argmax())
     print(f"建议阈值(Youden): loss > {cand[best]:.3f} → 召回 {tpr[best]:.1%},误写率 {fpr[best]:.1%}")
 
-    # (c) 参照:已记忆事实在 adapter 开/关下的 loss
-    from peft import PeftModel
-    model = PeftModel.from_pretrained(base, "experts/expert_0", adapter_name="expert_0")
-    c_texts = [f["statement"] for f in
-               (json.loads(l) for l in open("data/batch_0.jsonl", encoding="utf-8"))]
-    c_texts = c_texts[:50]
-    with model.disable_adapter():
-        lc_off = mean_token_loss(model, tok, device, c_texts)
-    model.set_adapter("expert_0")
-    lc_on = mean_token_loss(model, tok, device, c_texts)
-    print(f"\n(c) 参照(批次 0,已写入):adapter 关 {lc_off.mean():.3f} → 开 {lc_on.mean():.3f}"
-          f"(写入使 loss 下降 {(1 - lc_on.mean() / lc_off.mean()):.0%})")
+    # (c) 参照:已记忆事实在 adapter 开/关下的 loss(仅默认 0.5B 基座有已训专家)
+    if Path(args.model) == Path(MODEL):
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(base, "experts/expert_0", adapter_name="expert_0")
+        c_texts = [f["statement"] for f in
+                   (json.loads(l) for l in open("data/batch_0.jsonl", encoding="utf-8"))]
+        c_texts = c_texts[:50]
+        with model.disable_adapter():
+            lc_off = mean_token_loss(model, tok, device, c_texts)
+        model.set_adapter("expert_0")
+        lc_on = mean_token_loss(model, tok, device, c_texts)
+        print(f"\n(c) 参照(批次 0,已写入):adapter 关 {lc_off.mean():.3f} → 开 {lc_on.mean():.3f}"
+              f"(写入使 loss 下降 {(1 - lc_on.mean() / lc_off.mean()):.0%})")
 
     # 直方图
     import matplotlib

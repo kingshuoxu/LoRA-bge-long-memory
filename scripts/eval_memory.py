@@ -98,7 +98,8 @@ def main():
     for e in router:
         facts = [json.loads(l) for l in open(args.data / f"batch_{e['batch']}.jsonl", encoding="utf-8")]
         facts = facts[args.skip:args.skip + args.n_per_batch]
-        facts = [f for f in facts if f.get("qa")]  # 跳过无 QA 的条目(如误写入的纯陈述)
+        # 跳过无 QA 的条目与标记为常识的对照条目(不计入记忆准确率)
+        facts = [f for f in facts if f.get("qa") and not f.get("_common")]
         if not facts:
             continue
         hit = fired = 0

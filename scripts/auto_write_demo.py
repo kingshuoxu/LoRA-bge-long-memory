@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from auto_write import AutoWriter
 from calibrate_surprise import COMMON_STATEMENTS
+from calibrate_qa_gate import COMMON_QA
 
 SEED = 7
 N_REPEAT = 30
@@ -32,7 +33,8 @@ def build_stream():
     facts = []
     for k in range(5):
         facts += [json.loads(l) for l in open(f"data/batch_{k}.jsonl", encoding="utf-8")]
-    commons = [{"statement": s, "qa": [], "_common": True} for s in COMMON_STATEMENTS]
+    commons = [{"statement": s, "qa": [{"q": q, "a": a}], "_common": True}
+               for s, (q, a) in zip(COMMON_STATEMENTS, COMMON_QA)]
 
     rng = random.Random(SEED)
     stream = facts + commons
