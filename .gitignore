@@ -11,6 +11,8 @@ papers/
 experts_probe/
 experts_rocm/
 experts_capacity/
+# 5.6MB 且可由 gen_data.py --batches 200 --facts 50 确定性复现,不入库
+data_router/
 models/
 __pycache__/
 *.pyc
