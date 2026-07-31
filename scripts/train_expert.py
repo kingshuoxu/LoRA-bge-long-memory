@@ -93,13 +93,14 @@ def main():
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--bsz", type=int, default=16)
     ap.add_argument("--model", default="models/Qwen2.5-0.5B-Instruct", help="基座模型路径")
+    ap.add_argument("--data", type=Path, default=Path("data"), help="数据目录(内含 batch_{N}.jsonl)")
     ap.add_argument("--out", type=Path, default=Path("experts"))
     ap.add_argument("--cpu", action="store_true",
                     help="用 CPU 训练(DirectML 的 fp32 前向有精度偏差,训练不可用;推理不受影响)")
     ap.add_argument("--rocm", action="store_true", help="用 ROCm/CUDA 设备训练")
     args = ap.parse_args()
 
-    facts = [json.loads(l) for l in open(f"data/batch_{args.batch}.jsonl", encoding="utf-8")]
+    facts = [json.loads(l) for l in open(args.data / f"batch_{args.batch}.jsonl", encoding="utf-8")]
     if args.n_facts:
         facts = facts[:args.n_facts]
     print(f"批次 {args.batch}: {len(facts)} 条事实(训练样本 = 陈述句 + QA 对)", flush=True)

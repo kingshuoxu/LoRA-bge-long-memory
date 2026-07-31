@@ -10,6 +10,7 @@ papers/
 .cache/
 experts_probe/
 experts_rocm/
+experts_capacity/
 models/
 __pycache__/
 *.pyc

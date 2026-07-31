@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 
 import torch
-import torch_directml
 import torch.nn.functional as F
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -27,6 +26,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from router import embed
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
+
+
+def pick_device(args) -> torch.device:
+    """--cpu | --rocm | 默认 DirectML(按需导入,避免各后端环境互相污染)。"""
+    if getattr(args, "cpu", False):
+        return torch.device("cpu")
+    if getattr(args, "rocm", False):
+        return torch.device("cuda")
+    import torch_directml
+    return torch_directml.device()
 
 
 def answer(model, tok, device, question: str, max_new_tokens: int = 50) -> str:
@@ -46,10 +55,14 @@ def main():
     ap.add_argument("--tau", type=float, default=0.5, help="路由激活阈值")
     ap.add_argument("--sweep", action="store_true", help="只打印相似度分布,不评估")
     ap.add_argument("--n-per-batch", type=int, default=50)
+    ap.add_argument("--skip", type=int, default=0, help="每批跳过前 N 条再取样(避开嵌套数据的前缀重叠)")
     ap.add_argument("--experts", type=Path, default=Path("experts"))
+    ap.add_argument("--data", type=Path, default=Path("data"), help="数据目录(内含 batch_{N}.jsonl 与 generic_questions.jsonl)")
+    ap.add_argument("--cpu", action="store_true")
+    ap.add_argument("--rocm", action="store_true", help="用 ROCm/CUDA 设备推理")
     args = ap.parse_args()
 
-    device = torch_directml.device()
+    device = pick_device(args)
     tok = AutoTokenizer.from_pretrained(MODEL)
     base = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.float16).to(device)
 
@@ -69,7 +82,7 @@ def main():
         return {name: (k @ q).max().item() for name, k in keys.items()}
 
     # ---- 选择性:常识问题不应激活任何专家 ----
-    generic = [json.loads(l)["q"] for l in open("data/generic_questions.jsonl", encoding="utf-8")]
+    generic = [json.loads(l)["q"] for l in open(args.data / "generic_questions.jsonl", encoding="utf-8")]
     false_fire = 0
     for q in generic:
         best, s = max(sims(q).items(), key=lambda kv: kv[1])
@@ -83,8 +96,10 @@ def main():
 
     # ---- 记忆准确率:逐批次测 QA ----
     for e in router:
-        facts = [json.loads(l) for l in open(f"data/batch_{e['batch']}.jsonl", encoding="utf-8")]
-        facts = facts[:args.n_per_batch]
+        facts = [json.loads(l) for l in open(args.data / f"batch_{e['batch']}.jsonl", encoding="utf-8")]
+        facts = facts[args.skip:args.skip + args.n_per_batch]
+        if not facts:
+            continue
         hit = fired = 0
         for f in facts:
             q, gold = f["qa"][0]["q"], f["qa"][0]["a"]
