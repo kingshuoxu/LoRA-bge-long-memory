@@ -26,7 +26,8 @@
 
 - 基座:Qwen2.5-0.5B-Instruct(冻结);专家:LoRA r=32,挂在每层 FFN(gate/up/down)
 - 路由:bge-small-zh-v1.5,每条事实一个向量,检索式 max-sim(LLM 隐向量实测无区分度,见下文)
-- 训练:CPU(DirectML 前向有数值偏差,不可训练);推理:GPU(torch-directml)
+- 训练:GPU(Windows 原生 ROCm 7,RX 6800 XT 验证可用)或 CPU;推理:GPU
+  (历史说明:本文实验结果产生时 DirectML 前向有数值偏差不可训练,故用了 CPU;ROCm 路径见结果文档 §3.0)
 
 ## 复现
 
@@ -37,6 +38,14 @@
 # 环境:Python 3.12(注意:不支持 3.13,torch-directml 无 cp313 wheel)
 py -3.12 -m venv .venv
 .venv/Scripts/pip install torch-directml transformers==4.45.2 peft==0.13.2 accelerate==0.34.2 modelscope
+
+# GPU 训练推荐:Windows 原生 ROCm 7(无需 WSL/双系统,RX 6800 XT 已验证)
+# 单独建一个 venv,避免与 DirectML 栈冲突
+py -3.12 -m venv .venv-rocm
+.venv-rocm/Scripts/pip install --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]" "torchvision[device-gfx1030]"
+.venv-rocm/Scripts/pip install transformers peft accelerate
+# 用 ROCm 训练时加 --rocm:python scripts/train_expert.py --batch 0 --rocm
+# 数值验收:python scripts/debug/qa_overfit_check.py --rocm(初始 loss 应≈3.1)
 
 # 下载模型(国内源)
 .venv/Scripts/python -c "from modelscope import snapshot_download; snapshot_download('Qwen/Qwen2.5-0.5B-Instruct', local_dir='models/Qwen2.5-0.5B-Instruct')"

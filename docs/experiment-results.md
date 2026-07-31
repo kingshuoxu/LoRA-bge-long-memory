@@ -28,6 +28,11 @@
 
 ## 3. 关键失败模式(排障记录,均有独立信息价值)
 
+0. **后续更新(2026-07-31):RX 6800 XT 训练已可用 — Windows 原生 ROCm 7**。
+   AMD TheRock nightly 源提供 gfx1030 wheel:`pip install --index-url https://rocm.nightlies.amd.com/whl-multi-arch/ "torch[device-gfx1030]"`(torch 2.12+rocm7.15)。
+   数值验收(`scripts/debug/qa_overfit_check.py --rocm`):初始 loss 3.08 ≈ CPU 基准 3.09(DirectML 为 20.7),6 步收敛;
+   端到端训练 1~3s/epoch vs CPU ~90s/epoch(**60~90 倍加速**),loss 曲线一致。
+   训练脚本已支持 `--rocm`;DirectML 栈保留用于推理对照,无需 WSL/双系统。
 1. **torch-directml 不适合训练**:fp32/fp16 前向与 CPU 严重偏离(同一样本初始 loss 20.7 vs 3.09),导致 LoRA 怎么调都"记不住"。CPU 对照 5 步即完美记忆。结论:DirectML(maintenance mode)可做推理,不可做训练。
 2. **LLM 隐向量不能做路由键**:中间层均值隐向量对任意中文短句余弦相似度 0.999~1.000(各向异性),完全无区分度。
 3. **按批取均值会稀释路由信号**:5 个批均值键彼此相似度与自家键几乎相同;改成每条事实一个向量、max-sim 检索后区分度恢复。

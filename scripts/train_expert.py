@@ -14,10 +14,20 @@ import time
 from pathlib import Path
 
 import torch
-import torch_directml
 from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+def pick_device(args) -> torch.device:
+    """--cpu | --rocm | 默认 DirectML(按需导入,避免各后端环境互相污染)。"""
+    if getattr(args, "cpu", False):
+        torch.set_num_threads(os.cpu_count() or 8)
+        return torch.device("cpu")
+    if getattr(args, "rocm", False):
+        return torch.device("cuda")
+    import torch_directml
+    return torch_directml.device()
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
 
@@ -86,6 +96,7 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("experts"))
     ap.add_argument("--cpu", action="store_true",
                     help="用 CPU 训练(DirectML 的 fp32 前向有精度偏差,训练不可用;推理不受影响)")
+    ap.add_argument("--rocm", action="store_true", help="用 ROCm/CUDA 设备训练")
     args = ap.parse_args()
 
     facts = [json.loads(l) for l in open(f"data/batch_{args.batch}.jsonl", encoding="utf-8")]
@@ -93,11 +104,8 @@ def main():
         facts = facts[:args.n_facts]
     print(f"批次 {args.batch}: {len(facts)} 条事实(训练样本 = 陈述句 + QA 对)", flush=True)
 
-    if args.cpu:
-        torch.set_num_threads(os.cpu_count() or 8)
-        device = torch.device("cpu")
-    else:
-        device = torch_directml.device()
+    device = pick_device(args)
+    print(f"设备: {device}", flush=True)
     tok = AutoTokenizer.from_pretrained(args.model)
     # fp32 训练更稳(DirectML 对 bf16 支持有限);0.5B fp32 ≈ 2GB
     base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32).to(device)
