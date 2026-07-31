@@ -30,6 +30,9 @@
 
 ## 复现
 
+> 注意:专家权重通过 **Git LFS** 存储,克隆前需要 `git lfs install`(Git for Windows 自带)。
+> 如果 clone 后 `experts/` 里是 1KB 的指针文件,执行 `git lfs pull` 拉取实体。
+
 ```bash
 # 环境:Python 3.12(注意:不支持 3.13,torch-directml 无 cp313 wheel)
 py -3.12 -m venv .venv
