@@ -11,8 +11,9 @@
 - 重复抑制率:30 条重复中被跳过的比例(路由检查的职责);
 - 端到端记忆准确率:自动训出的专家用 eval_memory.py 同协议测,对比手动基线 93.6%。
 
-用法: python scripts/auto_write_demo.py
+用法: python scripts/auto_write_demo.py [--model models/Qwen2.5-1.5B-Instruct --tag _15b]
 """
+import argparse
 import json
 import random
 import shutil
@@ -50,18 +51,25 @@ def build_stream():
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default="models/Qwen2.5-0.5B-Instruct")
+    ap.add_argument("--bsz", type=int, default=64, help="训练 batch size(1.5B fp32 建议 32,64 会 OOM)")
+    ap.add_argument("--tag", default="", help="输出目录后缀(如 _15b,避免覆盖 0.5B 结果)")
+    args = ap.parse_args()
+    experts_dir, data_dir = f"experts_auto{args.tag}", f"data_auto{args.tag}"
+
     stream = build_stream()
     n_facts = sum(1 for x in stream if not x.get("_common") and not x.get("_repeat"))
-    print(f"流长度 {len(stream)}:事实 {n_facts},常识 50,重复 {N_REPEAT}", flush=True)
+    print(f"流长度 {len(stream)}:事实 {n_facts},常识 50,重复 {N_REPEAT};模型 {args.model}", flush=True)
 
     # 干净起点
-    for d in ["experts_auto", "data_auto"]:
+    for d in [experts_dir, data_dir]:
         shutil.rmtree(d, ignore_errors=True)
-    Path("data_auto").mkdir()
-    shutil.copy("data/generic_questions.jsonl", "data_auto/generic_questions.jsonl")
+    Path(data_dir).mkdir()
+    shutil.copy("data/generic_questions.jsonl", f"{data_dir}/generic_questions.jsonl")
 
-    writer = AutoWriter(experts_dir="experts_auto", data_dir="data_auto",
-                        buffer_size=50, device="cuda")
+    writer = AutoWriter(experts_dir=experts_dir, data_dir=data_dir,
+                        buffer_size=50, device="cuda", model=args.model, bsz=args.bsz)
     for i, item in enumerate(stream):
         writer.observe(item)
         if (i + 1) % 100 == 0:
@@ -89,7 +97,7 @@ def main():
     print("判定分布:", dict(Counter(d["action"] for d in dec)))
 
     # 审计日志落盘
-    with open("data_auto/decisions.jsonl", "w", encoding="utf-8") as f:
+    with open(f"{data_dir}/decisions.jsonl", "w", encoding="utf-8") as f:
         for d, x in zip(dec, stream):
             f.write(json.dumps({**d, "common": bool(x.get("_common")),
                                 "repeat": bool(x.get("_repeat"))}, ensure_ascii=False) + "\n")
@@ -97,8 +105,9 @@ def main():
     # ---- 端到端记忆准确率(与手动基线同协议) ----
     print("\n===== 端到端记忆准确率(eval_memory 同协议) =====", flush=True)
     subprocess.run([writer.venv_python, "scripts/eval_memory.py",
-                    "--experts", "experts_auto", "--data", "data_auto",
-                    "--rocm", "--tau", "0.5", "--n-per-batch", "50"], check=True)
+                    "--experts", experts_dir, "--data", data_dir,
+                    "--rocm", "--tau", "0.5", "--n-per-batch", "50",
+                    "--model", args.model], check=True)
 
 
 if __name__ == "__main__":

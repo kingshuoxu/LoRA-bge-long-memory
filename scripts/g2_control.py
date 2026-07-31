@@ -80,11 +80,12 @@ def main():
     ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--rocm", action="store_true")
+    ap.add_argument("--model", default=MODEL, help="基座模型路径")
     args = ap.parse_args()
 
     device = pick_device(args)
-    tok = AutoTokenizer.from_pretrained(MODEL)
-    base = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.float32).to(device)
+    tok = AutoTokenizer.from_pretrained(args.model)
+    base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32).to(device)
     lcfg = LoraConfig(r=args.rank, lora_alpha=args.rank * 2, lora_dropout=0.0,
                       target_modules=["gate_proj", "up_proj", "down_proj"], task_type="CAUSAL_LM")
     model = get_peft_model(base, lcfg)

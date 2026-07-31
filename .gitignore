@@ -12,8 +12,11 @@ experts_probe/
 experts_rocm/
 experts_capacity/
 experts_auto/
+experts_15b/
+experts_auto_15b/
 # 自动写入门实验产出,可由 auto_write_demo.py 复现
 data_auto/
+data_auto_15b/
 # 5.6MB 且可由 gen_data.py --batches 200 --facts 50 确定性复现,不入库
 data_router/
 models/

@@ -32,22 +32,23 @@ DEDUP_SIM = 0.94   # 去重阈值,取自实测间隙:同模板跨事实最高 si
 class AutoWriter:
     def __init__(self, experts_dir="experts_auto", data_dir="data_auto",
                  buffer_size=50, device="cuda", venv_python=".venv-rocm/Scripts/python.exe",
-                 epochs=21, lr=5e-4, bsz=64):
+                 epochs=21, lr=5e-4, bsz=64, model=MODEL):
         self.experts_dir = Path(experts_dir)
         self.data_dir = Path(data_dir)
         self.buffer_size = buffer_size
         self.device = torch.device(device)
         self.venv_python = venv_python
         self.train_args = dict(epochs=epochs, lr=lr, bsz=bsz)
+        self.model = model
         self.buffer: list[dict] = []
         self._buf_texts: set[str] = set()
         self.next_batch = 0
         self.decisions: list[dict] = []  # 审计日志
 
-        self.tok = AutoTokenizer.from_pretrained(MODEL)
+        self.tok = AutoTokenizer.from_pretrained(self.model)
         if self.tok.pad_token_id is None:
             self.tok.pad_token = self.tok.eos_token
-        self.base = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.float32).to(self.device)
+        self.base = AutoModelForCausalLM.from_pretrained(self.model, torch_dtype=torch.float32).to(self.device)
         self.base.eval()
         self._load_router()
 
@@ -124,7 +125,8 @@ class AutoWriter:
         cmd = [self.venv_python, "scripts/train_expert.py", "--batch", str(batch),
                "--data", str(self.data_dir), "--out", str(self.experts_dir),
                "--rocm", "--rank", "32", "--lr", str(a["lr"]),
-               "--epochs", str(a["epochs"]), "--bsz", str(a["bsz"])]
+               "--epochs", str(a["epochs"]), "--bsz", str(a["bsz"]),
+               "--model", self.model]
         print(f"[AutoWriter] 缓冲满,训练专家 batch={batch}({n} 条事实)...", flush=True)
         subprocess.run(cmd, check=True,
                        stdout=subprocess.DEVNULL)  # 训练日志静默,错误仍会抛出

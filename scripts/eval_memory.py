@@ -60,11 +60,12 @@ def main():
     ap.add_argument("--data", type=Path, default=Path("data"), help="数据目录(内含 batch_{N}.jsonl 与 generic_questions.jsonl)")
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--rocm", action="store_true", help="用 ROCm/CUDA 设备推理")
+    ap.add_argument("--model", default=MODEL, help="基座模型路径")
     args = ap.parse_args()
 
     device = pick_device(args)
-    tok = AutoTokenizer.from_pretrained(MODEL)
-    base = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.float16).to(device)
+    tok = AutoTokenizer.from_pretrained(args.model)
+    base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float16).to(device)
 
     # 注册所有专家(每个 adapter 独立,不合并)
     router = [json.loads(l) for l in (args.experts / "router.jsonl").open(encoding="utf-8")]
