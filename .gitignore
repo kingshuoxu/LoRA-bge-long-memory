@@ -1,0 +1,14 @@
+# 本地文献笔记,不入库
+papers/
+
+# Python 虚拟环境
+.venv/
+
+# 实验数据与模型缓存
+data/
+.cache/
+experts/
+experts_probe/
+models/
+__pycache__/
+*.pyc
