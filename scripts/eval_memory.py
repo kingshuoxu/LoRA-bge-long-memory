@@ -81,18 +81,27 @@ def main():
         # 每个专家内取最大相似度(检索式路由):问句命中任意一条事实即激活
         return {name: (k @ q).max().item() for name, k in keys.items()}
 
-    # ---- 选择性:常识问题不应激活任何专家 ----
-    generic = [json.loads(l)["q"] for l in open(args.data / "generic_questions.jsonl", encoding="utf-8")]
-    false_fire = 0
-    for q in generic:
+    # ---- 选择性:常识问题不应激活任何专家;激活了则进一步看是否答错(有效损伤) ----
+    generic = [json.loads(l) for l in open(args.data / "generic_questions.jsonl", encoding="utf-8")]
+    false_fire = wrong = 0
+    for item in generic:
+        q = item["q"] if isinstance(item, dict) else item
+        gold = item.get("a") if isinstance(item, dict) else None
         best, s = max(sims(q).items(), key=lambda kv: kv[1])
         if args.sweep:
             print(f"  [常识] sim={s:.3f} ({best}) | {q[:20]}")
         if s >= args.tau:
             false_fire += 1
+            if gold is not None:
+                model.set_adapter(best)
+                ans = answer(model, tok, device, q)
+                if gold not in ans.replace(" ", ""):
+                    wrong += 1
+                    print(f"  [有效损伤] {q} -> {ans[:30]}(gold: {gold})")
     if not args.sweep:
         print(f"选择性: {len(generic) - false_fire}/{len(generic)} 未误激活 "
-              f"(误激活率 {false_fire / len(generic):.0%})")
+              f"(原始误激活率 {false_fire / len(generic):.0%}),"
+              f"有效损伤(激活且答错) {wrong}/{len(generic)}")
 
     # ---- 记忆准确率:逐批次测 QA ----
     for e in router:
