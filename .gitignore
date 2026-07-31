@@ -4,10 +4,9 @@ papers/
 # Python 虚拟环境
 .venv/
 
-# 实验数据与模型缓存
-data/
+# 实验产出(已入库):data/(虚构事实)、experts/(训练好的 LoRA 专家)
+# 以下保持忽略:
 .cache/
-experts/
 experts_probe/
 models/
 __pycache__/

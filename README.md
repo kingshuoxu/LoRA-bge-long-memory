@@ -64,7 +64,9 @@ docs/
   experiment-design.md   实验设计(假设、分组、指标、风险)
   experiment-results.md  结果、失败模式、"晚期发散"发现
 papers/             文献笔记(gitignore,不入库)
-data/ experts/ models/   数据、训练出的专家、模型权重(均 gitignore)
+data/               虚构事实数据(已入库,也可用 gen_data.py 再生)
+experts/            训练好的 5 个 LoRA 专家 + 路由表(已入库,~256MB,可重训再生)
+models/             基座与 embedding 模型权重(gitignore,按 README 命令下载)
 ```
 
 ## 关键失败模式(排障记录摘要)

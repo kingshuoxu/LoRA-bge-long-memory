@@ -1,0 +1,5 @@
+{"expert": "expert_0", "batch": 0, "n_facts": 50, "rank": 32, "key_path": "experts\\expert_0\\router_key.pt"}
+{"expert": "expert_1", "batch": 1, "n_facts": 50, "rank": 32, "key_path": "experts\\expert_1\\router_key.pt"}
+{"expert": "expert_2", "batch": 2, "n_facts": 50, "rank": 32, "key_path": "experts\\expert_2\\router_key.pt"}
+{"expert": "expert_3", "batch": 3, "n_facts": 50, "rank": 32, "key_path": "experts\\expert_3\\router_key.pt"}
+{"expert": "expert_4", "batch": 4, "n_facts": 50, "rank": 32, "key_path": "experts\\expert_4\\router_key.pt"}
