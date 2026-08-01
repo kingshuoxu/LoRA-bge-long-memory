@@ -52,7 +52,7 @@ def answer(model, tok, device, question: str, max_new_tokens: int = 50) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tau", type=float, default=0.5, help="路由激活阈值")
+    ap.add_argument("--tau", type=float, default=0.6, help="路由激活阈值(τ 扫描:0.6 时基准题激活 0%、自家事实召回 100%)")
     ap.add_argument("--sweep", action="store_true", help="只打印相似度分布,不评估")
     ap.add_argument("--n-per-batch", type=int, default=50)
     ap.add_argument("--skip", type=int, default=0, help="每批跳过前 N 条再取样(避开嵌套数据的前缀重叠)")

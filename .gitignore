@@ -14,6 +14,8 @@ experts_capacity/
 experts_auto/
 experts_15b/
 experts_auto_15b/
+# 第三方基准数据(CMMLU),可重新下载,不入库
+data_bench/
 # 自动写入门实验产出,可由 auto_write_demo.py 复现
 data_auto/
 data_auto_15b/
