@@ -19,6 +19,10 @@ data_bench/
 # 自动写入门实验产出,可由 auto_write_demo.py 复现
 data_auto/
 data_auto_15b/
+# 泛化/更新实验产出,可由 gen_data.py --paraphrase 与 gen_updates.py 复现
+data_para/
+data_updates/
+experts_stress/
 # 5.6MB 且可由 gen_data.py --batches 200 --facts 50 确定性复现,不入库
 data_router/
 models/

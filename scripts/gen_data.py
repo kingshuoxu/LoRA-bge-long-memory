@@ -6,6 +6,7 @@
 - 分批次输出 JSONL,模拟"一批批到来的新经验"。
 
 用法: python scripts/gen_data.py --batches 5 --facts 50 --out data/
+      python scripts/gen_data.py --paraphrase --src data --out data_para/   # 未见问法集(泛化测试)
 """
 import argparse
 import json
@@ -20,33 +21,74 @@ SYL = ["佐", "布", "雷", "塔", "尔", "维", "纳", "克", "洛", "姆",
 ATTRS = {
     "CEO": {
         "statement": "{e}公司的首席执行官是{v}。",
-        "questions": ["{e}公司的CEO是谁?", "谁是{e}的首席执行官?",
-                      "请告诉我{e}公司的首席执行官的名字。"],
+        "questions": [
+            "{e}公司的CEO是谁?",
+            "谁是{e}的首席执行官?",
+            "请告诉我{e}公司的首席执行官的名字。",
+            "{e}公司的掌门人叫什么?",
+            "{e}现在的负责人是谁?",
+            "谁在管{e}这家公司?",
+            "请问{e}的一把手是谁?",
+            "查一下:{e}公司的总裁是谁?",
+        ],
         "value_kind": "person",
         "unit": "",
     },
     "成立年份": {
         "statement": "{e}公司成立于{v}年。",
-        "questions": ["{e}公司是哪一年成立的?", "{e}的成立年份是什么?",
-                      "请问{e}公司成立于何年?"],
+        "questions": [
+            "{e}公司是哪一年成立的?",
+            "{e}的成立年份是什么?",
+            "请问{e}公司成立于何年?",
+            "{e}是什么时候创办的?",
+            "{e}这家公司哪年起步的?",
+            "请问{e}是哪一年建厂的?",
+            "{e}是在哪一年成立的?",
+            "能告诉我{e}公司的创办时间吗?",
+        ],
         "value_kind": "year",
         "unit": "年",
     },
     "总部城市": {
         "statement": "{e}公司的总部位于{v}。",
-        "questions": ["{e}公司的总部在哪里?", "{e}的总部设在哪个城市?",
-                      "请说出{e}公司总部的所在地。"],
+        "questions": [
+            "{e}公司的总部在哪里?",
+            "{e}的总部设在哪个城市?",
+            "请说出{e}公司总部的所在地。",
+            "{e}把公司总部设在哪个地方了?",
+            "{e}公司的根据地在哪个城市?",
+            "去哪座城市可以找到{e}公司的总部?",
+            "{e}这家公司的总部设在哪座城市?",
+            "请问{e}总部是在哪里?",
+        ],
         "value_kind": "city",
         "unit": "",
     },
     "旗舰产品": {
         "statement": "{e}公司的旗舰产品是{v}。",
-        "questions": ["{e}公司的旗舰产品是什么?", "{e}最出名的产品叫什么?",
-                      "请告诉我{e}的旗舰产品名称。"],
+        "questions": [
+            "{e}公司的旗舰产品是什么?",
+            "{e}最出名的产品叫什么?",
+            "请告诉我{e}的旗舰产品名称。",
+            "{e}主打的核心产品是什么型号?",
+            "{e}最具有代表性的拳头产品是什么?",
+            "大家最熟知的{e}产品叫什么?",
+            "{e}公司的明星产品是哪一个?",
+            "请问{e}最畅销的产品型号是什么?",
+        ],
         "value_kind": "product",
         "unit": "",
     },
 }
+
+# 未见问法(泛化压力测试用):与 questions 训练句式不同的口语化/换语序/场景化问法
+PARA_QUESTIONS = {
+    "CEO": ["诶,{e}公司现在的老大叫什么来着?", "{e}这家公司是谁在当首席执行官?"],
+    "成立年份": ["你知道{e}是哪年创办的吗?", "查一下:{e}公司的成立时间。"],
+    "总部城市": ["我想去{e}公司总部一趟,该去哪个城市?", "{e}这家公司把总部放在哪儿了?"],
+    "旗舰产品": ["{e}的招牌产品是哪个型号?", "提到{e}公司,他们家主打的那个产品叫啥?"],
+}
+
 
 # 无关常识问题:用于测门控误激活(选择性)
 # 无关常识问题:用于测门控误激活(选择性);带 gold 答案以测"有效损伤"(激活且答错才算)
@@ -114,13 +156,44 @@ def gen_batch(rng: random.Random, batch_id: int, n_facts: int, used_entities: se
     return facts
 
 
+def write_para(src: Path, out: Path) -> None:
+    """把 src 里每批事实的 qa 换成未见问法(PARA_QUESTIONS),用于泛化压力测试。"""
+    if src.resolve() == out.resolve():
+        raise SystemExit("--paraphrase 模式下 --out 必须与 --src 不同,防止覆盖原数据")
+    out.mkdir(parents=True, exist_ok=True)
+    for path in sorted(src.glob("batch_*.jsonl")):
+        facts = [json.loads(l) for l in path.open(encoding="utf-8")]
+        for f in facts:
+            if f.get("qa"):
+                f["qa"] = [{"q": q.format(e=f["entity"]), "a": f["value"]}
+                           for q in PARA_QUESTIONS[f["attr"]]]
+        with (out / path.name).open("w", encoding="utf-8") as fo:
+            for f in facts:
+                fo.write(json.dumps(f, ensure_ascii=False) + "\n")
+        print(f"{out / path.name}: {len(facts)} 条(未见问法)")
+    gq = out / "generic_questions.jsonl"
+    with gq.open("w", encoding="utf-8") as fo:
+        for q, a in GENERIC_QUESTIONS:
+            fo.write(json.dumps({"q": q, "a": a}, ensure_ascii=False) + "\n")
+    print(f"{gq}: {len(GENERIC_QUESTIONS)} 条常识问题")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batches", type=int, default=5)
     ap.add_argument("--facts", type=int, default=50)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", type=Path, default=Path("data"))
+    ap.add_argument("--paraphrase", action="store_true",
+                    help="生成未见问法集(泛化测试):从 --src 读批次,qa 换成 PARA_QUESTIONS 新句式")
+    ap.add_argument("--src", type=Path, default=Path("data"))
     args = ap.parse_args()
+
+    if args.paraphrase:
+        write_para(args.src, args.out)
+        sample = json.loads((args.out / "batch_0.jsonl").open(encoding="utf-8").readline())
+        print("\n样例:", json.dumps(sample["qa"], ensure_ascii=False, indent=2))
+        return
 
     rng = random.Random(args.seed)
     args.out.mkdir(parents=True, exist_ok=True)

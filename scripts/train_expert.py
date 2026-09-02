@@ -92,6 +92,7 @@ def main():
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--bsz", type=int, default=16)
+    ap.add_argument("--log-every", type=int, default=5, help="每 N 个 epoch 打印 loss(找发散点用 1)")
     ap.add_argument("--model", default="models/Qwen2.5-0.5B-Instruct", help="基座模型路径")
     ap.add_argument("--data", type=Path, default=Path("data"), help="数据目录(内含 batch_{N}.jsonl)")
     ap.add_argument("--out", type=Path, default=Path("experts"))
@@ -136,7 +137,7 @@ def main():
             opt.step()
             total += loss.item()
         dt = time.perf_counter() - t0
-        if epoch % 5 == 0 or epoch == args.epochs - 1:
+        if epoch % args.log_every == 0 or epoch == args.epochs - 1:
             print(f"epoch {epoch}: loss={total / len(dl):.4f} ({dt:.0f}s/epoch)", flush=True)
 
     expert_dir = args.out / f"expert_{args.batch}"
@@ -150,6 +151,9 @@ def main():
         key_texts.extend(qa["q"] for qa in f["qa"])
     key = embed(key_texts)  # (n_texts, dim),已归一化
     torch.save(key, expert_dir / "router_key.pt")
+    # 键文本落盘:更新定位靠实体字符串匹配(语义向量对"改值"过度敏感,见 experiment-results §14)
+    with (expert_dir / "key_texts.json").open("w", encoding="utf-8") as f:
+        json.dump(key_texts, f, ensure_ascii=False)
 
     # DirectML 张量是不透明的,safetensors 无法读取其 storage,必须先搬到 CPU 再保存
     model.to("cpu")

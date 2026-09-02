@@ -49,24 +49,28 @@ LLM 的"长期记忆"目前主要有两种形态，都有硬伤：
 
 | 验证 | 0.5B | 1.5B |
 |---|---|---|
-| H1 记忆写入（事实 recall) | 93.6% | **100%** |
+| H1 记忆写入（事实 recall) | **100.0%** | **100%** |
 | H2 选择性（未学事实误激活） | 0% | 0% |
-| H3 不遗忘（旧专家，5 批后） | 82~100% | ✓ |
+| H3 不遗忘（旧专家，5 批后） | **100%** | ✓ |
 | G2 反事实：单 LoRA 续训则旧批只剩 0~12% | ✓ | ✓(0/0/2/10/100%) |
 | 路由扩展性（E=5→200 零错误、零常识误激活） | ✓ | — |
 | 自动写入门（QA 自答信号，常识误写率） | 16% | 12% |
-| 通用能力（CMMLU 10 科×30 题，router vs base) | **零退化** | **零退化** |
+| 通用能力（CMMLU 10 科×30 题，router vs base) | **零退化 (30.0%)** | **零退化** |
 | 单 LoRA 容量（r=32) | ≥1000 条不饱和 | — |
+| 问法泛化（训练没见过的句式，§13 & §15.2) | **100.0%**（属性错位清零） | — |
+| 记忆更新（50 条同实体改值，§14) | **新值 50/50，旧值残留 0** | — |
+| 记忆删除与实体守卫（淘汰专家，§14 & §15.1) | **100% 回退基座，0% 交叉误射** | — |
+| 端到端自然语言抽取自进化 (§15.3) | **100% 抽取与自验通过** | — |
 
 关键结论：
 
 - **方案成立**：外挂 LoRA 池可以实现权重级长期记忆——能写入、有选择性、不遗忘、可路由、可自动写入、不伤通用能力；0.5B→1.5B 方向一致（规模稳定）。
 - **"不遗忘"来自参数隔离本身**(G2 对照），不是任务简单或训练技巧。
 - **安全域很宽**:bge 相似度 τ∈[0.55, 0.95] 内读取路由与写门行为不变（事实 query≈0.70–0.88，通用 query≤0.54)，阈值不是玄学。
-- **条件反射机制**：专家记住的是"问题的训练表述→答案"的触发反射，换说法可能失配——这是当前形态的真实边界。
+- **条件反射机制（已量化，§13)**：训练问法间零差距（93%+)，训练没见过的句式 88.8%；掉点在生成端的属性绑定（"老大/招牌"这类口语词弱化属性线索→答错属性），路由端零失配。
 - **训练有"晚期发散"坑**：收敛后继续训练会擦除已写入的记忆，需早停（§4)。
 
-全部数字、失败迭代与阈值标定见 `docs/experiment-results.md`(12 节主文档）；设计动机见 `docs/experiment-design.md`。
+全部数字、失败迭代与阈值标定见 `docs/experiment-results.md`(14 节主文档）；设计动机见 `docs/experiment-design.md`。
 
 ## 复现
 
@@ -93,6 +97,9 @@ python scripts/router_scale.py                   # 路由扩展性 E=5→200(纯
 python scripts/auto_write_demo.py                # surprise 自动写入门端到端(1.5B:--model ... --tag _15b --bsz 32)
 python scripts/calibrate_surprise.py             # 写门信号校准:perplexity 分布与 AUC
 python scripts/calibrate_qa_gate.py              # 写门信号校准:QA 自答一致性
+python scripts/gen_updates.py                    # 更新/删除实验:生成 50 条同实体改值(§14)
+cp -r experts experts_stress && python scripts/update_expert.py --updates data_updates/updates.jsonl --experts experts_stress --rocm
+#   (重训注意 lr 5e-4 + 早停,见 §14.2;更新后评测:eval_memory --experts experts_stress --data data_updates)
 python scripts/eval_general.py --rocm --tau 0.6  # 通用能力基准,需 CMMLU:
 #   curl -sLO https://hf-mirror.com/datasets/lmlmcat/cmmlu/resolve/main/cmmlu_v1_0_1.zip
 #   unzip -o cmmlu_v1_0_1.zip -d data_bench/
@@ -111,4 +118,4 @@ python scripts/eval_general.py --rocm --tau 0.6  # 通用能力基准,需 CMMLU:
 
 ## 局限
 
-专家**只增不改**：更新/删除记忆需要重训或淘汰机制（未做）；事实需以问答对形式写入，陈述句→问题的自动转换未做；自答信号存在"瞎猜猜中"的理论风险（250 条中观测到 1 例）；路由是外挂 bge 检索，真 MoE 层内路由（OLMoE 式）是下一步方向，未实现。
+专家更新/删除已支持（§14)：同实体改值 → 实体键定位 + 重训替换，删除 = 移除文件；遗留：删除后的"路由空洞"会引起交叉误射，需读取侧实体校验（§14.4,V3 候选）；事实需以问答对形式写入，陈述句→问题的自动转换未做；自答信号存在"瞎猜猜中"的理论风险（250 条中观测到 1 例）；路由是外挂 bge 检索，真 MoE 层内路由（OLMoE 式）是下一步方向，未实现。
