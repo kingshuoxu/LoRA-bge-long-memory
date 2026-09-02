@@ -31,19 +31,20 @@ DEDUP_SIM = 0.94   # 去重阈值,取自实测间隙:同模板跨事实最高 si
 
 class AutoWriter:
     def __init__(self, experts_dir="experts_auto", data_dir="data_auto",
-                 buffer_size=50, device="cuda", venv_python=".venv-rocm/Scripts/python.exe",
+                 buffer_size=50, device="cuda", venv_python=sys.executable,
                  epochs=21, lr=5e-4, bsz=64, model=MODEL):
         self.experts_dir = Path(experts_dir)
         self.data_dir = Path(data_dir)
         self.buffer_size = buffer_size
         self.device = torch.device(device)
-        self.venv_python = venv_python
+        self.venv_python = str(Path(venv_python).resolve())
         self.train_args = dict(epochs=epochs, lr=lr, bsz=bsz)
         self.model = model
         self.buffer: list[dict] = []
         self._buf_texts: set[str] = set()
         self.next_batch = 0
         self.decisions: list[dict] = []  # 审计日志
+
 
         self.tok = AutoTokenizer.from_pretrained(self.model)
         if self.tok.pad_token_id is None:

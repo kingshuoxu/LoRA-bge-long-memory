@@ -11,6 +11,7 @@
 用法:
   python scripts/eval_memory.py --sweep            # 标定阈值
   python scripts/eval_memory.py --tau 0.5          # 正式评估
+  python scripts/eval_memory.py --qidx 2           # 用第 3 种问法评测(泛化测试)
 """
 import argparse
 import json
@@ -23,7 +24,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed
+from router import embed, extract_entities_from_key_texts, verify_entity_guard
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
 
@@ -56,11 +57,13 @@ def main():
     ap.add_argument("--sweep", action="store_true", help="只打印相似度分布,不评估")
     ap.add_argument("--n-per-batch", type=int, default=50)
     ap.add_argument("--skip", type=int, default=0, help="每批跳过前 N 条再取样(避开嵌套数据的前缀重叠)")
+    ap.add_argument("--qidx", type=int, default=0, help="用每条事实的第 N 种问法评测(默认 0)")
     ap.add_argument("--experts", type=Path, default=Path("experts"))
     ap.add_argument("--data", type=Path, default=Path("data"), help="数据目录(内含 batch_{N}.jsonl 与 generic_questions.jsonl)")
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--rocm", action="store_true", help="用 ROCm/CUDA 设备推理")
     ap.add_argument("--model", default=MODEL, help="基座模型路径")
+    ap.add_argument("--save-answers", type=Path, default=None, help="把每题的问题/答案/激活情况存成 jsonl(供离线分析)")
     args = ap.parse_args()
 
     device = pick_device(args)
@@ -75,23 +78,40 @@ def main():
         model.load_adapter(args.experts / e["expert"], adapter_name=e["expert"])
     model.eval()
     keys = {e["expert"]: torch.load(e["key_path"], weights_only=True) for e in router}
-    print(f"已注册专家: {list(keys)}, τ={args.tau}")
 
-    def sims(text):
+    # 加载每个专家的实体列表 (Entity Guard 实体守卫)
+    expert_entities = {}
+    for e in router:
+        kt_file = Path(e["key_path"]).parent / "key_texts.json"
+        if kt_file.exists():
+            texts = json.load(kt_file.open(encoding="utf-8"))
+            expert_entities[e["expert"]] = extract_entities_from_key_texts(texts)
+        else:
+            expert_entities[e["expert"]] = []
+    print(f"已注册专家: {list(keys)}, τ={args.tau}, qidx={args.qidx} (带 Entity Guard)")
+
+    def route_query(text: str):
         q = embed([text])[0]
-        # 每个专家内取最大相似度(检索式路由):问句命中任意一条事实即激活
-        return {name: (k @ q).max().item() for name, k in keys.items()}
+        # 每个专家内取最大相似度(检索式路由):问句命中任意一条事实即候选
+        sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
+        best, s = max(sim_scores.items(), key=lambda kv: kv[1])
+        # 二级路由校验: 1. 相似度 >= tau; 2. 实体守卫准入检查
+        entity_pass = verify_entity_guard(text, expert_entities.get(best, []))
+        fired = (s >= args.tau) and entity_pass
+        return best, s, fired, entity_pass
 
     # ---- 选择性:常识问题不应激活任何专家;激活了则进一步看是否答错(有效损伤) ----
+    records = []  # --save-answers 用
     generic = [json.loads(l) for l in open(args.data / "generic_questions.jsonl", encoding="utf-8")]
     false_fire = wrong = 0
     for item in generic:
         q = item["q"] if isinstance(item, dict) else item
         gold = item.get("a") if isinstance(item, dict) else None
-        best, s = max(sims(q).items(), key=lambda kv: kv[1])
+        best, s, fired, entity_pass = route_query(q)
         if args.sweep:
-            print(f"  [常识] sim={s:.3f} ({best}) | {q[:20]}")
-        if s >= args.tau:
+            print(f"  [常识] sim={s:.3f} ({best}, entity={entity_pass}) | {q[:20]}")
+        ans = None
+        if fired:
             false_fire += 1
             if gold is not None:
                 model.set_adapter(best)
@@ -99,6 +119,8 @@ def main():
                 if gold not in ans.replace(" ", ""):
                     wrong += 1
                     print(f"  [有效损伤] {q} -> {ans[:30]}(gold: {gold})")
+        records.append({"kind": "generic", "q": q, "gold": gold,
+                        "fired": fired, "best": best, "sim": round(s, 4), "ans": ans})
     if not args.sweep:
         print(f"选择性: {len(generic) - false_fire}/{len(generic)} 未误激活 "
               f"(原始误激活率 {false_fire / len(generic):.0%}),"
@@ -112,16 +134,16 @@ def main():
         facts = [f for f in facts if f.get("qa") and not f.get("_common")]
         if not facts:
             continue
-        hit = fired = 0
+        hit = fired_cnt = 0
         for f in facts:
-            q, gold = f["qa"][0]["q"], f["qa"][0]["a"]
-            best, s = max(sims(q).items(), key=lambda kv: kv[1])
+            q, gold = f["qa"][args.qidx]["q"], f["qa"][args.qidx]["a"]
+            best, s, fired, entity_pass = route_query(q)
             if args.sweep:
                 match = "自家" if best == e["expert"] else "别家"
-                print(f"  [批次{e['batch']}] sim={s:.3f} ({best},{match}) | {q[:20]}")
+                print(f"  [批次{e['batch']}] sim={s:.3f} ({best},{match}, entity={entity_pass}) | {q[:20]}")
                 continue
-            if s >= args.tau:
-                fired += 1
+            if fired:
+                fired_cnt += 1
                 model.set_adapter(best)
                 ans = answer(model, tok, device, q)
             else:
@@ -129,9 +151,19 @@ def main():
                     ans = answer(model, tok, device, q)
             if gold.rstrip("年") in ans:
                 hit += 1
+            records.append({"kind": "fact", "batch": e["batch"], "id": f.get("id"),
+                            "q": q, "gold": gold, "fired": fired,
+                            "best": best, "sim": round(s, 4), "ans": ans})
         if not args.sweep:
-            print(f"批次 {e['batch']}: 激活率 {fired}/{len(facts)}, "
+            print(f"批次 {e['batch']}: 激活率 {fired_cnt}/{len(facts)}, "
                   f"记忆准确率 {hit}/{len(facts)} ({hit / len(facts):.0%})")
+
+    if args.save_answers and not args.sweep:
+        args.save_answers.parent.mkdir(parents=True, exist_ok=True)
+        with args.save_answers.open("w", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"答案已保存: {args.save_answers}")
 
 
 if __name__ == "__main__":
