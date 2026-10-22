@@ -4,7 +4,9 @@
 2. 实体守卫:拿在册实体做最长匹配,两侧不能是名字音节。
 3. 实体优先:问句里只有一个在册实体,且名字旁边有公司类线索,就直接去那家专家。
    点了好几家时,能确定主语才去那家;比较句或主语已不在册就弃权。
+   问句在问的属性和该实体写入的属性不一致,也弃权。
    没有在册实体时,才退回 bge top-1 ≥ τ 且守卫通过。
+   两字名左右必须是问句套话里的字,避免从「埃菲尔」里切出「菲尔」。
 
 train_expert 用它生成路由键,eval_memory 用它决定挂哪家专家。
 """
@@ -193,6 +195,9 @@ def mentioned_entities(query: str, entities: list[str] | set[str]) -> list[str]:
                 continue
             if end < len(compact) and compact[end] in alphabet:
                 continue
+            # 两字名左右必须是问句套话里出现过的字。否则「菲尔」会从「埃菲尔」里切出来。
+            if not _short_name_neighbors_ok(compact, index, end):
+                continue
             hits.append(entity)
             for pos in range(index, end):
                 occupied[pos] = True
@@ -275,6 +280,74 @@ def _has_business_cue(query: str) -> bool:
     return any(cue in query for cue in _BUSINESS_CUES)
 
 
+# 两字实体只在这些紧邻字旁边算命中。名单来自训练问法和真实问法里两字名的实际邻居,
+# 不含「埃 / 福 / 铁」这种会把「菲尔」「克纳」从真实词里切出来的字。
+_SHORT_NAME_LEN = 2
+_SHORT_LEFT_OK = set("到问说下是去于我管道和出的")
+_SHORT_RIGHT_OK = set("公的集这是企股吧咋和最现我相了把总主产")
+
+
+def _cjk(char: str) -> bool:
+    return "\u4e00" <= char <= "\u9fff"
+
+
+def _short_name_neighbors_ok(compact: str, start: int, end: int) -> bool:
+    if end - start > _SHORT_NAME_LEN:
+        return True
+    if start > 0 and _cjk(compact[start - 1]) and compact[start - 1] not in _SHORT_LEFT_OK:
+        return False
+    if end < len(compact) and _cjk(compact[end]) and compact[end] not in _SHORT_RIGHT_OK:
+        return False
+    return True
+
+
+# 问句在问哪种事实。命中不止一种就返回 None,调用方不要猜。
+_ATTR_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("CEO", (
+        "首席执行官", "董事长", "总经理", "创始人", "负责人", "一把手",
+        "掌门人", "掌门", "CEO", "总裁", "老板", "老大", "谁在管",
+    )),
+    ("成立年份", ("成立年份", "创办时间", "成立时间", "成立", "创办", "建厂", "起步", "哪年", "何年")),
+    ("总部城市", ("总部", "根据地", "所在地", "哪座城市", "哪个城市", "飞往")),
+    ("旗舰产品", ("旗舰产品", "拳头产品", "招牌产品", "明星产品", "核心产品", "旗舰", "畅销", "型号", "招牌", "产品")),
+)
+
+
+def classify_attribute(query: str) -> str | None:
+    """用关键词判断问句在问 CEO / 成立年份 / 总部城市 / 旗舰产品。判断不了就返回 None。"""
+    compact = _compact_query(query)
+    found = {
+        attr for attr, cues in _ATTR_CUES
+        if any(cue in compact for cue in cues)
+    }
+    if len(found) == 1:
+        return next(iter(found))
+    # 「干啥的」没有对应的已存属性,单独出现时弃权,不要把专家挂上去。
+    if not found and "干啥" in compact:
+        return "未知"
+    return None
+
+
+def load_entity_attrs(experts_dir: str | Path) -> dict[str, str]:
+    """读各专家目录里的 entity_attrs.json,得到实体名 → 训练时写入的属性。"""
+    attrs: dict[str, str] = {}
+    for path in sorted(Path(experts_dir).glob("expert_*/entity_attrs.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for name, attr in data.items():
+            attrs[str(name)] = str(attr)
+    return attrs
+
+
+def _attr_allows(query: str, name: str, entity_attrs: dict[str, str] | None) -> bool:
+    """没有属性表,或问句看不出在问什么,就放行。看得出、且和这条事实不一致,就拒绝。"""
+    if not entity_attrs or name not in entity_attrs:
+        return True
+    asked = classify_attribute(query)
+    if asked is None:
+        return True
+    return entity_attrs[name] == asked
+
+
 # 线索必须挨着名字。问句别处出现「公司 / 产品」不能把一个两字音节直接送进专家。
 _CUE_WINDOW = 12
 
@@ -333,6 +406,7 @@ def route_decision(
     expert_entities: dict[str, list[str] | set[str]],
     sims: dict[str, float] | None = None,
     tau: float = 0.6,
+    entity_attrs: dict[str, str] | None = None,
 ) -> dict:
     """实体优先路由。
 
@@ -340,6 +414,7 @@ def route_decision(
     没有在册实体:退回 bge top-1,相似度 ≥ τ 且守卫通过才挂载。
     有好几个名字(在册或已删除的音节串):能确定主语、主语仍在册、且主语旁有线索才去那家;
     主语不在册、比较句说不清在问谁、或没有线索,就弃权回基座,不去另一家。
+    问句看得出在问某种属性,而该实体没存过这种属性:同样弃权,不把专家挂上去。
     """
     sims = sims or {}
     owners = _entity_owners(expert_entities)
@@ -360,13 +435,17 @@ def route_decision(
     def bge_fallback() -> dict:
         if best_expert is None:
             return blocked("no_expert")
-        guard = verify_entity_guard(query, expert_entities.get(best_expert, []))
-        fired = best_sim >= tau and guard
+        names = mentioned_entities(query, expert_entities.get(best_expert, []))
+        guard = bool(names) if expert_entities.get(best_expert) else verify_entity_guard(query, [])
+        if best_sim < tau or not guard:
+            return blocked("bge_block")
+        if names and not any(_attr_allows(query, name, entity_attrs) for name in names):
+            return blocked("abstain_attr")
         return {
-            "expert": best_expert if fired else None,
+            "expert": best_expert,
             "candidate": best_expert,
-            "fired": fired,
-            "reason": "bge" if fired else "bge_block",
+            "fired": True,
+            "reason": "bge",
             "sim": best_sim,
         }
 
@@ -376,7 +455,10 @@ def route_decision(
             return blocked("abstain")
         expert = owners.get(subject)
         span = next((item for item in spans if item[0] == subject), None)
-        if expert and span and _cue_near(compact, span[1], span[2]):
+        neighbor_ok = bool(span) and _short_name_neighbors_ok(compact, span[1], span[2])
+        if expert and span and neighbor_ok and _cue_near(compact, span[1], span[2]):
+            if not _attr_allows(query, subject, entity_attrs):
+                return blocked("abstain_attr")
             return {
                 "expert": expert,
                 "candidate": expert,
@@ -385,13 +467,20 @@ def route_decision(
                 "sim": sims.get(expert, 0.0),
             }
         # 主语写出来了但不在册,或旁边没有公司类线索:不要改去另一个被点到的名字。
-        reason = "abstain_unregistered_subject" if not expert else "abstain_no_cue"
+        if expert and span and neighbor_ok:
+            reason = "abstain_no_cue"
+        elif span and not neighbor_ok:
+            reason = "abstain_short_name"
+        else:
+            reason = "abstain_unregistered_subject"
         return blocked(reason)
 
     if len(spans) == 1:
         name, start, end = spans[0]
         expert = owners.get(name)
-        if expert and _cue_near(compact, start, end):
+        if expert and _short_name_neighbors_ok(compact, start, end) and _cue_near(compact, start, end):
+            if not _attr_allows(query, name, entity_attrs):
+                return blocked("abstain_attr")
             return {
                 "expert": expert,
                 "candidate": expert,
@@ -407,9 +496,10 @@ def route_from_scores(
     expert_entities: dict[str, list[str] | set[str]],
     sims: dict[str, float],
     tau: float,
+    entity_attrs: dict[str, str] | None = None,
 ) -> tuple[str | None, float, bool]:
     """给 eval / 测试用的三元组:(专家或 None, 相似度, 是否挂载)。"""
-    decision = route_decision(query, expert_entities, sims, tau)
+    decision = route_decision(query, expert_entities, sims, tau, entity_attrs)
     if decision["fired"]:
         return decision["expert"], decision["sim"], True
     candidate = decision.get("candidate")

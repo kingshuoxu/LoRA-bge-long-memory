@@ -154,6 +154,10 @@ def main():
     # 键文本落盘:更新定位靠实体字符串匹配(语义向量对"改值"过度敏感,见 experiment-results §14)
     with (expert_dir / "key_texts.json").open("w", encoding="utf-8") as f:
         json.dump(key_texts, f, ensure_ascii=False)
+    # 每个实体只写了一种属性。推理时属性对不上就弃权,避免专家把同批另一条事实说出来。
+    attr_map = {f["entity"]: f["attr"] for f in facts}
+    with (expert_dir / "entity_attrs.json").open("w", encoding="utf-8") as f:
+        json.dump(attr_map, f, ensure_ascii=False, indent=2)
 
     # DirectML 张量是不透明的,safetensors 无法读取其 storage,必须先搬到 CPU 再保存
     model.to("cpu")

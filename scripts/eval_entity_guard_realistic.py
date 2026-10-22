@@ -22,8 +22,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from gen_data import PARA_QUESTIONS, SYL  # noqa: E402
 from router import (  # noqa: E402
+    classify_attribute,
     extract_entities_from_key_texts,
     find_name_spans,
+    load_entity_attrs,
+    mentioned_entities,
     route_decision,
     verify_entity_guard,
 )
@@ -331,21 +334,36 @@ def logic_check(facts: list[dict], entities: dict[str, list[str]], rows: list[di
         eg = leaked[0]
         raise SystemExit(f"未注册/常识问法被守卫放行 {len(leaked)} 例: {eg['q']}")
     print(f"逻辑检查: 错字/残名/近名/常识均未放行 {len(reject_rows)}/{len(reject_rows)}", flush=True)
-    _logic_check_routing(entities, rows)
+    _logic_check_routing(entities, rows, facts)
 
 
-def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict]) -> None:
-    """不看向量:实体优先应当直达被问的那家;删掉之后、以及比较句,必须弃权。"""
+def _asked_attr(row: dict) -> str | None:
+    """这条问法模板在问的属性。原模板和未见口语就是该事实自己的属性,由调用方另判。"""
+    matched = re.fullmatch(r"(.+)-(b\d+-\d+)-(\d+)", row["id"])
+    if not matched or row["category"] in ("canonical", "para"):
+        return None
+    return _ASKS.get((row["category"], int(matched.group(3))))
+
+
+def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict], facts: list[dict]) -> None:
+    """不看向量:存过的属性直达专家;没存过的属性弃权;删掉之后和比较句也弃权。"""
     experts = list(entities)
     zero = {name: 0.0 for name in experts}
-    hot = {name: 0.99 for name in experts}
+    by_entity = {fact["entity"]: fact for fact in facts}
+    attrs = {fact["entity"]: fact["attr"] for fact in facts}
+    on_disk = load_entity_attrs(ROOT / "experts")
+    if on_disk != attrs:
+        missing = set(attrs) - set(on_disk)
+        raise SystemExit(f"entity_attrs.json 与数据不一致,缺 {len(missing)} 个实体")
 
     def spans_of(q: str) -> list[str]:
         return [text for text, _s, _e in find_name_spans(q)]
 
     bad_span = []
     miss = []
+    leaked_attr = []
     deleted_fire = []
+    stored_n = unstored_n = 0
     for row in rows:
         if row["expect"] != "admit" or row["category"] == "two_entity":
             continue
@@ -353,12 +371,30 @@ def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict]) -> No
         if names != [row["entity"]]:
             bad_span.append((names, row["q"]))
             continue
-        got = route_decision(row["q"], entities, zero, 0.6)
-        if not (got["fired"] and got["expert"] == row["expert"]):
-            miss.append((got["reason"], row["q"]))
+        fact = by_entity[row["entity"]]
+        asked = fact["attr"] if row["category"] in ("canonical", "para") else _asked_attr(row)
+        classified = classify_attribute(row["q"])
+        if asked is not None and classified not in (asked, None):
+            raise SystemExit(f"属性分类错了: 期望 {asked} 得到 {classified} | {row['q']}")
+        if asked is not None and row["category"] not in ("canonical", "para") and classified != asked:
+            raise SystemExit(f"真实问法没分出属性 {asked}: {row['q']}")
+        if row["category"] in ("canonical", "para"):
+            stored = classified is None or classified == fact["attr"]
+        else:
+            stored = classified == fact["attr"]
+        got = route_decision(row["q"], entities, zero, 0.6, attrs)
+        if stored:
+            stored_n += 1
+            if not (got["fired"] and got["expert"] == row["expert"]):
+                miss.append((got["reason"], row["q"]))
+        else:
+            unstored_n += 1
+            if got["fired"]:
+                leaked_attr.append((got["reason"], row["q"]))
         kept = {n: ents for n, ents in entities.items() if n != row["expert"]}
-        hot_kept = {n: 0.99 for n in kept}
-        after = route_decision(row["q"], kept, hot_kept, 0.6)
+        removed = {item["entity"] for item in facts if item["expert"] == row["expert"]}
+        kept_attrs = {name: attr for name, attr in attrs.items() if name not in removed}
+        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6, kept_attrs)
         if after["fired"]:
             deleted_fire.append((after["expert"], after["reason"], row["q"]))
     if bad_span:
@@ -366,22 +402,38 @@ def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict]) -> No
         raise SystemExit(f"单实体问法音节段不是该实体 {len(bad_span)} 例: {names} | {q}")
     if miss:
         reason, q = miss[0]
-        raise SystemExit(f"实体优先未直达 {len(miss)} 例 reason={reason}: {q}")
+        raise SystemExit(f"已存属性未直达 {len(miss)} 例 reason={reason}: {q}")
+    if leaked_attr:
+        reason, q = leaked_attr[0]
+        raise SystemExit(f"未存属性仍挂载 {len(leaked_attr)} 例 reason={reason}: {q}")
     if deleted_fire:
         expert, reason, q = deleted_fire[0]
         raise SystemExit(f"删掉被问专家后仍挂载 {len(deleted_fire)} 例 {expert}/{reason}: {q}")
-    single = sum(1 for r in rows if r["expect"] == "admit" and r["category"] != "two_entity")
-    print(f"逻辑检查: 单实体问法实体优先直达 {single}/{single},删除后挂载 0", flush=True)
+    print(
+        f"逻辑检查: 已存属性直达 {stored_n}/{stored_n},未存属性弃权 {unstored_n}/{unstored_n},删除后挂载 0",
+        flush=True,
+    )
 
-    subject_ok = subject_miss = compare_fire = deleted_two = 0
+    subject_ok = subject_miss = compare_fire = deleted_two = unstored_two = unstored_two_fire = 0
     for row in rows:
         if row["category"] != "two_entity":
             continue
-        got = route_decision(row["q"], entities, zero, 0.6)
+        fact = by_entity[row["entity"]]
+        asked = _asked_attr(row)
+        classified = classify_attribute(row["q"])
+        if asked is not None and classified != asked:
+            raise SystemExit(f"双实体属性分类错了: 期望 {asked} 得到 {classified} | {row['q']}")
+        got = route_decision(row["q"], entities, zero, 0.6, attrs)
         comparing = "相比" in row["q"] or "比较" in row["q"]
         if comparing:
             if got["fired"]:
                 compare_fire += 1
+            continue
+        stored = asked is not None and asked == fact["attr"]
+        if not stored:
+            unstored_two += 1
+            if got["fired"]:
+                unstored_two_fire += 1
             continue
         if got["fired"] and got["expert"] == row["expert"]:
             subject_ok += 1
@@ -389,22 +441,35 @@ def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict]) -> No
             subject_miss += 1
             if subject_miss <= 3:
                 print(f"  双实体未直达 reason={got['reason']} spans={spans_of(row['q'])} | {row['q']}", flush=True)
+        removed = {item["entity"] for item in facts if item["expert"] == row["expert"]}
         kept = {n: ents for n, ents in entities.items() if n != row["expert"]}
-        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6)
+        kept_attrs = {name: attr for name, attr in attrs.items() if name not in removed}
+        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6, kept_attrs)
         if after["fired"]:
             deleted_two += 1
-    if compare_fire or subject_miss or deleted_two:
+    if compare_fire or subject_miss or deleted_two or unstored_two_fire:
         raise SystemExit(
             f"双实体路由不符合预期: 比较句误挂载 {compare_fire}, "
-            f"主语未直达 {subject_miss}, 删除后仍挂载 {deleted_two}"
+            f"已存主语未直达 {subject_miss}, 未存属性仍挂载 {unstored_two_fire}, 删除后仍挂载 {deleted_two}"
         )
-    print(f"逻辑检查: 双实体主语直达 {subject_ok},比较句弃权,删除后挂载 0", flush=True)
+    print(
+        f"逻辑检查: 双实体已存主语直达 {subject_ok},未存属性弃权 {unstored_two},比较句弃权,删除后挂载 0",
+        flush=True,
+    )
+
+    for probe in ("著名的埃菲尔铁塔位于", "福克纳写过《喧哗与骚动》", "下列著名建筑物哪个不属于法国埃菲尔铁塔"):
+        if any(mentioned_entities(probe, ents) for ents in entities.values()):
+            raise SystemExit(f"两字名从真实词里切了出来: {probe}")
+        got = route_decision(probe, entities, {name: 0.99 for name in experts}, 0.6, attrs)
+        if got["fired"]:
+            raise SystemExit(f"两字名真实词仍挂载 {got['expert']}/{got['reason']}: {probe}")
+    print("逻辑检查: 「埃菲尔 / 福克纳」不挂载", flush=True)
 
     reject_fire = []
     for row in rows:
         if row["expect"] != "reject":
             continue
-        got = route_decision(row["q"], entities, hot, 0.6)
+        got = route_decision(row["q"], entities, {name: 0.99 for name in experts}, 0.6, attrs)
         if got["fired"]:
             reject_fire.append((got["expert"], got["reason"], row["q"]))
     if reject_fire:
@@ -479,7 +544,7 @@ def load_dirty_entities(entries: list[dict]) -> dict[str, list[str]]:
     return dirty
 
 
-def run_routing(entries, entities, rows, tau: float) -> list[dict]:
+def run_routing(entries, entities, rows, tau: float, entity_attrs: dict[str, str] | None = None) -> list[dict]:
     import torch
     from router import embed
 
@@ -496,7 +561,7 @@ def run_routing(entries, entities, rows, tau: float) -> list[dict]:
         best, best_s = max(sims.items(), key=lambda kv: kv[1])
         guard_best = verify_entity_guard(row["q"], entities.get(best, []))
         legacy_best = legacy_verify(row["q"], dirty.get(best, []))
-        decision = route_decision(row["q"], entities, sims, tau)
+        decision = route_decision(row["q"], entities, sims, tau, entity_attrs)
         rec = {
             "id": row["id"],
             "category": row["category"],
@@ -527,7 +592,7 @@ def run_routing(entries, entities, rows, tau: float) -> list[dict]:
             rec["cross_expert"] = b2
             pruned_entities = {n: ents for n, ents in entities.items() if n != gold}
             pruned_sims = {n: s for n, s in sims.items() if n != gold}
-            after = route_decision(row["q"], pruned_entities, pruned_sims, tau)
+            after = route_decision(row["q"], pruned_entities, pruned_sims, tau, entity_attrs)
             rec["ent_cross"] = after["fired"]
             rec["ent_cross_expert"] = after["expert"]
             rec["ent_cross_reason"] = after["reason"]
@@ -712,7 +777,7 @@ def _contains_value(answer: str, value: str | None) -> bool:
     return value.rstrip("年") in answer
 
 
-def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path) -> dict:
+def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path, entity_attrs: dict[str, str] | None = None) -> dict:
     """CMMLU 题干的路由激活。只编码题干,和 eval_general 的路由文本一致。"""
     import csv
 
@@ -737,7 +802,7 @@ def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path) -> dict:
         max_sim = max(max_sim, best_s)
         if best_s >= tau and verify_entity_guard(text, entities.get(best, [])):
             boundary += 1
-        decision = route_decision(text, entities, sims, tau)
+        decision = route_decision(text, entities, sims, tau, entity_attrs)
         if decision["fired"]:
             entity += 1
             if len(samples) < 8:
@@ -757,8 +822,25 @@ def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path) -> dict:
     return report
 
 
-def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n_per_cat: int, seed: int) -> dict:
-    """每种真实问法抽大约 n 条,CPU 上跑基座 / 边界守卫+bge / 实体优先。"""
+def _is_unstored(row: dict, facts_by_id: dict[str, dict]) -> bool:
+    fact, index = _row_fact(row, facts_by_id)
+    if fact is None or index is None or row["category"] in ("canonical", "para"):
+        return False
+    if "相比" in row["q"] or "比较" in row["q"]:
+        return False
+    asked = _ASKS.get((row["category"], index))
+    return bool(asked) and fact["attr"] != asked
+
+
+def _memory_leak(answer: str, values: list[str]) -> bool:
+    return any(value and value in answer for value in values)
+
+
+def run_generation(
+    entries, entities, rows, facts, tau: float, out_path: Path, n_per_cat: int, seed: int,
+    entity_attrs: dict[str, str] | None = None,
+) -> dict:
+    """抽样生成。已存属性看召回;没存过的属性看弃权率和记忆泄漏。"""
     import time
 
     import torch
@@ -780,6 +862,7 @@ def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n
         if isinstance(item, dict) and item.get("a"):
             generic_gold[item["q"]] = item["a"]
 
+    memory_values = [fact["value"].rstrip("年") for fact in facts]
     rng = random.Random(seed)
     chosen = []
     for cat in ("canonical",) + ADMIT_CATS + ("two_entity",):
@@ -787,6 +870,14 @@ def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n
         picked = rng.sample(pool, min(n_per_cat, len(pool)))
         chosen.extend(picked)
         print(f"生成抽样 {cat}: {len(picked)}/{len(pool)} 条有标准答案", flush=True)
+    for cat in ADMIT_CATS + ("two_entity",):
+        pool = [row for row in rows if row["category"] == cat and _is_unstored(row, facts_by_id)]
+        picked = rng.sample(pool, min(n_per_cat, len(pool)))
+        for row in picked:
+            tagged = dict(row)
+            tagged["unstored"] = True
+            chosen.append(tagged)
+        print(f"生成抽样 {cat} 未存属性: {len(picked)}/{len(pool)}", flush=True)
     compare_pool = [row for row in rows if row["category"] == "two_entity" and "相比" in row["q"]]
     compare_picked = rng.sample(compare_pool, min(n_per_cat, len(compare_pool)))
     chosen.extend(compare_picked)
@@ -803,12 +894,15 @@ def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n
         sims = {name: (key @ vec).max().item() for name, key in keys.items()}
         best, best_s = max(sims.items(), key=lambda kv: kv[1])
         boundary_fire = best_s >= tau and verify_entity_guard(row["q"], entities.get(best, []))
-        decision = route_decision(row["q"], entities, sims, tau)
+        before = route_decision(row["q"], entities, sims, tau)
+        after = route_decision(row["q"], entities, sims, tau, entity_attrs)
         plans.append({
             "row": row,
             "boundary_expert": best if boundary_fire else None,
-            "entity_expert": decision["expert"] if decision["fired"] else None,
-            "entity_reason": decision["reason"],
+            "before_expert": before["expert"] if before["fired"] else None,
+            "before_reason": before["reason"],
+            "entity_expert": after["expert"] if after["fired"] else None,
+            "entity_reason": after["reason"],
             "sim": best_s,
         })
 
@@ -844,6 +938,7 @@ def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n
         question = row["q"]
         base_ans = generate(question, None)
         boundary_ans = generate(question, plan["boundary_expert"])
+        before_ans = generate(question, plan["before_expert"])
         entity_ans = generate(question, plan["entity_expert"])
         fact, _index = _row_fact(row, facts_by_id)
         gold = memory_gold(row, facts_by_id)
@@ -853,22 +948,30 @@ def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n
         records.append({
             "id": row["id"],
             "category": row["category"],
+            "unstored": bool(row.get("unstored")),
             "q": question,
             "gold": gold,
             "attr": fact["attr"] if fact else None,
-            "compare": "相比" in question and row["category"] == "two_entity",
+            "compare": "相比" in question and row["category"] == "two_entity" and not row.get("unstored"),
             "boundary_expert": plan["boundary_expert"],
+            "before_expert": plan["before_expert"],
+            "before_reason": plan["before_reason"],
             "entity_expert": plan["entity_expert"],
             "entity_reason": plan["entity_reason"],
             "base": base_ans,
             "boundary": boundary_ans,
+            "before": before_ans,
             "entity": entity_ans,
             "base_hit": _contains_value(base_ans, gold),
             "boundary_hit": _contains_value(boundary_ans, gold),
+            "before_hit": _contains_value(before_ans, gold),
             "entity_hit": _contains_value(entity_ans, gold),
             "base_either": _contains_value(base_ans, fact["value"] if fact else None) or _contains_value(base_ans, other["value"] if other else None),
             "boundary_either": _contains_value(boundary_ans, fact["value"] if fact else None) or _contains_value(boundary_ans, other["value"] if other else None),
             "entity_either": _contains_value(entity_ans, fact["value"] if fact else None) or _contains_value(entity_ans, other["value"] if other else None),
+            "base_leak": _memory_leak(base_ans, memory_values),
+            "before_leak": _memory_leak(before_ans, memory_values),
+            "entity_leak": _memory_leak(entity_ans, memory_values),
         })
         if i % 10 == 0 or i == len(plans):
             elapsed = time.time() - started
@@ -881,14 +984,25 @@ def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n
             "scored": len(scored),
             "base_hit": sum(rec["base_hit"] for rec in scored),
             "boundary_hit": sum(rec["boundary_hit"] for rec in scored),
+            "before_hit": sum(rec["before_hit"] for rec in scored),
             "entity_hit": sum(rec["entity_hit"] for rec in scored),
             "boundary_fired": sum(rec["boundary_expert"] is not None for rec in subset),
+            "before_fired": sum(rec["before_expert"] is not None for rec in subset),
             "entity_fired": sum(rec["entity_expert"] is not None for rec in subset),
+            "before_leak": sum(rec["before_leak"] for rec in subset),
+            "entity_leak": sum(rec["entity_leak"] for rec in subset),
+            "base_leak": sum(rec["base_leak"] for rec in subset),
+            "abstain": sum(rec["entity_expert"] is None for rec in subset),
         }
 
     by_cat = defaultdict(list)
     for rec in records:
-        key = "two_compare" if rec["compare"] else rec["category"]
+        if rec["unstored"]:
+            key = rec["category"] + "_unstored"
+        elif rec["compare"]:
+            key = "two_compare"
+        else:
+            key = rec["category"]
         by_cat[key].append(rec)
     summary = {cat: pack(cat, subset) for cat, subset in by_cat.items()}
     compare = by_cat.get("two_compare", [])
@@ -954,15 +1068,16 @@ def main():
     if args.logic_only:
         logic_check(facts, entities, rows)
         return
+    entity_attrs = load_entity_attrs(args.experts)
     if args.generate_only:
         run_generation(
             entries, entities, rows, facts, args.tau,
-            args.generate_out, args.n_per_cat, args.seed,
+            args.generate_out, args.n_per_cat, args.seed, entity_attrs,
         )
         return
 
     # logic_check 在守卫改完之后应当通过;改之前会失败,所以完整评测不强制它。
-    scored = run_routing(entries, entities, rows, args.tau)
+    scored = run_routing(entries, entities, rows, args.tau, entity_attrs)
     summary = summarize_with_tau(scored, args.tau)
     print_report(summary, args.tau)
     pool = pooled_admit(scored, ADMIT_CATS, args.tau)
@@ -1008,15 +1123,15 @@ def main():
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         payload = {"tau": args.tau, "summary": summary, "pooled_realistic": pool}
         if args.cmmlu_dir:
-            payload["cmmlu"] = scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir)
+            payload["cmmlu"] = scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir, entity_attrs)
         args.json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nJSON 已写入 {args.json_out}", flush=True)
     elif args.cmmlu_dir:
-        scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir)
+        scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir, entity_attrs)
     if args.generate:
         run_generation(
             entries, entities, rows, facts, args.tau,
-            args.generate_out, args.n_per_cat, args.seed,
+            args.generate_out, args.n_per_cat, args.seed, entity_attrs,
         )
 
 

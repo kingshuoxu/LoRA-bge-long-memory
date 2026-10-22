@@ -21,7 +21,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed, extract_entities_from_key_texts, load_router, resolve_key_path, route_from_scores
+from router import embed, extract_entities_from_key_texts, load_entity_attrs, load_router, resolve_key_path, route_from_scores
 from eval_memory import answer, pick_device
 
 
@@ -50,11 +50,12 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
         kt_file = resolve_key_path(e["key_path"]).parent / "key_texts.json"
         texts = json.load(kt_file.open(encoding="utf-8")) if kt_file.exists() else []
         expert_entities[e["expert"]] = extract_entities_from_key_texts(texts)
+    entity_attrs = load_entity_attrs(experts_dir)
 
     def route_query(text: str):
         q = embed([text])[0]
         sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
-        best, s, fired = route_from_scores(text, expert_entities, sim_scores, tau)
+        best, s, fired = route_from_scores(text, expert_entities, sim_scores, tau, entity_attrs)
         return best, s, fired, fired
 
     # 1. 测选择性
@@ -125,7 +126,7 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
             q = q_item["q"]
             qv = embed([q])[0]
             sim_scores = {name: (k @ qv).max().item() for name, k in pruned_keys.items()}
-            _best, _s, fired = route_from_scores(q, pruned_entities, sim_scores, tau)
+            _best, _s, fired = route_from_scores(q, pruned_entities, sim_scores, tau, entity_attrs)
 
             if fired:
                 misrouted_cnt += 1
