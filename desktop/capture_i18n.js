@@ -272,15 +272,9 @@ app.whenReady().then(async () => {
         job.eta_seconds = 26;
         job.message = ${JSON.stringify(lang === "en" ? "Training LoRA" : "正在训练 LoRA")};
         job.id = null;
-        const origRefresh = refreshHealth;
-        refreshHealth = async () => {
-          const health = await origRefresh();
-          health.job = null;
-          return health;
-        };
-        pollWork = async () => {};
+        window.__shotJob = job;
         await new Promise((r) => setTimeout(r, 1600));
-        state.job = job;
+        state.job = window.__shotJob;
         renderJobBar();
         renderStages();
         const curve = (state.job && state.job.loss_curve) || [];
@@ -330,7 +324,20 @@ app.whenReady().then(async () => {
     if (!shownJob || shownJob.points !== 6 || shownJob.epoch !== 6 || shownJob.max !== 12 || shownJob.cards < 3 || shownJob.w < 700 || shownJob.h < 200 || shownJob.overlap || shownJob.raw || !shownJob.line || !shownJob.partial || !shownJob.ticks.includes("1") || !shownJob.ticks.includes("12")) {
       throw new Error(`巩固布局不对 ${JSON.stringify(shownJob)}`);
     }
+    await new Promise((r) => setTimeout(r, 700));
+    const held = await js(win, `
+      (() => {
+        const bar = (document.getElementById("jobbar") || {}).textContent || "";
+        const loss = (document.getElementById("loss-card") || {}).textContent || "";
+        return { bar, loss, circles: document.querySelectorAll("#loss-card circle").length };
+      })()
+    `);
+    const heldText = `${held && held.bar} ${held && held.loss}`;
+    if (!held || held.circles !== 6 || /继续训练|Resume training|2\.31/.test(heldText) || !/第\s*6|Epoch 6/.test(held.bar)) {
+      throw new Error(`截图前训练状态被冲掉 ${JSON.stringify(held)}`);
+    }
     await save(win, prefix + "_consolidate.png");
+    await js(win, `window.__shotJob = null`);
 
     await js(win, `document.getElementById("new-chat").click()`);
     await new Promise((r) => setTimeout(r, 700));

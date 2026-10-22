@@ -845,7 +845,16 @@ $("input").addEventListener("keydown", (event) => {
   }
 });
 
+function applyShotJob() {
+  if (!window.__shotJob) return false;
+  state.job = window.__shotJob;
+  renderJobBar();
+  if (state.view === "consolidate") renderStages();
+  return true;
+}
+
 async function pollWork() {
+  if (applyShotJob()) return;
   if (state.previewId && state.preview && state.preview.status === "running") {
     try {
       state.preview = await api(`/api/consolidate/preview/${state.previewId}`);
@@ -863,6 +872,7 @@ async function pollWork() {
       if (finished && state.view === "nebula") openNebula().catch(() => {});
     } catch (error) { /* 下一轮再试 */ }
   }
+  applyShotJob();
 }
 
 async function syncLocale() {
@@ -902,6 +912,7 @@ async function boot() {
   await syncLocale();
   let opened = false;
   async function tick() {
+    if (applyShotJob()) return;
     const health = await refreshHealth();
     const ready = health.models && health.models.state === "ready";
     if (ready && !opened) {

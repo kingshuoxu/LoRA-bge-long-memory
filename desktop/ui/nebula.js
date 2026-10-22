@@ -1,12 +1,12 @@
 import * as THREE from "./vendor/three.module.js";
 
 const PALETTES = [
-  { core: [0.86, 0.34, 0.32], edge: [0.55, 0.18, 0.18], dust: [0.68, 0.30, 0.24] },
-  { core: [0.38, 0.70, 0.66], edge: [0.16, 0.40, 0.40], dust: [0.26, 0.52, 0.50] },
-  { core: [0.82, 0.62, 0.32], edge: [0.48, 0.32, 0.14], dust: [0.62, 0.46, 0.22] },
-  { core: [0.58, 0.40, 0.70], edge: [0.30, 0.18, 0.42], dust: [0.42, 0.28, 0.54] },
-  { core: [0.72, 0.36, 0.42], edge: [0.42, 0.18, 0.24], dust: [0.56, 0.28, 0.32] },
-  { core: [0.42, 0.56, 0.74], edge: [0.18, 0.28, 0.46], dust: [0.30, 0.42, 0.58] },
+  { core: [2.05, 0.28, 0.22], edge: [0.72, 0.10, 0.08], dust: [0.28, 0.05, 0.04] },
+  { core: [0.16, 1.95, 1.72], edge: [0.05, 0.62, 0.56], dust: [0.03, 0.16, 0.14] },
+  { core: [2.15, 1.15, 0.22], edge: [0.78, 0.40, 0.08], dust: [0.24, 0.10, 0.03] },
+  { core: [0.62, 0.20, 2.05], edge: [0.26, 0.07, 0.72], dust: [0.10, 0.03, 0.22] },
+  { core: [1.85, 0.36, 0.48], edge: [0.70, 0.12, 0.18], dust: [0.22, 0.05, 0.08] },
+  { core: [0.24, 0.55, 2.05], edge: [0.08, 0.20, 0.72], dust: [0.04, 0.08, 0.22] },
 ];
 
 const GAS_VERT = `
@@ -51,30 +51,49 @@ const GAS_FRAG = `
     return v;
   }
 
+  float aces1(float x) {
+    x = max(x, 0.0);
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+  }
+
   void main() {
     vec2 p = vUv * 2.0 - 1.0;
-    p.x *= 1.22;
+    p.x *= 0.72 + 0.55 * abs(sin(uSeed * 1.7));
+    p.y *= 0.68 + 0.5 * abs(cos(uSeed * 1.3));
     float r = length(p);
-    float window = smoothstep(1.02, 0.02, r);
-    float ang = uSeed * 0.65;
+    float ang = uSeed * 0.9;
     float cs = cos(ang);
     float sn = sin(ang);
     vec2 q = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y);
-    vec2 drift = q + vec2(uTime * 0.012, -uTime * 0.006);
-    float broad = fbm(drift * 1.15 + uSeed);
-    float mid = fbm(drift * 2.3 + vec2(4.2, uSeed * 1.7));
-    float fine = fbm(drift * 4.7 + uSeed * 0.8);
-    float ridge = pow(clamp(1.0 - abs(mid - 0.5) * 2.0, 0.0, 1.0), 2.4);
-    float veil = smoothstep(0.28, 0.86, broad);
-    float knots = smoothstep(0.6, 0.95, broad * 0.7 + mid * 0.3);
-    float density = (veil * 0.28 + ridge * veil * 0.7 + knots * 0.85) * (0.8 + 0.2 * fine);
+    q.x += 0.28 * sin(q.y * 2.4 + uSeed);
+    q += vec2(uTime * 0.008, -uTime * 0.004);
+    float n1 = fbm(q * 1.35 + uSeed);
+    float n2 = fbm(q * 1.35 + vec2(6.2, 2.4) + uSeed);
+    vec2 warp = q * 1.7 + vec2(n1, n2) * 1.25;
+    float mid = fbm(warp);
+    float fine = fbm(warp * 2.9 + uSeed * 1.3);
+    float ridge = pow(clamp(1.0 - abs(fine - 0.5) * 2.0, 0.0, 1.0), 1.55);
+    float dust = smoothstep(0.5, 0.76, fbm(q * 3.8 + 9.0));
+    float bite = fbm(warp * 4.6 + 2.2);
+    float window = smoothstep(1.7, 1.15, r);
+    float body = smoothstep(0.46, 0.7, mid * 0.65 + n1 * 0.35);
+    float wisps = pow(ridge, 1.25) * smoothstep(0.28, 0.5, mid);
+    float density = max(body * 0.72, wisps * 0.95);
+    density *= smoothstep(0.16, 0.55, bite);
+    density *= mix(1.0, 0.05, dust);
     density *= window;
-    density = clamp(density, 0.0, 1.0);
-    vec3 col = mix(uEdge, uDust, smoothstep(0.05, 0.45, density));
-    col = mix(col, uCore, smoothstep(0.2, 0.86, knots));
-    col = mix(col, min(uCore * 1.25, vec3(1.0)), smoothstep(0.55, 1.0, knots));
-    float light = clamp(density * uAlpha, 0.0, 1.0);
-    float alpha = clamp(light * 0.88, 0.0, 0.74);
+    density = clamp(density, 0.0, 0.8);
+    float paint = smoothstep(0.2, 0.75, mid);
+    vec3 col = mix(uEdge, uCore, paint);
+    col = mix(col, uCore, wisps * 0.35);
+    col = mix(col, uDust, dust * 0.55);
+    float exposure = 0.6;
+    float peak = max(col.r, max(col.g, col.b));
+    if (peak > 0.001) {
+      float mapped = aces1(peak * exposure);
+      col *= mapped / peak;
+    }
+    float alpha = clamp(density * uAlpha, 0.0, 0.8);
     gl_FragColor = vec4(col * alpha, alpha);
   }
 `;
@@ -92,32 +111,41 @@ const BLOOM_FRAG = `
   varying vec2 vUv;
   uniform sampler2D tScene;
   uniform vec2 uTexel;
+  uniform float uExposure;
+  uniform float uBloom;
+  uniform float uThreshold;
+
+  float aces1(float x) {
+    x = max(x, 0.0);
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+  }
   void main() {
     vec4 center = texture2D(tScene, vUv);
+    vec3 rgb = center.rgb;
+    vec2 step = uTexel * 2.5;
     vec3 glow = vec3(0.0);
-    float glowA = 0.0;
-    float weights[5];
-    weights[0] = 0.22;
-    weights[1] = 0.18;
-    weights[2] = 0.12;
-    weights[3] = 0.07;
-    weights[4] = 0.04;
-    for (int i = 0; i < 5; i++) {
-      float f = float(i);
-      vec2 step = uTexel * (3.0 + f * 5.0);
-      vec4 s1 = texture2D(tScene, vUv + vec2(step.x, 0.0));
-      vec4 s2 = texture2D(tScene, vUv - vec2(step.x, 0.0));
-      vec4 s3 = texture2D(tScene, vUv + vec2(0.0, step.y));
-      vec4 s4 = texture2D(tScene, vUv - vec2(0.0, step.y));
-      vec4 s5 = texture2D(tScene, vUv + step);
-      vec4 s6 = texture2D(tScene, vUv - step);
-      vec3 sum = s1.rgb + s2.rgb + s3.rgb + s4.rgb + s5.rgb + s6.rgb;
-      float a = s1.a + s2.a + s3.a + s4.a + s5.a + s6.a;
-      glow += sum * weights[i];
-      glowA += a * weights[i];
+    vec2 taps[4];
+    taps[0] = vec2(step.x, 0.0);
+    taps[1] = vec2(-step.x, 0.0);
+    taps[2] = vec2(0.0, step.y);
+    taps[3] = vec2(0.0, -step.y);
+    for (int i = 0; i < 4; i++) {
+      vec4 s = texture2D(tScene, vUv + taps[i]);
+      float p = max(s.r, max(s.g, s.b));
+      float w = smoothstep(uThreshold, uThreshold + 0.2, p);
+      glow += s.rgb * w;
     }
-    vec3 rgb = center.rgb + glow * 0.12;
-    float alpha = min(0.8, center.a + glowA * 0.015);
+    rgb += glow * uBloom;
+    float peak = max(rgb.r, max(rgb.g, rgb.b));
+    float knee = 0.8;
+    if (peak > knee) {
+      float x = (peak - knee) / max(1.0 - knee, 0.001);
+      float y = aces1(x / max(uExposure, 0.2));
+      float outp = knee + (0.94 - knee) * y;
+      rgb *= min(outp, peak) / peak;
+    }
+    float alpha = clamp(center.a, 0.0, 0.92);
+    rgb = min(rgb, vec3(alpha));
     gl_FragColor = vec4(rgb, alpha);
   }
 `;
@@ -136,23 +164,24 @@ function makeTexture(draw) {
 function starTexture() {
   return makeTexture((ctx, size) => {
     const mid = size / 2;
-    const glow = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
-    glow.addColorStop(0, "rgba(255,248,236,1)");
-    glow.addColorStop(0.06, "rgba(255,236,210,0.95)");
-    glow.addColorStop(0.18, "rgba(210,196,170,0.22)");
+    const glow = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid * 0.16);
+    glow.addColorStop(0, "rgba(255,252,248,1)");
+    glow.addColorStop(0.42, "rgba(255,246,230,0.75)");
     glow.addColorStop(1, "rgba(255,236,210,0)");
     ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, size, size);
-    ctx.strokeStyle = "rgba(255,246,230,0.95)";
-    ctx.lineWidth = 2.8;
     ctx.beginPath();
-    ctx.moveTo(mid, 4);
-    ctx.lineTo(mid, size - 4);
-    ctx.moveTo(4, mid);
-    ctx.lineTo(size - 4, mid);
+    ctx.arc(mid, mid, mid * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,250,244,0.85)";
+    ctx.lineWidth = 1.15;
+    ctx.beginPath();
+    ctx.moveTo(mid, mid * 0.28);
+    ctx.lineTo(mid, size - mid * 0.28);
+    ctx.moveTo(mid * 0.28, mid);
+    ctx.lineTo(size - mid * 0.28, mid);
     ctx.stroke();
-    ctx.strokeStyle = "rgba(255,228,190,0.35)";
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = "rgba(255,228,190,0.22)";
+    ctx.lineWidth = 0.6;
     ctx.beginPath();
     ctx.moveTo(28, 28);
     ctx.lineTo(size - 28, size - 28);
@@ -213,7 +242,7 @@ export function createNebula(canvas, hooks) {
   if (!renderer.getContext()) return fallbackNebula(canvas);
   renderer.setClearColor(0x000000, 0);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
-  if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  if (THREE.LinearSRGBColorSpace) renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
 
   const scene = new THREE.Scene();
@@ -229,9 +258,13 @@ export function createNebula(canvas, hooks) {
     depthBuffer: false,
     stencilBuffer: false,
   });
+  if (THREE.LinearSRGBColorSpace) sceneTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
   const bloomUniforms = {
     tScene: { value: sceneTarget.texture },
     uTexel: { value: new THREE.Vector2(1 / 8, 1 / 8) },
+    uExposure: { value: 0.5 },
+    uBloom: { value: 0.028 },
+    uThreshold: { value: 0.84 },
   };
   const bloomMaterial = new THREE.ShaderMaterial({
     uniforms: bloomUniforms,
@@ -326,9 +359,9 @@ export function createNebula(canvas, hooks) {
     const group = new THREE.Group();
     group.position.copy(position);
     const layers = [
-      { w: 15.2, h: 10.4, x: 0, y: 0.3, z: 0, rot: 0.2 + index * 0.25, seed: index * 2.7, alpha: 0.88 },
-      { w: 11.4, h: 8.6, x: 2.2, y: 1.1, z: 0.35, rot: -0.6, seed: index * 2.7 + 1.8, alpha: 0.55 },
-      { w: 9.6, h: 12.2, x: -2.4, y: -0.8, z: -0.25, rot: 0.9, seed: index * 2.7 + 3.4, alpha: 0.42 },
+      { w: 16.4, h: 9.2, x: -1.4, y: 0.2, z: 0, rot: 0.35 + index * 0.22, seed: index * 2.7, alpha: 0.76 },
+      { w: 7.6, h: 12.4, x: 3.4, y: -1.5, z: 0.3, rot: -0.85, seed: index * 2.7 + 2.2, alpha: 0.22 },
+      { w: 11.2, h: 5.4, x: -3.6, y: 2.1, z: -0.2, rot: 1.15, seed: index * 2.7 + 4.1, alpha: 0.12 },
     ];
     layers.forEach((layer, layerIndex) => {
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(layer.w, layer.h), gasMaterial(index, layer.seed, layer.alpha));
@@ -394,8 +427,8 @@ export function createNebula(canvas, hooks) {
           float across = smoothstep(0.0, 0.5, vUv.y) * smoothstep(1.0, 0.5, vUv.y);
           float along = smoothstep(0.0, 0.14, vUv.x) * smoothstep(1.0, 0.86, vUv.x);
           float light = across * along;
-          float alpha = light * 0.1;
-          gl_FragColor = vec4(uColor * light * 1.15, alpha);
+          float alpha = light * 0.14;
+          gl_FragColor = vec4(uColor * alpha, alpha);
         }
       `,
       transparent: true,
@@ -414,7 +447,7 @@ export function createNebula(canvas, hooks) {
       transparent: true,
       opacity: 0,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       premultipliedAlpha: true,
     }));
     mote.scale.setScalar(0.34);
@@ -477,11 +510,11 @@ export function createNebula(canvas, hooks) {
           transparent: true,
           opacity: fact.superseded ? 0.22 : 0.95,
           depthWrite: false,
-          blending: THREE.AdditiveBlending,
+          blending: THREE.NormalBlending,
           premultipliedAlpha: true,
         });
         const star = new THREE.Sprite(material);
-        const scale = fact.superseded ? 0.7 : (2.6 + (index % 4) * 0.85) * (index % 6 === 0 ? 1.35 : 1);
+        const scale = fact.superseded ? 0.28 : 0.46 + (index % 4) * 0.12;
         star.scale.setScalar(scale);
         star.position.copy(pos);
         star.userData = { kind: "fact", fact, baseScale: scale, baseOpacity: material.opacity };
@@ -514,7 +547,7 @@ export function createNebula(canvas, hooks) {
         transparent: true,
         opacity: 0.4,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         premultipliedAlpha: true,
       }));
       mesh.scale.setScalar(0.22);
