@@ -246,7 +246,7 @@ function renderLoss(trace) {
   card.hidden = false;
   const width = 560;
   const height = 240;
-  const padL = 52;
+  const padL = 64;
   const padR = 18;
   const padT = 16;
   const padB = 36;
@@ -254,18 +254,17 @@ function renderLoss(trace) {
   const min = Math.min(...losses);
   const max = Math.max(...losses, min + 0.5);
   const span = Math.max(0.05, max - min);
-  const finished = trace && (trace.status === "done" || trace.status === "cancelled" || trace.status === "failed");
-  const maxEpoch = finished
-    ? Math.max(2, ...points.map((point) => Number(point.epoch) || 1))
-    : Math.max(12, ...points.map((point) => Number(point.epoch) || 1), Number(trace && trace.max_epochs) || 1);
+  const configured = Math.max(12, Number(trace && trace.max_epochs) || 12);
+  const lastEpoch = Math.max(1, ...points.map((point) => Number(point.epoch) || 1));
+  const maxEpoch = Math.max(configured, lastEpoch);
   const xOf = (epoch) => padL + ((epoch - 1) / Math.max(1, maxEpoch - 1)) * (width - padL - padR);
   const yOf = (loss) => padT + (1 - (loss - min) / span) * (height - padT - padB);
   const poly = points.map((point) => `${xOf(Number(point.epoch) || 1).toFixed(1)},${yOf(Number(point.loss)).toFixed(1)}`).join(" ");
   const dots = points.map((point) => `<circle cx="${xOf(Number(point.epoch) || 1).toFixed(1)}" cy="${yOf(Number(point.loss)).toFixed(1)}" r="4.5" fill="#f2d291" filter="url(#loss-glow)" />`).join("");
   const yTicks = [max, min + span / 2, min].map((loss) => {
     const y = yOf(loss);
-    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${width - padR}" y2="${y.toFixed(1)}" stroke="rgba(183,215,255,0.12)" />
-      <text x="${padL - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${fmtLoss(loss)}</text>`;
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${width - padR}" y2="${y.toFixed(1)}" stroke="rgba(214,226,244,0.22)" />
+      <text x="${padL - 10}" y="${(y + 5).toFixed(1)}" text-anchor="end">${fmtLoss(loss)}</text>`;
   }).join("");
   const xTicks = [1, Math.round(maxEpoch / 2), maxEpoch].map((epoch) => {
     const x = xOf(epoch);
@@ -287,8 +286,8 @@ function renderLoss(trace) {
           <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
       </defs>
-      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height - padB}" stroke="rgba(183,215,255,0.35)" />
-      <line x1="${padL}" y1="${height - padB}" x2="${width - padR}" y2="${height - padB}" stroke="rgba(183,215,255,0.35)" />
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height - padB}" stroke="rgba(226,234,246,0.82)" stroke-width="1.6" />
+      <line x1="${padL}" y1="${height - padB}" x2="${width - padR}" y2="${height - padB}" stroke="rgba(226,234,246,0.82)" stroke-width="1.6" />
       ${yTicks}
       ${xTicks}
       <polygon points="${area}" fill="url(#loss-fill)" />
@@ -326,15 +325,34 @@ function dayLabel(key, sample) {
   return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
 }
 
+function visibleConversations() {
+  const ranked = [...state.conversations].sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
+  const seen = new Set();
+  const kept = [];
+  ranked.forEach((conv) => {
+    const key = String(conv.title || "").trim();
+    if (conv.id === state.currentId) {
+      kept.push(conv);
+      if (key) seen.add(key);
+      return;
+    }
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    kept.push(conv);
+  });
+  return kept;
+}
+
 function renderConversations() {
   const root = $("conv-list");
-  if (!state.conversations.length) {
+  const conversations = visibleConversations();
+  if (!conversations.length) {
     root.innerHTML = `<div class="empty">${esc(t("empty.conversations"))}</div>`;
     return;
   }
   const groups = [];
   const seen = new Map();
-  state.conversations.forEach((conv) => {
+  conversations.forEach((conv) => {
     const key = dayKey(conv.updated_at || conv.created_at);
     if (!seen.has(key)) {
       const group = { key, items: [] };

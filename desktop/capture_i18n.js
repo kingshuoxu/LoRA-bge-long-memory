@@ -1,7 +1,7 @@
 /**
  * 1440×900。中文或英文界面各一套：对话、巩固、星云、回忆、纠正。
  * SHOT_LANG=zh|en，SHOT_HOME 指向已经有记忆的数据目录。
- * 不覆盖 artifacts/v2 里已有的截图。
+ * 写到 artifacts/v3，不覆盖 v2 里已有的截图。
  */
 const { app, BrowserWindow } = require("electron");
 const { spawn } = require("child_process");
@@ -9,11 +9,11 @@ const fs = require("fs");
 const path = require("path");
 
 const lang = process.env.SHOT_LANG === "en" ? "en" : "zh";
-const prefix = lang === "en" ? "screenshot_en_space3" : "screenshot_zh_space3";
+const prefix = lang === "en" ? "screenshot_en_v3" : "screenshot_zh_v3";
 const python = process.env.LORA_MEMORY_PYTHON || path.join(__dirname, "..", ".venv", "bin", "python");
 const home = process.env.SHOT_HOME || process.env.LORA_MEMORY_HOME;
 const models = process.env.LORA_MEMORY_MODELS || path.join(__dirname, "..", "models");
-const dirs = [process.env.SHOT_DIR, "/cursor/stores/self/artifacts/v2", "/opt/cursor/artifacts/v2"].filter(Boolean);
+const dirs = [process.env.SHOT_DIR, "/cursor/stores/self/artifacts/v3", "/opt/cursor/artifacts/v3"].filter(Boolean);
 const needle = lang === "en" ? "Snow" : "暮雪";
 const correction = lang === "en"
   ? "Mira Chen lives in Starport, not Qinglan."
@@ -196,7 +196,7 @@ app.whenReady().then(async () => {
     const experts = await js(win, `fetch("/api/nebula").then((res) => res.json()).then((data) => (data.experts || []).length)`);
     if (experts < 6) throw new Error(`星云专家不足 6 位：${experts}`);
     await js(win, `document.getElementById("nav-nebula").click()`);
-    await new Promise((r) => setTimeout(r, 2800));
+    await new Promise((r) => setTimeout(r, 4500));
     await save(win, prefix + "_nebula.png");
 
     await js(win, `document.getElementById("nav-chat").click()`);
@@ -230,7 +230,11 @@ app.whenReady().then(async () => {
       })()
     `);
     if (chipOverlap) throw new Error("回忆标签压住了回答");
-    await js(win, dedupe);
+    const titles = await js(win, `
+      [...document.querySelectorAll(".conv .link")].map((node) => node.textContent.trim())
+    `);
+    const dupes = titles.filter((title, index) => title && titles.indexOf(title) !== index);
+    if (dupes.length) throw new Error(`侧栏标题重复：${dupes.join(" | ")}`);
     await save(win, prefix + "_recall.png");
 
     const doneJob = finishedJobId(home);
@@ -239,10 +243,46 @@ app.whenReady().then(async () => {
     const shownJob = await js(win, `
       (async () => {
         const job = await fetch("/api/jobs/" + ${JSON.stringify(doneJob)}).then((res) => res.json());
+        const cut = 6;
+        job.loss_curve = (job.loss_curve || []).filter((point) => Number(point.epoch) <= cut);
+        job.events = (job.events || []).filter((event) => event.stage !== "train" || Number(event.epoch) <= cut);
+        job.events = job.events.filter((event) => event.stage !== "recall" && event.stage !== "register");
+        job.recall = [];
+        job.stages = (job.stages || []).map((stage) => {
+          if (stage.id === "train") {
+            return {
+              ...stage,
+              state: "active",
+              detail: ${JSON.stringify(lang === "en" ? "epoch 6 / 12" : "第 6 / 12 轮")},
+              items: (stage.items || []).filter((item) => Number(item.epoch) <= cut),
+            };
+          }
+          if (stage.id === "recall" || stage.id === "register" || stage.id === "done") {
+            return { ...stage, state: "pending", detail: "", items: [] };
+          }
+          return stage;
+        });
+        const last = job.loss_curve[job.loss_curve.length - 1] || {};
+        job.epoch = cut;
+        job.max_epochs = 12;
+        job.loss = last.loss;
+        job.best_loss = last.loss;
+        job.status = "running";
+        job.phase = "train";
+        job.eta_seconds = 26;
+        job.message = ${JSON.stringify(lang === "en" ? "Training LoRA" : "正在训练 LoRA")};
+        job.id = null;
+        const origRefresh = refreshHealth;
+        refreshHealth = async () => {
+          const health = await origRefresh();
+          health.job = null;
+          return health;
+        };
+        pollWork = async () => {};
+        await new Promise((r) => setTimeout(r, 1600));
         state.job = job;
         renderJobBar();
         renderStages();
-        await new Promise((r) => setTimeout(r, 200));
         const curve = (state.job && state.job.loss_curve) || [];
         const cards = document.querySelectorAll("#stage-feed .event").length;
         const svg = document.querySelector(".constellation");
@@ -253,24 +293,41 @@ app.whenReady().then(async () => {
           for (let j = i + 1; j < labels.length; j += 1) {
             const a = labels[i];
             const b = labels[j];
+            if (a.width < 2 || b.width < 2) continue;
             if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) overlap = true;
           }
         }
-        const lossText = (document.querySelector("#loss-card") || {}).textContent || "";
-        const line = document.querySelector("#loss-card polyline");
+        const lossCard = document.querySelector("#loss-card");
+        const lossText = (lossCard || {}).textContent || "";
+        const line = lossCard && lossCard.querySelector("polyline");
+        const ticks = lossCard ? [...lossCard.querySelectorAll("text")].map((node) => node.textContent.trim()) : [];
+        const circles = lossCard ? [...lossCard.querySelectorAll("circle")] : [];
+        const lastDot = circles[circles.length - 1];
+        const xAxis = lossCard && [...lossCard.querySelectorAll("line")].find((node) => node.getAttribute("y1") === node.getAttribute("y2"));
+        const plotLeft = xAxis ? Number(xAxis.getAttribute("x1")) : 0;
+        const plotRight = xAxis ? Number(xAxis.getAttribute("x2")) : 0;
+        const lastX = lastDot ? Number(lastDot.getAttribute("cx")) : 0;
+        const bar = (document.getElementById("jobbar") || {}).textContent || "";
         return {
-          id: state.job && state.job.id,
+          id: ${JSON.stringify(doneJob)},
           points: curve.length,
+          epoch: state.job && state.job.epoch,
+          max: state.job && state.job.max_epochs,
           cards,
           w: box.width,
           h: box.height,
           overlap,
           raw: /\\d+\\.\\d{3,}/.test(lossText),
           line: Boolean(line),
+          ticks,
+          lastX,
+          plotRight,
+          partial: lastX > plotLeft && plotRight > plotLeft && lastX < plotLeft + (plotRight - plotLeft) * 0.72,
+          bar,
         };
       })()
     `);
-    if (!shownJob || shownJob.points < 6 || shownJob.cards < 3 || shownJob.w < 700 || shownJob.h < 200 || shownJob.overlap || shownJob.raw || !shownJob.line) {
+    if (!shownJob || shownJob.points !== 6 || shownJob.epoch !== 6 || shownJob.max !== 12 || shownJob.cards < 3 || shownJob.w < 700 || shownJob.h < 200 || shownJob.overlap || shownJob.raw || !shownJob.line || !shownJob.partial || !shownJob.ticks.includes("1") || !shownJob.ticks.includes("12")) {
       throw new Error(`巩固布局不对 ${JSON.stringify(shownJob)}`);
     }
     await save(win, prefix + "_consolidate.png");
