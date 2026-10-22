@@ -144,7 +144,7 @@ def main():
     expert_dir.mkdir(parents=True, exist_ok=True)
     # 路由键:每条事实单独一个 bge 向量(不按批求均值,均值会把实体信号稀释掉)
     sys.path.insert(0, str(Path(__file__).parent))
-    from router import embed
+    from router import embed, load_router
     key_texts = []
     for f in facts:
         key_texts.append(f["statement"])
@@ -165,12 +165,12 @@ def main():
         "batch": args.batch,
         "n_facts": len(facts),
         "rank": args.rank,
-        "key_path": str(expert_dir / "router_key.pt"),
+        "key_path": (expert_dir / "router_key.pt").as_posix(),
     }
     router_path = args.out / "router.jsonl"
     entries = []
     if router_path.exists():
-        entries = [json.loads(l) for l in router_path.open(encoding="utf-8")]
+        entries = load_router(router_path)
         entries = [e for e in entries if e["batch"] != args.batch]
     entries.append(router_entry)
     entries.sort(key=lambda e: e["batch"])

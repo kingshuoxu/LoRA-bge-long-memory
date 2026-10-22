@@ -24,7 +24,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed, extract_entities_from_key_texts, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_router, verify_entity_guard
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
 
@@ -68,10 +68,12 @@ def main():
 
     device = pick_device(args)
     tok = AutoTokenizer.from_pretrained(args.model)
-    base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float16).to(device)
+    base = AutoModelForCausalLM.from_pretrained(
+        args.model, torch_dtype=(torch.float32 if str(device) == "cpu" else torch.float16)
+    ).to(device)
 
     # 注册所有专家(每个 adapter 独立,不合并)
-    router = [json.loads(l) for l in (args.experts / "router.jsonl").open(encoding="utf-8")]
+    router = load_router(args.experts / "router.jsonl")
     first = router[0]
     model = PeftModel.from_pretrained(base, args.experts / first["expert"], adapter_name=first["expert"])
     for e in router[1:]:

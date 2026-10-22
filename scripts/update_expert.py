@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed  # noqa: E402
+from router import embed, load_router, resolve_key_path  # noqa: E402
 
 FACT_KEYS = ("id", "entity", "attr", "value", "statement", "qa", "mc")
 
@@ -48,15 +48,15 @@ def main():
     args = ap.parse_args()
 
     updates = [json.loads(l) for l in args.updates.open(encoding="utf-8")]
-    entries = [json.loads(l) for l in (args.experts / "router.jsonl").open(encoding="utf-8")]
-    keys = {e["expert"]: torch.load(e["key_path"], weights_only=True) for e in entries}
+    entries = load_router(args.experts / "router.jsonl")
+    keys = {e["expert"]: torch.load(resolve_key_path(e["key_path"]), weights_only=True) for e in entries}
     batch_of = {e["expert"]: e["batch"] for e in entries}
 
     # 1) 逐条定位:主路实体匹配,兜底 bge max-sim + τ_dedup
     # 实体匹配两级:key_texts 子串粗筛(短实体名可能是长实体名的子串)→ 数据集字段精确匹配裁决
     key_texts = {}
     for e in entries:
-        p = Path(e["key_path"]).parent / "key_texts.json"
+        p = resolve_key_path(e["key_path"]).parent / "key_texts.json"
         key_texts[e["expert"]] = json.load(p.open(encoding="utf-8")) if p.exists() else None
     facts_cache: dict[int, list] = {}
 

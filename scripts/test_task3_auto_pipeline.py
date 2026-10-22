@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).parent))
 from extract_qa_pipeline import extract_facts_from_text, generate_qa_dataset_for_facts
 from auto_write import AutoWriter
-from router import embed, extract_entities_from_key_texts, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_router, resolve_key_path, verify_entity_guard
 from eval_memory import answer, pick_device
 
 
@@ -100,7 +100,7 @@ def run_task3_auto_pipeline_test(device, model_path="models/Qwen2.5-0.5B-Instruc
     # 4. 验证生成的专家文件
     print("\n[Step 4] 检查自动生成的专家权重与路由索引:")
     assert (test_exp_dir / "router.jsonl").exists(), "专家路由表 router.jsonl 未生成!"
-    router_entries = [json.loads(l) for l in (test_exp_dir / "router.jsonl").open(encoding="utf-8")]
+    router_entries = load_router(test_exp_dir / "router.jsonl")
     print(f"  => 成功注册生成新专家: {[e['expert'] for e in router_entries]}")
 
     # 5. 执行写入后探针自验 (Post-Write Self-Verification Probe)
@@ -112,10 +112,10 @@ def run_task3_auto_pipeline_test(device, model_path="models/Qwen2.5-0.5B-Instruc
     model = PeftModel.from_pretrained(base, test_exp_dir / first["expert"], adapter_name=first["expert"])
     model.eval()
 
-    keys = {e["expert"]: torch.load(e["key_path"], weights_only=True) for e in router_entries}
+    keys = {e["expert"]: torch.load(resolve_key_path(e["key_path"]), weights_only=True) for e in router_entries}
     expert_entities = {}
     for e in router_entries:
-        kt_file = Path(e["key_path"]).parent / "key_texts.json"
+        kt_file = resolve_key_path(e["key_path"]).parent / "key_texts.json"
         texts = json.load(kt_file.open(encoding="utf-8")) if kt_file.exists() else []
         expert_entities[e["expert"]] = extract_entities_from_key_texts(texts)
 
