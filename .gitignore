@@ -26,5 +26,14 @@ experts_stress/
 # 5.6MB 且可由 gen_data.py --batches 200 --facts 50 确定性复现,不入库
 data_router/
 models/
+android/out/
+android/router/memory-route
+android/router/memory-route-aarch64
+android/apk/.gradle/
+android/apk/.kotlin/
+android/apk/app/build/
+android/apk/app/.cxx/
+android/apk/app/src/main/jniLibs/
+android/apk/local.properties
 __pycache__/
 *.pyc
