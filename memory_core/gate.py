@@ -24,6 +24,8 @@ def fact_gate_config() -> dict[str, float]:
 
 def keep_for_training(fact: dict[str, Any]) -> bool:
     """写门跳过的事实不进训练集，也不进路由键和事实向量。界面上再勾选也带不回来。"""
+    if fact.get("superseded"):
+        return False
     if str(fact.get("gate") or "").startswith("skip_"):
         return False
     return bool(fact.get("selected", True))

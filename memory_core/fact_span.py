@@ -132,6 +132,7 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
     ensure_scripts_path()
     from router import embed
 
+    facts = [fact for fact in facts if not fact.get("superseded")]
     entities: list[str] = []
     texts: list[str] = []
     owners: list[int] = []
@@ -215,7 +216,7 @@ def ensure_fact_bank(expert) -> FactBank | None:
         return cached
     facts = []
     if expert.fact_memory:
-        facts = list(expert.fact_memory.get("facts") or [])
+        facts = [fact for fact in (expert.fact_memory.get("facts") or []) if not fact.get("superseded")]
     bank = None
     span_path = Path(expert.directory) / "fact_spans.pt"
     if span_path.is_file():

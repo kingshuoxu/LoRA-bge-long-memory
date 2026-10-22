@@ -82,12 +82,12 @@ function installMenu() {
 
 async function createWindow(port) {
   mainWindow = new BrowserWindow({
-    width: 1100,
-    height: 760,
+    width: 1280,
+    height: 820,
     minWidth: 800,
     minHeight: 560,
     title: "LoRA 长记忆",
-    backgroundColor: "#f3efe6",
+    backgroundColor: "#070910",
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   await mainWindow.loadURL(`http://127.0.0.1:${port}/`);

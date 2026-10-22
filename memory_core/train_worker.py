@@ -7,6 +7,7 @@ CPU 上权重是 float32。损失只算在助手回答的 token 上。
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import shutil
 import time
@@ -112,6 +113,88 @@ def _cancelled(job_dir: Path) -> bool:
     return (job_dir / "CANCEL").is_file()
 
 
+def _set_stage(job_dir: Path, stage_id: str, state: str, detail: str | None = None, items: list | None = None) -> None:
+    data = _read_status(job_dir)
+    stages = list(data.get("stages") or [])
+    found = False
+    for stage in stages:
+        if stage.get("id") == stage_id:
+            stage["state"] = state
+            if detail is not None:
+                stage["detail"] = detail
+            if items is not None:
+                stage["items"] = items
+            found = True
+            break
+    if not found:
+        stages.append({"id": stage_id, "title": stage_id, "state": state, "detail": detail or "", "items": items or []})
+    _update(job_dir, stages=stages)
+
+
+def _event(job_dir: Path, event: dict) -> None:
+    data = _read_status(job_dir)
+    events = list(data.get("events") or [])
+    events.append(event)
+    _update(job_dir, events=events)
+
+
+def _generate_answer(model, tok, device, question: str) -> str:
+    user = question.rstrip()
+    if not user.endswith("请简短回答。"):
+        user = user + " 请简短回答。"
+    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    rendered = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tok(rendered, return_tensors="pt").to(device)
+    im_end = tok.convert_tokens_to_ids("<|im_end|>")
+    eos = [tok.eos_token_id]
+    if isinstance(im_end, int) and im_end >= 0:
+        eos.append(im_end)
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            max_new_tokens=32,
+            do_sample=False,
+            pad_token_id=tok.eos_token_id,
+            eos_token_id=eos,
+        )
+    return tok.decode(out[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True).strip()
+
+
+def _recall_facts(models_dir: Path, best_dir: Path, facts: list[dict], tok, device, dtype) -> list[dict]:
+    """用即将登记的检查点回答每条事实的主问题。答错只记下来，不让任务失败。"""
+    base = AutoModelForCausalLM.from_pretrained(qwen_path(models_dir), torch_dtype=dtype).to(device)
+    model = PeftModel.from_pretrained(base, str(best_dir))
+    model.eval()
+    items = []
+    try:
+        for fact in facts:
+            qa = fact.get("qa") or []
+            question = str(qa[0]["q"] if qa else fact.get("question") or "")
+            gold = str(qa[0]["a"] if qa else fact.get("value") or "")
+            if not question:
+                continue
+            try:
+                answer = _generate_answer(model, tok, device, question)
+            except Exception as exc:
+                answer = f"（没能生成：{exc}）"
+            gold_key = gold.replace(" ", "").rstrip("年")
+            hit = bool(gold_key) and gold_key in answer.replace(" ", "").replace("\n", "")
+            items.append({
+                "question": question,
+                "gold": gold,
+                "answer": answer,
+                "hit": hit,
+                "statement": fact.get("statement") or "",
+            })
+    finally:
+        del model
+        del base
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    return items
+
+
 def _save_adapter(model, path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
@@ -199,6 +282,15 @@ def run_job(home: Path, job_id: str) -> int:
         if tok.pad_token_id is None:
             tok.pad_token = tok.eos_token
         dataset = AssistantDataset(facts, tok)
+        _set_stage(job_dir, "build", "active", detail=f"正在把 {len(facts)} 条事实编成训练样本")
+        _set_stage(
+            job_dir,
+            "build",
+            "done",
+            detail=f"{len(facts)} 条事实，{len(dataset)} 条训练样本",
+            items=[{"facts": len(facts), "rows": len(dataset)}],
+        )
+        _event(job_dir, {"stage": "build", "facts": len(facts), "rows": len(dataset)})
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -241,8 +333,11 @@ def run_job(home: Path, job_id: str) -> int:
                 shutil.copytree(ckpt_dir / "adapter", best_dir)
 
         stopped_reason = "max_epochs"
+        loss_curve = list(_read_status(job_dir).get("loss_curve") or [])
+        _set_stage(job_dir, "train", "active", detail=f"最多 {max_epochs} 轮，学习率 {lr:g}")
         for epoch in range(completed, max_epochs):
             if _cancelled(job_dir):
+                _set_stage(job_dir, "train", "cancelled", detail="已取消，可以继续训练")
                 _update(job_dir, status="cancelled", phase="cancelled", epoch=completed, message="已取消，可以继续训练", best_loss=best_loss)
                 print("cancelled before epoch", epoch, flush=True)
                 return 0
@@ -259,6 +354,7 @@ def run_job(home: Path, job_id: str) -> int:
             t0 = time.perf_counter()
             for input_ids, labels, attn in loader:
                 if _cancelled(job_dir):
+                    _set_stage(job_dir, "train", "cancelled", detail="已取消，可以继续训练")
                     _update(
                         job_dir,
                         status="cancelled",
@@ -289,6 +385,11 @@ def run_job(home: Path, job_id: str) -> int:
             persist(completed, epoch_loss)
             dt = time.perf_counter() - t0
             print(f"epoch {epoch}: loss={epoch_loss:.4f} best={best_loss:.4f} ({dt:.0f}s)", flush=True)
+            loss_curve.append({"epoch": completed, "loss": round(epoch_loss, 4), "seconds": round(dt, 1)})
+            avg = sum(point["seconds"] for point in loss_curve) / len(loss_curve)
+            eta = int(round(avg * max(0, max_epochs - completed)))
+            _set_stage(job_dir, "train", "active", detail=f"第 {completed} / {max_epochs} 轮，loss {epoch_loss:.3f}", items=loss_curve)
+            _event(job_dir, {"stage": "train", "epoch": completed, "loss": round(epoch_loss, 4), "seconds": round(dt, 1), "eta_seconds": eta})
             _update(
                 job_dir,
                 status="running",
@@ -296,6 +397,8 @@ def run_job(home: Path, job_id: str) -> int:
                 epoch=completed,
                 loss=round(epoch_loss, 4),
                 best_loss=None if best_loss is None else round(best_loss, 4),
+                loss_curve=loss_curve,
+                eta_seconds=eta,
                 message=f"第 {completed} 轮结束，loss {epoch_loss:.3f}",
             )
             if epoch_loss > 2.0 and best_loss is not None and best_loss < 0.5:
@@ -316,11 +419,20 @@ def run_job(home: Path, job_id: str) -> int:
         best_dir = job_dir / "best"
         if not best_dir.is_dir():
             raise RuntimeError("没有可用的检查点")
-        _update(job_dir, phase="save", message="正在登记专家")
+        _set_stage(job_dir, "train", "done", detail=f"最好 loss {best_loss:.3f}")
+        _update(job_dir, phase="recall", message="正在检查主问题能不能答上来")
         del model
         del opt
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        _set_stage(job_dir, "recall", "active", detail="用最好的检查点回答每条事实的主问题")
+        recall_items = _recall_facts(models_dir, best_dir, facts, tok, device, dtype)
+        hits = sum(1 for item in recall_items if item.get("hit"))
+        _set_stage(job_dir, "recall", "done", detail=f"主问题 {hits}/{len(recall_items)} 答对", items=recall_items)
+        _event(job_dir, {"stage": "recall", "hits": hits, "total": len(recall_items)})
+        _update(job_dir, phase="register", message="正在登记专家和路由向量", recall=recall_items)
+        _set_stage(job_dir, "register", "active", detail="写入路由键和事实向量")
         key_texts = []
         for fact in facts:
             key_texts.append(fact["statement"])
@@ -329,20 +441,26 @@ def run_job(home: Path, job_id: str) -> int:
         from router import embed
 
         key = embed(key_texts)
-        batch = next_batch_id(experts_dir)
-        name = f"expert_{batch}"
+        replace_name = str(request.get("replace_name") or "")
+        if replace_name:
+            name = replace_name
+            batch = int(request["replace_batch"])
+        else:
+            batch = next_batch_id(experts_dir)
+            name = f"expert_{batch}"
         entities = []
         for fact in facts:
             entity = str(fact.get("entity") or "").strip()
             if len(entity) >= 2 and entity not in entities:
                 entities.append(entity)
         display = request.get("display_name") or "、".join(entities[:2]) or name
+        memory_facts = request.get("memory_facts") or facts
         register_expert(
             experts_dir,
             name=name,
             batch=batch,
             rank=rank,
-            facts=facts,
+            facts=memory_facts,
             key=key,
             key_texts=key_texts,
             entities=entities,
@@ -350,6 +468,9 @@ def run_job(home: Path, job_id: str) -> int:
             display_name=display,
             adapter_src=best_dir,
         )
+        _set_stage(job_dir, "register", "done", detail=f"已登记 {name}，路由键 {len(key_texts)} 条")
+        _event(job_dir, {"stage": "register", "expert": name, "keys": len(key_texts)})
+        _set_stage(job_dir, "done", "done", detail=display)
         _update(
             job_dir,
             status="done",

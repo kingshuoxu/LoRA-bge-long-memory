@@ -110,15 +110,19 @@ class ExpertRecord:
     def public_dict(self) -> dict[str, Any]:
         facts = []
         if self.fact_memory:
-            for fact in self.fact_memory.get("facts", []):
+            for index, fact in enumerate(self.fact_memory.get("facts", [])):
                 qa = fact.get("qa") or []
                 facts.append({
+                    "id": fact.get("id") or f"{self.name}#{index}",
                     "statement": fact.get("statement", ""),
                     "entity": fact.get("entity", ""),
                     "attr": fact.get("attr", ""),
                     "value": fact.get("value", ""),
-                    "question": qa[0]["q"] if qa else "",
+                    "question": qa[0]["q"] if qa else fact.get("question", ""),
                     "answer": qa[0]["a"] if qa else fact.get("value", ""),
+                    "superseded": bool(fact.get("superseded")),
+                    "superseded_by": fact.get("superseded_by") or "",
+                    "source_conversations": fact.get("source_conversations") or [],
                 })
         else:
             texts_path = self.directory / "key_texts.json"
@@ -133,7 +137,7 @@ class ExpertRecord:
             "name": self.name,
             "display_name": self.display_name,
             "writable": self.writable,
-            "n_facts": self.n_facts or len(facts),
+            "n_facts": len([fact for fact in facts if not fact.get("superseded")]) if self.fact_memory else (self.n_facts or len(facts)),
             "entities": self.entities,
             "rank": self.rank,
             "sources": self.sources,
@@ -271,10 +275,33 @@ def register_expert(
         target = expert_dir / item.name
         if item.is_file():
             shutil.copy2(item, target)
+    stored: list[dict] = []
+    for index, fact in enumerate(facts):
+        item = dict(fact)
+        if not item.get("id"):
+            item["id"] = f"{name}-f{index + 1}"
+        if not item.get("source_conversations"):
+            item["source_conversations"] = sources
+        stored.append(item)
+    active = [fact for fact in stored if not fact.get("superseded")]
+    if not active:
+        raise RuntimeError("没有可登记的事实")
+    if len(active) != len(stored):
+        key_texts = []
+        for fact in active:
+            if fact.get("statement"):
+                key_texts.append(str(fact["statement"]))
+            for qa in fact.get("qa") or []:
+                if qa.get("q"):
+                    key_texts.append(str(qa["q"]))
+        ensure_scripts_path()
+        from router import embed
+
+        key = embed(key_texts)
     torch.save(key.cpu(), expert_dir / "router_key.pt")
     (expert_dir / "key_texts.json").write_text(json.dumps(key_texts, ensure_ascii=False), encoding="utf-8")
     alias_texts = list(key_texts)
-    for fact in facts:
+    for fact in active:
         alias_texts.append(str(fact.get("statement") or ""))
         for qa in fact.get("qa") or []:
             alias_texts.append(str(qa.get("q") or ""))
@@ -284,19 +311,19 @@ def register_expert(
         "display_name": display_name,
         "entities": entities,
         "source_conversations": sources,
-        "facts": facts,
+        "facts": stored,
     }
     (expert_dir / "fact_memory.json").write_text(json.dumps(memory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     from memory_core.fact_span import build_fact_bank, save_fact_bank
 
-    bank = build_fact_bank(facts)
+    bank = build_fact_bank(active)
     if bank is not None:
         save_fact_bank(expert_dir / "fact_spans.pt", bank)
     ensure_gate_file(experts_dir)
     entry = {
         "expert": name,
         "batch": batch,
-        "n_facts": len(facts),
+        "n_facts": len(active),
         "rank": rank,
         "key_path": str(Path(name) / "router_key.pt"),
         "display_name": display_name,

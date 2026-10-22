@@ -42,6 +42,10 @@ class ConversationStore:
             """
         )
         self._conn.commit()
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(messages)")}
+        if "extra" not in columns:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN extra TEXT")
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -85,7 +89,7 @@ class ConversationStore:
     def messages(self, conv_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """
-            SELECT id, conversation_id, role, content, expert, expert_label, sim, fired, reason, created_at
+            SELECT id, conversation_id, role, content, expert, expert_label, sim, fired, reason, extra, created_at
             FROM messages WHERE conversation_id = ? ORDER BY created_at, rowid
             """,
             (conv_id,),
@@ -111,14 +115,15 @@ class ConversationStore:
         sim: float | None = None,
         fired: bool | None = None,
         reason: str | None = None,
+        extra: str | None = None,
     ) -> dict[str, Any]:
         now = _now()
         message_id = uuid.uuid4().hex[:12]
         self._conn.execute(
             """
             INSERT INTO messages
-            (id, conversation_id, role, content, expert, expert_label, sim, fired, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, conversation_id, role, content, expert, expert_label, sim, fired, reason, extra, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_id,
@@ -130,6 +135,7 @@ class ConversationStore:
                 sim,
                 None if fired is None else int(fired),
                 reason,
+                extra,
                 now,
             ),
         )
@@ -145,5 +151,6 @@ class ConversationStore:
             "sim": sim,
             "fired": fired,
             "reason": reason,
+            "extra": extra,
             "created_at": now,
         }

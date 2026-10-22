@@ -104,9 +104,34 @@ def make_handler(app: App):
             if len(parts) == 2 and parts[0] == "experts" and method == "DELETE":
                 return _json_bytes(service.delete_expert(parts[1]))
             if method == "POST" and parts == ["consolidate", "preview"]:
-                return _json_bytes(service.preview_consolidation(payload.get("conversation_ids") or []))
+                return _json_bytes(service.start_preview(payload.get("conversation_ids") or []))
+            if method == "GET" and len(parts) == 3 and parts[0] == "consolidate" and parts[1] == "preview":
+                return _json_bytes(service.preview_status(parts[2]))
             if method == "POST" and parts == ["consolidate", "commit"]:
-                return _json_bytes({"job": service.start_consolidation(payload.get("conversation_ids") or [], payload.get("facts") or [])})
+                return _json_bytes({
+                    "job": service.start_consolidation(
+                        payload.get("conversation_ids") or [],
+                        payload.get("facts") or [],
+                        preview_id=payload.get("preview_id"),
+                    )
+                })
+            if method == "GET" and parts == ["nebula"]:
+                return _json_bytes(service.nebula())
+            if method == "POST" and parts == ["corrections", "propose"]:
+                return _json_bytes({
+                    "proposal": service.propose_correction(
+                        payload.get("text") or "",
+                        fact_id=payload.get("fact_id"),
+                        new_value=payload.get("new_value"),
+                    )
+                })
+            if method == "POST" and parts == ["corrections", "commit"]:
+                return _json_bytes({
+                    "job": service.commit_correction(
+                        payload.get("proposal") or payload,
+                        conversation_id=payload.get("conversation_id"),
+                    )
+                })
             if method == "GET" and parts == ["jobs", "current"]:
                 return _json_bytes({"job": service.current_job()})
             if len(parts) == 2 and parts[0] == "jobs" and method == "GET":

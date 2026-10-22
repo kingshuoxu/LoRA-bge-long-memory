@@ -235,7 +235,7 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
     print("E2E_DEVICE", report["device"], "lr", status.get("lr"), "dtype", status.get("dtype"), "best_loss", status.get("best_loss"), flush=True)
     paraphrase_rate = paraphrase_hits / len(PARAPHRASE) if PARAPHRASE else 1.0
     abstain_rate = abstain_hits / len(NEVER) if NEVER else 1.0
-    ok = (
+    base_ok = (
         hits == len(QUESTIONS)
         and paraphrase_rate >= 0.90
         and abstain_rate >= 0.90
@@ -243,6 +243,54 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         and not cmmlu_bad
         and not any(base_turns)
     )
+    correction = {"ok": False}
+    if base_ok:
+        utterance = "沈星河的猫的名字不是云朵，正确的是暮雪。"
+        proposal = service.propose_correction(utterance)
+        print("correction proposal:", json.dumps(proposal, ensure_ascii=False), flush=True)
+        if not proposal or proposal.get("new_value") != "暮雪" or proposal.get("old_value") != "云朵":
+            raise RuntimeError(f"没有对上猫的名字这条纠正：{proposal}")
+        question_like = service.propose_correction("沈星河的猫的名字是什么？")
+        if question_like is not None:
+            raise RuntimeError(f"普通提问被当成了纠正：{question_like}")
+        corr_job = service.commit_correction(proposal)
+        corr_status = _wait(service, corr_job["id"])
+        if corr_status.get("status") != "done":
+            raise RuntimeError(corr_status.get("error") or corr_status.get("message") or "纠正训练失败")
+        if corr_status.get("expert") != expert:
+            raise RuntimeError(f"纠正换了专家名：{corr_status.get('expert')} != {expert}")
+        corrected = service.create_conversation()
+        cat = _ask(service, corrected["id"], "沈星河的猫的名字是什么？")
+        cat_answer = cat["assistant"]["content"]
+        cat_route = cat["route"]
+        cat_ok = bool(
+            cat_route["fired"]
+            and cat_route["expert"] == expert
+            and _hit(cat_answer, "暮雪")
+            and "云朵" not in _norm(cat_answer)
+        )
+        addr = _ask(service, corrected["id"], "请问沈星河的住址是什么？")
+        addr_answer = addr["assistant"]["content"]
+        addr_ok = bool(addr["route"]["fired"] and addr["route"]["expert"] == expert and _hit(addr_answer, "青岚镇"))
+        cloud = service.nebula()
+        dim = [fact for fact in cloud["facts"] if fact.get("superseded") and fact.get("value") == "云朵"]
+        bright = [fact for fact in cloud["facts"] if not fact.get("superseded") and fact.get("value") == "暮雪"]
+        nebula_ok = bool(dim and bright)
+        correction = {
+            "ok": bool(cat_ok and addr_ok and nebula_ok),
+            "cat_answer": cat_answer,
+            "cat_ok": cat_ok,
+            "address_answer": addr_answer,
+            "address_ok": addr_ok,
+            "nebula_ok": nebula_ok,
+            "expert": corr_status.get("expert"),
+            "train": corr_status,
+        }
+        print("E2E_CORRECTION", "1/1" if correction["ok"] else "0/1", flush=True)
+        print("E2E_CORRECTION_CAT", cat_answer, flush=True)
+        print("E2E_CORRECTION_ADDR", addr_answer, flush=True)
+    report["correction"] = correction
+    ok = base_ok and bool(correction.get("ok"))
     report["passed"] = ok
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if not ok:
