@@ -12,6 +12,20 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
+def _utf8_stdio() -> None:
+    """Windows 上的 GitHub runner 默认是 cp1252，中文日志会直接让构建退出。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_utf8_stdio()
+
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "packaging" / "runtime"
 CACHE = ROOT / "packaging" / "cache"
