@@ -19,6 +19,11 @@ const $ = (id) => document.getElementById(id);
 const t = (key, vars) => window.i18n.t(key, vars);
 const tx = (value) => window.i18n.tx(value);
 
+function fmtLoss(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "";
+}
+
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -97,7 +102,7 @@ function renderJobBar() {
     return;
   }
   bar.hidden = false;
-  const loss = job.loss == null ? "" : ` · loss ${job.loss}`;
+  const loss = job.loss == null ? "" : ` · loss ${fmtLoss(job.loss)}`;
   const eta = job.status === "running" && job.eta_seconds != null ? ` · ${formatEta(job.eta_seconds)}` : "";
   let action = "";
   if (job.status === "running") action = `<button id="job-cancel" type="button">${esc(t("action.cancel"))}</button>`;
@@ -136,30 +141,32 @@ function renderStages() {
     { id: "register", state: "pending" },
     { id: "done", state: "pending" },
   ];
-  const width = 320;
-  const height = 210;
+  const width = 1080;
+  const height = 300;
   const points = stages.map((stage, index) => {
-    const t = stages.length <= 1 ? 0.5 : index / (stages.length - 1);
+    const along = stages.length <= 1 ? 0.5 : index / (stages.length - 1);
     return {
       stage,
-      x: 28 + t * (width - 56),
-      y: 108 + Math.sin(t * Math.PI) * -62 + (index % 2 === 0 ? 16 : -10),
+      x: 78 + along * (width - 156),
+      y: 92 + Math.sin(along * Math.PI) * -28,
     };
   });
   const lines = points.slice(1).map((point, index) => {
     const prev = points[index];
     const lit = point.stage.state === "done" || point.stage.state === "active" || prev.stage.state === "done";
-    return `<line x1="${prev.x.toFixed(1)}" y1="${prev.y.toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="${lit ? "rgba(242,210,145,0.85)" : "rgba(180,198,220,0.28)"}" stroke-width="${lit ? 1.4 : 1}" />`;
+    return `<line x1="${prev.x.toFixed(1)}" y1="${prev.y.toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="${lit ? "rgba(242,210,145,0.85)" : "rgba(180,198,220,0.28)"}" stroke-width="${lit ? 1.6 : 1}" />`;
   }).join("");
   const stars = points.map((point) => {
     const stateName = point.stage.state || "pending";
     const on = stateName === "done" || stateName === "active";
-    const r = stateName === "active" ? 6.5 : on ? 4.6 : 3.2;
-    const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.35)";
+    const r = stateName === "active" ? 7 : on ? 5.2 : 3.6;
+    const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.45)";
+    const linesOf = labelLines(stageTitle(point.stage));
+    const text = linesOf.map((line, lineIndex) => `<tspan x="${point.x.toFixed(1)}" dy="${lineIndex === 0 ? 0 : 16}">${esc(line)}</tspan>`).join("");
     return `<g>
-      <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 7}" fill="${fill}" opacity="${on ? 0.16 : 0.04}" />
+      <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 10}" fill="${fill}" opacity="${on ? 0.18 : 0.05}" />
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
-      <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 18).toFixed(1)}" text-anchor="middle">${esc(stageTitle(point.stage))}</text>
+      <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 28).toFixed(1)}" text-anchor="middle">${text}</text>
     </g>`;
   }).join("");
   $("stage-list").innerHTML = `<svg class="constellation" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("stage.constellation"))}">${lines}${stars}</svg>`;
@@ -169,6 +176,22 @@ function renderStages() {
   $("fact-editor").hidden = !reviewing;
   if (reviewing) renderFacts();
   syncSky();
+}
+
+function labelLines(text) {
+  const value = String(text || "");
+  if (!value.includes(" ") || value.length <= 12) return [value];
+  const words = value.split(" ");
+  let split = 1;
+  let best = Infinity;
+  for (let index = 1; index < words.length; index += 1) {
+    const score = Math.max(words.slice(0, index).join(" ").length, words.slice(index).join(" ").length);
+    if (score < best) {
+      best = score;
+      split = index;
+    }
+  }
+  return [words.slice(0, split).join(" "), words.slice(split).join(" ")];
 }
 
 function stageTitle(stage) {
@@ -221,30 +244,57 @@ function renderLoss(trace) {
     return;
   }
   card.hidden = false;
-  const width = 360;
-  const height = 120;
-  const pad = 16;
+  const width = 560;
+  const height = 240;
+  const padL = 52;
+  const padR = 18;
+  const padT = 16;
+  const padB = 36;
   const losses = points.map((point) => Number(point.loss));
   const min = Math.min(...losses);
-  const max = Math.max(...losses);
-  const span = Math.max(0.02, max - min);
-  const poly = points.map((point, index) => {
-    const x = pad + (index / Math.max(1, points.length - 1)) * (width - pad * 2);
-    const y = pad + (1 - (Number(point.loss) - min) / span) * (height - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
+  const max = Math.max(...losses, min + 0.5);
+  const span = Math.max(0.05, max - min);
+  const finished = trace && (trace.status === "done" || trace.status === "cancelled" || trace.status === "failed");
+  const maxEpoch = finished
+    ? Math.max(2, ...points.map((point) => Number(point.epoch) || 1))
+    : Math.max(12, ...points.map((point) => Number(point.epoch) || 1), Number(trace && trace.max_epochs) || 1);
+  const xOf = (epoch) => padL + ((epoch - 1) / Math.max(1, maxEpoch - 1)) * (width - padL - padR);
+  const yOf = (loss) => padT + (1 - (loss - min) / span) * (height - padT - padB);
+  const poly = points.map((point) => `${xOf(Number(point.epoch) || 1).toFixed(1)},${yOf(Number(point.loss)).toFixed(1)}`).join(" ");
+  const dots = points.map((point) => `<circle cx="${xOf(Number(point.epoch) || 1).toFixed(1)}" cy="${yOf(Number(point.loss)).toFixed(1)}" r="4.5" fill="#f2d291" filter="url(#loss-glow)" />`).join("");
+  const yTicks = [max, min + span / 2, min].map((loss) => {
+    const y = yOf(loss);
+    return `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${width - padR}" y2="${y.toFixed(1)}" stroke="rgba(183,215,255,0.12)" />
+      <text x="${padL - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${fmtLoss(loss)}</text>`;
+  }).join("");
+  const xTicks = [1, Math.round(maxEpoch / 2), maxEpoch].map((epoch) => {
+    const x = xOf(epoch);
+    return `<text x="${x.toFixed(1)}" y="${height - 10}" text-anchor="middle">${epoch}</text>`;
+  }).join("");
   const last = points[points.length - 1];
   const eta = trace && trace.eta_seconds != null ? formatEta(trace.eta_seconds) : "";
-  card.innerHTML = `<strong>${esc(t("loss.title"))}</strong><div class="muted">${esc(t("loss.line", { epoch: last.epoch, loss: last.loss, seconds: last.seconds, eta }))}</div>
+  const seconds = last.seconds == null ? "" : Number(last.seconds).toFixed(1);
+  const area = `${padL},${height - padB} ${poly} ${xOf(Number(last.epoch) || 1).toFixed(1)},${height - padB}`;
+  card.innerHTML = `<strong>${esc(t("loss.title"))}</strong><div class="muted">${esc(t("loss.line", { epoch: last.epoch, loss: fmtLoss(last.loss), seconds, eta }))}</div>
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("loss.curve"))}">
       <defs>
-        <filter id="loss-glow" x="-20%" y="-40%" width="140%" height="180%">
-          <feGaussianBlur stdDeviation="3.2" result="blur" />
+        <linearGradient id="loss-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="rgba(242,210,145,0.28)" />
+          <stop offset="100%" stop-color="rgba(242,210,145,0)" />
+        </linearGradient>
+        <filter id="loss-glow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="3.4" result="blur" />
           <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
       </defs>
-      <polyline fill="none" stroke="rgba(242,210,145,0.35)" stroke-width="6" points="${poly}" />
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height - padB}" stroke="rgba(183,215,255,0.35)" />
+      <line x1="${padL}" y1="${height - padB}" x2="${width - padR}" y2="${height - padB}" stroke="rgba(183,215,255,0.35)" />
+      ${yTicks}
+      ${xTicks}
+      <polygon points="${area}" fill="url(#loss-fill)" />
+      <polyline fill="none" stroke="rgba(242,210,145,0.28)" stroke-width="7" points="${poly}" />
       <polyline fill="none" stroke="#f2d291" stroke-width="2.2" filter="url(#loss-glow)" points="${poly}" />
+      ${dots}
     </svg>`;
 }
 
@@ -256,18 +306,53 @@ async function loadConversations() {
   if (state.view === "chat" && state.currentId) await openConversation(state.currentId, false);
 }
 
+function dayKey(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "earlier";
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diff = Math.round((start - day) / 86400000);
+  if (diff === 0) return "today";
+  return day.toISOString().slice(0, 10);
+}
+
+function dayLabel(key, sample) {
+  if (key === "today") return t("list.today");
+  if (key === "earlier") return t("list.earlier");
+  const date = new Date(sample || key);
+  if (Number.isNaN(date.getTime())) return t("list.earlier");
+  const locale = window.i18n.getLocale() === "en" ? "en" : "zh-CN";
+  return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
+}
+
 function renderConversations() {
   const root = $("conv-list");
   if (!state.conversations.length) {
     root.innerHTML = `<div class="empty">${esc(t("empty.conversations"))}</div>`;
     return;
   }
-  root.innerHTML = state.conversations.map((conv) => `
-    <div class="conv ${conv.id === state.currentId && state.view === "chat" ? "active" : ""}">
-      <input type="checkbox" data-pick="${esc(conv.id)}" ${state.selected.has(conv.id) ? "checked" : ""} aria-label="${esc(t("pick.conversation", { title: tx(conv.title) }))}" />
-      <button class="link" type="button" data-open="${esc(conv.id)}">${esc(tx(conv.title || t("title.new")))}</button>
-    </div>
-  `).join("");
+  const groups = [];
+  const seen = new Map();
+  state.conversations.forEach((conv) => {
+    const key = dayKey(conv.updated_at || conv.created_at);
+    if (!seen.has(key)) {
+      const group = { key, items: [] };
+      seen.set(key, group);
+      groups.push(group);
+    }
+    seen.get(key).items.push(conv);
+  });
+  root.innerHTML = groups.map((group) => {
+    const sample = group.items[0] && (group.items[0].updated_at || group.items[0].created_at);
+    const rows = group.items.map((conv) => `
+      <div class="conv ${conv.id === state.currentId && state.view === "chat" ? "active" : ""}">
+        <input type="checkbox" data-pick="${esc(conv.id)}" ${state.selected.has(conv.id) ? "checked" : ""} aria-label="${esc(t("pick.conversation", { title: tx(conv.title) }))}" />
+        <button class="link" type="button" data-open="${esc(conv.id)}" title="${esc(tx(conv.title || t("title.new")))}">${esc(tx(conv.title || t("title.new")))}</button>
+      </div>
+    `).join("");
+    return `<div class="conv-day">${esc(dayLabel(group.key, sample))}</div>${rows}`;
+  }).join("");
   root.querySelectorAll("[data-open]").forEach((button) => {
     button.onclick = () => openConversation(button.dataset.open, true);
   });
@@ -411,7 +496,7 @@ async function openConversation(id, switchView, revealId) {
       const shown = msg.role === "assistant" ? tx(msg.content) : msg.content;
       const card = extra && extra.kind === "correction_proposal" ? proposalCard(extra) : "";
       const chip = recallChip(msg, extra);
-      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><span class="body">${esc(shown)}</span>${card}${chip}<div class="route ${memory}" title="${esc(tx(msg.reason || ""))}">${esc(label)}${esc(sim)}</div></div>`;
+      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><div class="body">${esc(shown)}</div>${card}${chip}<div class="route ${memory}" title="${esc(tx(msg.reason || ""))}">${esc(label)}${esc(sim)}</div></div>`;
     }).join("");
   }
   box.querySelectorAll("[data-confirm-correction]").forEach((button) => {

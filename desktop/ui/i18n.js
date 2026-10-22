@@ -125,6 +125,8 @@
       "error.request": "请求失败",
       "lang.label": "语言",
       "list.sep": "、",
+      "list.today": "今天",
+      "list.earlier": "更早",
     },
     en: {
       "app.name": "LoRA Long Memory",
@@ -250,6 +252,8 @@
       "error.request": "Request failed",
       "lang.label": "Language",
       "list.sep": ", ",
+      "list.today": "Today",
+      "list.earlier": "Earlier",
     },
   };
 

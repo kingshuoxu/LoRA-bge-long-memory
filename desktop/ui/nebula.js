@@ -1,132 +1,146 @@
 import * as THREE from "./vendor/three.module.js";
-import { EffectComposer } from "./vendor/postprocessing/EffectComposer.js";
-import { RenderPass } from "./vendor/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "./vendor/postprocessing/UnrealBloomPass.js";
 
-const PALETTE = [0x9ecbff, 0xf0c36a, 0x5ee0d0, 0xd7b0ff, 0xffb089, 0xb7e38a];
+const TONES = [
+  [0xd7b4ff, 0x6ee0d0, 0xf0c36a],
+  [0x9ecbff, 0xc9a6ff, 0xf2d291],
+  [0x7fd6c8, 0xe7c27a, 0xb9a0ff],
+  [0xf0b089, 0x8fd0ff, 0xd7b0ff],
+  [0xc6e38a, 0xf0c36a, 0x7ec8ff],
+  [0xe7b0ff, 0x5ee0d0, 0xf6d48a],
+];
 
-function colorOf(index) {
-  return PALETTE[index % PALETTE.length];
+function tone(index, slot) {
+  const row = TONES[index % TONES.length];
+  return row[slot % row.length];
 }
 
-function starTexture() {
-  const size = 128;
+function makeTexture(draw) {
+  const size = 256;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  const mid = size / 2;
-  const glow = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
-  glow.addColorStop(0, "rgba(255,255,255,1)");
-  glow.addColorStop(0.08, "rgba(255,244,220,0.95)");
-  glow.addColorStop(0.22, "rgba(180,210,255,0.35)");
-  glow.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, size, size);
-  ctx.strokeStyle = "rgba(255,248,230,0.9)";
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.moveTo(mid, 6);
-  ctx.lineTo(mid, size - 6);
-  ctx.moveTo(6, mid);
-  ctx.lineTo(size - 6, mid);
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(255,236,190,0.35)";
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(18, 18);
-  ctx.lineTo(size - 18, size - 18);
-  ctx.moveTo(size - 18, 18);
-  ctx.lineTo(18, size - 18);
-  ctx.stroke();
+  draw(canvas.getContext("2d"), size);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
 
-const CLOUD_VERT = `
-  varying vec3 vPos;
-  varying vec3 vNormal;
-  void main() {
-    vPos = position;
-    vNormal = normalize(normalMatrix * normal);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+function puffTexture(rgb) {
+  return makeTexture((ctx, size) => {
+    const [r, g, b] = rgb;
+    const blobs = [
+      [0.50, 0.48, 0.46, 0.92],
+      [0.34, 0.42, 0.32, 0.7],
+      [0.66, 0.40, 0.3, 0.62],
+      [0.46, 0.66, 0.34, 0.55],
+      [0.58, 0.34, 0.24, 0.48],
+    ];
+    blobs.forEach(([x, y, radius, alpha]) => {
+      const glow = ctx.createRadialGradient(x * size, y * size, 0, x * size, y * size, radius * size);
+      glow.addColorStop(0, `rgba(${r},${g},${b},${alpha})`);
+      glow.addColorStop(0.22, `rgba(${r},${g},${b},${(alpha * 0.9).toFixed(3)})`);
+      glow.addColorStop(0.55, `rgba(${r},${g},${b},${(alpha * 0.45).toFixed(3)})`);
+      glow.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, size, size);
+    });
+  });
+}
+
+function starTexture() {
+  return makeTexture((ctx, size) => {
+    const mid = size / 2;
+    const glow = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid);
+    glow.addColorStop(0, "rgba(255,255,255,1)");
+    glow.addColorStop(0.08, "rgba(255,244,220,0.9)");
+    glow.addColorStop(0.2, "rgba(190,214,255,0.28)");
+    glow.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = "rgba(255,248,230,0.85)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(mid, 8);
+    ctx.lineTo(mid, size - 8);
+    ctx.moveTo(8, mid);
+    ctx.lineTo(size - 8, mid);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,236,190,0.28)";
+    ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    ctx.moveTo(22, 22);
+    ctx.lineTo(size - 22, size - 22);
+    ctx.moveTo(size - 22, 22);
+    ctx.lineTo(22, size - 22);
+    ctx.stroke();
+  });
+}
+
+function fallbackNebula(canvas) {
+  if (canvas.parentElement) canvas.parentElement.classList.add("nebula-fallback");
+  return {
+    setData() {},
+    resize() {},
+    highlight() { return { mounted: false, nodeIds: [] }; },
+    screenPoint() { return null; },
+    setMode() {},
+    dispose() {},
+  };
+}
+
+function bezier(a, b, lift) {
+  const mid = a.clone().add(b).multiplyScalar(0.5);
+  const dir = b.clone().sub(a);
+  const side = new THREE.Vector3(-dir.z, 0, dir.x);
+  if (side.lengthSq() > 1e-6) side.normalize().multiplyScalar(dir.length() * 0.16);
+  mid.add(side);
+  mid.y += lift;
+  const points = [];
+  for (let i = 0; i <= 28; i += 1) {
+    const t = i / 28;
+    const u = 1 - t;
+    points.push(a.clone().multiplyScalar(u * u).add(mid.clone().multiplyScalar(2 * u * t)).add(b.clone().multiplyScalar(t * t)));
   }
-`;
-const CLOUD_FRAG = `
-  varying vec3 vPos;
-  varying vec3 vNormal;
-  uniform vec3 uColor;
-  uniform float uTime;
-  uniform float uDim;
-  float hash(vec3 p) {
-    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
-  }
-  float noise(vec3 p) {
-    vec3 i = floor(p);
-    vec3 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float n = mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x),
-                       mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
-                   mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
-                       mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
-    return n;
-  }
-  float fbm(vec3 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 4; i++) {
-      v += a * noise(p);
-      p = p * 2.03 + vec3(1.7, 9.2, 3.1);
-      a *= 0.5;
-    }
-    return v;
-  }
-  void main() {
-    float t = uTime * (uDim > 0.5 ? 0.25 : 1.0);
-    float n = fbm(normalize(vPos) * 2.4 + vec3(t * 0.05, t * 0.02, 0.0));
-    float rim = pow(1.0 - abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0))), 1.6);
-    float alpha = smoothstep(0.28, 0.82, n) * 0.62 + rim * 0.18;
-    vec3 col = uColor * (0.55 + n) + vec3(0.25, 0.18, 0.05) * rim;
-    gl_FragColor = vec4(col, alpha);
-  }
-`;
+  return points;
+}
 
 export function createNebula(canvas, hooks) {
   const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: true,
-    alpha: false,
-    powerPreference: "high-performance",
-  });
-  renderer.setClearColor(0x070910, 1);
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      premultipliedAlpha: false,
+      powerPreference: "high-performance",
+    });
+  } catch (error) {
+    return fallbackNebula(canvas);
+  }
+  if (!renderer.getContext()) return fallbackNebula(canvas);
+  renderer.setClearColor(0x000000, 0);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
   if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x070910, 0.02);
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 240);
-  const look = new THREE.Vector3(0, 0, 0);
-  const lookTarget = new THREE.Vector3(0, 0, 0);
-  const camTarget = new THREE.Vector3(0, 5.5, 22);
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 400);
+  const look = new THREE.Vector3();
+  const lookTarget = new THREE.Vector3();
+  const camTarget = new THREE.Vector3(0, 1.2, 28);
   camera.position.copy(camTarget);
 
+  const PALETTES = [
+    [[226, 156, 255], [176, 90, 240], [110, 245, 230]],
+    [[72, 250, 226], [24, 186, 176], [190, 150, 255]],
+    [[255, 128, 32], [230, 80, 16], [255, 220, 120]],
+    [[255, 96, 156], [214, 48, 120], [150, 196, 255]],
+    [[64, 156, 255], [24, 90, 230], [120, 245, 220]],
+    [[196, 255, 84], [120, 210, 40], [255, 214, 96]],
+  ];
+  const puffs = PALETTES.map((colors) => colors.map((rgb) => puffTexture(rgb)));
+  const puffMaps = new Set(puffs.flat());
   const sprite = starTexture();
-  const dust = new THREE.Group();
-  const dustCount = 700;
-  const dustGeo = new THREE.BufferGeometry();
-  const dustPos = new Float32Array(dustCount * 3);
-  for (let i = 0; i < dustCount; i += 1) {
-    dustPos[i * 3] = (Math.random() - 0.5) * 90;
-    dustPos[i * 3 + 1] = (Math.random() - 0.5) * 46;
-    dustPos[i * 3 + 2] = (Math.random() - 0.5) * 90;
-  }
-  dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
-  dust.add(new THREE.Points(dustGeo, new THREE.PointsMaterial({
-    color: 0xd5e4ff, size: 0.045, transparent: true, opacity: 0.75, depthWrite: false,
-  })));
-  scene.add(dust);
-
   const world = new THREE.Group();
   scene.add(world);
   const pickables = [];
@@ -134,43 +148,31 @@ export function createNebula(canvas, hooks) {
   const expertMeshes = new Map();
   const expertClouds = new Map();
   const nodePos = new Map();
-  let filaments = [];
+  const filaments = [];
   const motes = [];
+  let framed = null;
+  let userMoved = false;
   let recall = null;
   let mode = "full";
-  let bloom = null;
-  let composer = null;
+  let running = true;
+  let frameCount = 0;
+
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let dragging = false;
   let moved = 0;
   let lastX = 0;
   let lastY = 0;
-  let running = true;
-  let frameCount = 0;
-
-  try {
-    composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    bloom = new UnrealBloomPass(new THREE.Vector2(canvas.clientWidth || 800, canvas.clientHeight || 600), 0.72, 0.38, 0.2);
-    composer.addPass(bloom);
-  } catch (error) {
-    composer = null;
-    bloom = null;
-  }
 
   function clearWorld() {
     while (world.children.length) {
       const child = world.children.pop();
       child.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
-        if (obj.material && obj.material !== sprite) {
-          const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-          materials.forEach((material) => {
-            if (material.map && material.map !== sprite) material.map.dispose();
-            material.dispose();
-          });
+        if (obj.material && obj.material.map && !puffMaps.has(obj.material.map) && obj.material.map !== sprite) {
+          if (obj.material.map) obj.material.map.dispose();
         }
+        if (obj.material) obj.material.dispose();
       });
     }
     pickables.length = 0;
@@ -178,35 +180,110 @@ export function createNebula(canvas, hooks) {
     expertMeshes.clear();
     expertClouds.clear();
     nodePos.clear();
-    filaments = [];
-    motes.forEach((mote) => {
-      if (mote.material) mote.material.dispose();
-    });
+    filaments.length = 0;
     motes.length = 0;
     recall = null;
+    framed = null;
+    userMoved = false;
   }
 
-  function makeCloud(position, color, name) {
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(1.55, 48, 32),
-      new THREE.ShaderMaterial({
-        uniforms: {
-          uColor: { value: new THREE.Color(color) },
-          uTime: { value: 0 },
-          uDim: { value: 0 },
-        },
-        vertexShader: CLOUD_VERT,
-        fragmentShader: CLOUD_FRAG,
+  function makeCloud(position, index, name, expert) {
+    const group = new THREE.Group();
+    group.position.copy(position);
+    const maps = puffs[index % puffs.length];
+    const rot = index * 0.85;
+    const turn = (x, y) => ({
+      x: x * Math.cos(rot) - y * Math.sin(rot),
+      y: x * Math.sin(rot) + y * Math.cos(rot),
+    });
+    const layout = [
+      [-0.2, 0.05, 0.0, 6.8, 4.0, 0.9, 0],
+      [1.15, 0.4, 0.15, 3.8, 3.0, 0.98, 0],
+      [-1.25, -0.3, -0.1, 3.6, 2.8, 0.97, 1],
+      [0.3, -1.05, 0.2, 3.2, 2.5, 0.96, 2],
+      [1.7, -0.2, 0.05, 2.6, 2.0, 0.86, 1],
+      [-1.6, 0.65, 0.1, 2.5, 2.1, 0.84, 2],
+      [0.2, 1.15, -0.15, 2.3, 1.8, 0.95, 0],
+      [-0.4, 0.2, 0.25, 1.8, 1.5, 1, 0],
+    ];
+    layout.forEach(([x, y, z, sx, sy, opacity, slot], i) => {
+      const spun = turn(x, y);
+      const material = new THREE.SpriteMaterial({
+        map: maps[slot],
+        color: 0xffffff,
         transparent: true,
+        opacity,
         depthWrite: false,
+        depthTest: false,
+        blending: THREE.NormalBlending,
+      });
+      const blob = new THREE.Sprite(material);
+      blob.position.set(spun.x, spun.y, z);
+      blob.scale.set(sx, sy, 1);
+      blob.userData = {
+        kind: "expert",
+        expertName: name,
+        expert,
+        baseOpacity: opacity,
+        phase: i + index * 3,
+        base: blob.position.clone(),
+      };
+      blob.renderOrder = 1;
+      group.add(blob);
+      pickables.push(blob);
+    });
+    const knots = [layout[1], layout[2], layout[4], layout[6]];
+    knots.forEach((knot, knotIndex) => {
+      const spun = turn(knot[0], knot[1]);
+      const points = bezier(
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(spun.x, spun.y, knot[2]),
+        0.18 + knotIndex * 0.05,
+      );
+      const geo = new THREE.BufferGeometry().setFromPoints(points);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: PALETTES[index % PALETTES.length][0].reduce((hex, channel, channelIndex) => hex | (channel << (16 - channelIndex * 8)), 0),
+        transparent: true,
+        opacity: 0.35,
         blending: THREE.AdditiveBlending,
-      }),
-    );
-    mesh.position.copy(position);
-    mesh.userData = { kind: "expert", expertName: name, baseScale: 1 };
-    world.add(mesh);
-    expertClouds.set(name, mesh);
-    return mesh;
+        depthWrite: false,
+      }));
+      line.renderOrder = 2;
+      group.add(line);
+    });
+    group.userData = { kind: "expert", expertName: name, expert, baseScale: 1 };
+    world.add(group);
+    expertClouds.set(name, group);
+    expertMeshes.set(name, group);
+    return group;
+  }
+
+  function addFilament(a, b, color) {
+    const points = bezier(a, b, 0.35 + (filaments.length % 3) * 0.15);
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.62,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    world.add(new THREE.Line(geo, material));
+    const mote = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: sprite,
+      color: 0xfff1c9,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }));
+    mote.scale.setScalar(0.28);
+    mote.visible = false;
+    world.add(mote);
+    const filament = { points, mote, source: "", target: "" };
+    filaments.push(filament);
+    motes.push(mote);
+    return filament;
   }
 
   function setData(data) {
@@ -215,18 +292,27 @@ export function createNebula(canvas, hooks) {
     const facts = data.facts || [];
     const conversations = data.conversations || [];
     const links = (data.links || []).slice();
-    const expertPos = new Map();
-    const radius = 7.2 + experts.length * 0.7;
+    const radius = Math.max(9.6, experts.length * 1.45);
     experts.forEach((expert, index) => {
       const angle = (index / Math.max(1, experts.length)) * Math.PI * 2 - Math.PI / 2;
-      const pos = new THREE.Vector3(Math.cos(angle) * radius, Math.sin(index * 0.7) * 0.55, Math.sin(angle) * radius);
-      expertPos.set(expert.name, pos);
+      const pos = new THREE.Vector3(
+        Math.cos(angle) * radius,
+        Math.sin(angle) * radius * 0.7,
+        Math.sin(angle * 2 + index) * 0.85,
+      );
       nodePos.set(expert.id || `expert:${expert.name}`, pos.clone());
-      const color = colorOf(index);
-      const cloud = makeCloud(pos, color, expert.name);
-      cloud.userData.expert = expert;
-      pickables.push(cloud);
-      expertMeshes.set(expert.name, cloud);
+      makeCloud(pos, index, expert.name, expert);
+    });
+    experts.forEach((expert, index) => {
+      const next = experts[(index + 1) % experts.length];
+      if (!next || next.name === expert.name) return;
+      const a = nodePos.get(expert.id || `expert:${expert.name}`);
+      const b = nodePos.get(next.id || `expert:${next.name}`);
+      if (!a || !b) return;
+      const rgb = PALETTES[index % PALETTES.length][2];
+      const filament = addFilament(a, b, (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]);
+      filament.source = expert.id || `expert:${expert.name}`;
+      filament.target = next.id || `expert:${next.name}`;
     });
 
     const grouped = new Map();
@@ -235,30 +321,31 @@ export function createNebula(canvas, hooks) {
       grouped.get(fact.expert).push(fact);
     });
     grouped.forEach((group, name) => {
-      const origin = expertPos.get(name) || new THREE.Vector3();
+      const origin = nodePos.get(`expert:${name}`) || new THREE.Vector3();
       const colorIndex = Math.max(0, experts.findIndex((expert) => expert.name === name));
       group.forEach((fact, index) => {
-        const angle = (index / group.length) * Math.PI * 2;
-        const ring = 1.7 + (index % 3) * 0.42;
+        const golden = index * 2.399963;
+        const ring = 0.2 + Math.sqrt((index + 0.5) / group.length) * 1.15;
         const pos = origin.clone().add(new THREE.Vector3(
-          Math.cos(angle) * ring,
-          Math.sin(angle * 1.6) * 0.42,
-          Math.sin(angle) * ring,
+          Math.cos(golden) * ring,
+          Math.sin(golden * 1.3) * ring * 0.62,
+          ((index % 5) - 2) * 0.12,
         ));
         nodePos.set(fact.id, pos.clone());
         const material = new THREE.SpriteMaterial({
           map: sprite,
-          color: fact.superseded ? 0x66758c : colorOf(colorIndex),
+          color: fact.superseded ? 0x66758c : tone(colorIndex, index),
           transparent: true,
           opacity: fact.superseded ? 0.28 : 0.95,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
         });
         const star = new THREE.Sprite(material);
-        const scale = fact.superseded ? 0.28 : 0.62;
+        const scale = fact.superseded ? 0.2 : 0.48 + (index % 3) * 0.08;
         star.scale.setScalar(scale);
         star.position.copy(pos);
-        star.userData = { kind: "fact", fact, baseScale: scale };
+        star.userData = { kind: "fact", fact, baseScale: scale, baseOpacity: material.opacity };
+        star.renderOrder = 3;
         world.add(star);
         pickables.push(star);
         factMeshes.set(fact.id, star);
@@ -277,61 +364,64 @@ export function createNebula(canvas, hooks) {
           count += 1;
         }
       });
-      if (count) anchor.multiplyScalar(1 / count);
-      const outward = anchor.clone().normalize().multiplyScalar(3.4 + (index % 4) * 0.25);
-      const pos = (count ? anchor : new THREE.Vector3()).add(outward);
-      pos.y += 1.15;
+      if (!count) return;
+      anchor.multiplyScalar(1 / count);
+      const pos = anchor.clone().add(new THREE.Vector3(0, 0.8 + (index % 3) * 0.15, 0));
       nodePos.set(conv.id, pos.clone());
-      const mesh = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.12, 0),
-        new THREE.MeshBasicMaterial({ color: 0xd5deee, transparent: true, opacity: 0.8 }),
-      );
+      const mesh = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: sprite,
+        color: 0xd5deee,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }));
+      mesh.scale.setScalar(0.16);
       mesh.position.copy(pos);
       mesh.userData = { kind: "conversation", conversation: conv };
       world.add(mesh);
       pickables.push(mesh);
     });
 
-    facts.forEach((fact) => {
-      if (!fact.superseded || !fact.superseded_by) return;
-      const next = facts.find((item) => item.fact_id === fact.superseded_by);
-      if (next) links.push({ source: fact.id, target: next.id, kind: "supersede" });
-    });
-
-    const linePos = [];
-    const lineCol = [];
     links.forEach((link) => {
+      if (link.kind !== "entity" && link.kind !== "semantic" && link.kind !== "supersede") return;
       const a = nodePos.get(link.source);
       const b = nodePos.get(link.target);
       if (!a || !b) return;
-      linePos.push(a.x, a.y, a.z, b.x, b.y, b.z);
-      const color = new THREE.Color(
-        link.kind === "source" ? 0x3ddecb
-          : link.kind === "semantic" || link.kind === "entity" ? 0xf0c36a
-            : link.kind === "supersede" ? 0x66758c
-              : 0x8ecbff,
-      );
-      lineCol.push(color.r, color.g, color.b, color.r, color.g, color.b);
-      filaments.push({ a: a.clone(), b: b.clone(), source: link.source, target: link.target, kind: link.kind });
+      const filament = addFilament(a, b, link.kind === "supersede" ? 0x66758c : 0xf0c36a);
+      filament.source = link.source;
+      filament.target = link.target;
     });
-    if (linePos.length) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.Float32BufferAttribute(linePos, 3));
-      geo.setAttribute("color", new THREE.Float32BufferAttribute(lineCol, 3));
-      world.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-        vertexColors: true, transparent: true, opacity: 0.28, blending: THREE.AdditiveBlending, depthWrite: false,
-      })));
+
+    const box = new THREE.Box3();
+    expertClouds.forEach((group) => {
+      box.expandByPoint(group.position.clone().add(new THREE.Vector3(3.6, 2.6, 1.4)));
+      box.expandByPoint(group.position.clone().add(new THREE.Vector3(-3.6, -2.6, -1.4)));
+    });
+    if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(8, 4, 8));
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    framed = {
+      center: sphere.center.clone(),
+      radius: Math.max(9.5, sphere.radius * 0.96),
+    };
+    applyFrame(true);
+  }
+
+  function applyFrame(immediate) {
+    if (!framed) return;
+    const { center, radius } = framed;
+    lookTarget.copy(center);
+    const fov = camera.fov * Math.PI / 180;
+    const aspect = Math.max(0.35, camera.aspect || 1);
+    const distY = radius / Math.tan(fov / 2);
+    const distX = radius / (Math.tan(fov / 2) * aspect);
+    const dist = Math.max(distY, distX) * 0.94;
+    camTarget.set(center.x, center.y, center.z + dist);
+    if (immediate) {
+      look.copy(lookTarget);
+      camera.position.copy(camTarget);
+      camera.lookAt(look);
     }
-    filaments.forEach((filament) => {
-      const mote = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: sprite, color: 0xfff1c9, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
-      }));
-      mote.scale.setScalar(0.22);
-      mote.visible = false;
-      world.add(mote);
-      motes.push(mote);
-      filament.mote = mote;
-    });
   }
 
   function resize() {
@@ -340,10 +430,9 @@ export function createNebula(canvas, hooks) {
     const ratio = Math.min(window.devicePixelRatio || 1, mode === "dim" ? 1 : 1.25);
     renderer.setPixelRatio(ratio);
     renderer.setSize(width, height, false);
-    if (composer) composer.setSize(width, height);
-    if (bloom) bloom.setSize(width, height);
     camera.aspect = width / Math.max(1, height);
     camera.updateProjectionMatrix();
+    if (!userMoved) applyFrame(true);
   }
 
   function project(nodeId) {
@@ -362,9 +451,9 @@ export function createNebula(canvas, hooks) {
   function restore() {
     factMeshes.forEach((mesh) => {
       mesh.scale.setScalar(mesh.userData.baseScale);
-      mesh.material.opacity = mesh.userData.fact && mesh.userData.fact.superseded ? 0.28 : 0.95;
+      mesh.material.opacity = mesh.userData.baseOpacity;
     });
-    expertClouds.forEach((mesh) => mesh.scale.setScalar(1));
+    expertClouds.forEach((group) => group.scale.setScalar(1));
     motes.forEach((mote) => {
       mote.visible = false;
       mote.material.opacity = 0;
@@ -387,11 +476,12 @@ export function createNebula(canvas, hooks) {
 
   function flyTo(object) {
     if (!object) return;
+    userMoved = true;
     const pos = object.getWorldPosition(new THREE.Vector3());
     lookTarget.copy(pos);
     const offset = camera.position.clone().sub(look);
-    if (offset.length() < 0.1) offset.set(0, 2, 8);
-    offset.setLength(Math.min(14, Math.max(6.5, offset.length() * 0.72)));
+    if (offset.length() < 0.1) offset.set(0, 1.2, 10);
+    offset.setLength(Math.min(16, Math.max(7, offset.length() * 0.72)));
     camTarget.copy(pos).add(offset);
   }
 
@@ -424,10 +514,11 @@ export function createNebula(canvas, hooks) {
       moved += Math.abs(dx) + Math.abs(dy);
       lastX = event.clientX;
       lastY = event.clientY;
+      userMoved = true;
       const offset = camTarget.clone().sub(look);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       spherical.theta -= dx * 0.005;
-      spherical.phi = Math.min(Math.PI - 0.2, Math.max(0.2, spherical.phi + dy * 0.005));
+      spherical.phi = Math.min(Math.PI - 0.18, Math.max(0.18, spherical.phi + dy * 0.005));
       offset.setFromSpherical(spherical);
       camTarget.copy(look).add(offset);
     }
@@ -449,64 +540,59 @@ export function createNebula(canvas, hooks) {
   });
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
+    userMoved = true;
     const offset = camTarget.clone().sub(look);
     const next = offset.length() * (event.deltaY > 0 ? 1.08 : 0.92);
-    offset.setLength(Math.min(64, Math.max(5.5, next)));
+    offset.setLength(Math.min(80, Math.max(6, next)));
     camTarget.copy(look).add(offset);
   }, { passive: false });
 
   const clock = new THREE.Clock();
-  function renderScene() {
-    if (composer) {
-      try {
-        composer.render();
-        return;
-      } catch (error) {
-        composer = null;
-      }
-    }
-    renderer.render(scene, camera);
-  }
-
   function frame() {
     if (!running) return;
     requestAnimationFrame(frame);
     if (!canvas.clientWidth || document.hidden) return;
     frameCount += 1;
     if (mode === "dim" && frameCount % 3 !== 0) return;
-    const t = reduce ? 1.2 : clock.getElapsedTime();
-    if (!reduce && mode !== "dim") dust.rotation.y = t * 0.008;
-    expertClouds.forEach((mesh) => {
-      if (mesh.material.uniforms) {
-        mesh.material.uniforms.uTime.value = t;
-        mesh.material.uniforms.uDim.value = mode === "dim" ? 1 : 0;
-      }
-      if (!reduce) mesh.rotation.y = t * 0.05;
+    const t = reduce ? 0 : clock.getElapsedTime();
+    const dim = mode === "dim" ? 0.45 : 1;
+    expertClouds.forEach((group) => {
+      group.children.forEach((blob) => {
+        if (!blob.userData || blob.userData.phase == null) return;
+        const base = blob.userData.base || blob.position.clone();
+        if (!blob.userData.base) blob.userData.base = base.clone();
+        if (!reduce) {
+          blob.position.x = blob.userData.base.x + Math.sin(t * 0.25 + blob.userData.phase) * 0.06;
+          blob.position.y = blob.userData.base.y + Math.cos(t * 0.2 + blob.userData.phase) * 0.04;
+        }
+        blob.material.opacity = blob.userData.baseOpacity * dim;
+      });
     });
     if (recall && !reduce) {
       const pulse = 0.55 + 0.45 * Math.sin((performance.now() - recall.started) / 160);
       factMeshes.forEach((mesh, id) => {
         const on = recall.nodeIds.has(id);
-        mesh.scale.setScalar(mesh.userData.baseScale * (on ? 1.15 + pulse * 0.85 : 0.72));
-        mesh.material.opacity = on ? 1 : 0.22;
+        mesh.scale.setScalar(mesh.userData.baseScale * (on ? 1.2 + pulse * 0.7 : 0.7));
+        mesh.material.opacity = on ? 1 : 0.2;
       });
       const cloud = expertClouds.get(recall.expertName);
-      if (cloud) cloud.scale.setScalar(1.04 + pulse * 0.08);
+      if (cloud) cloud.scale.setScalar(1.04 + pulse * 0.05);
       const travel = ((performance.now() - recall.started) / 1400) % 1;
       filaments.forEach((filament) => {
         const hit = recall.nodeIds.has(filament.target) || recall.nodeIds.has(filament.source)
           || filament.target === `expert:${recall.expertName}` || filament.source === `expert:${recall.expertName}`;
-        if (!hit || !filament.mote) return;
+        if (!hit || !filament.mote || !filament.points.length) return;
+        const index = Math.min(filament.points.length - 1, Math.floor(travel * (filament.points.length - 1)));
         filament.mote.visible = true;
-        filament.mote.position.lerpVectors(filament.a, filament.b, travel);
-        filament.mote.material.opacity = 0.85;
-        filament.mote.scale.setScalar(0.18 + pulse * 0.12);
+        filament.mote.position.copy(filament.points[index]);
+        filament.mote.material.opacity = 0.9;
+        filament.mote.scale.setScalar(0.22 + pulse * 0.1);
       });
     }
     look.lerp(lookTarget, reduce ? 1 : 0.08);
     camera.position.lerp(camTarget, reduce ? 1 : 0.08);
     camera.lookAt(look);
-    renderScene();
+    renderer.render(scene, camera);
   }
 
   resize();
@@ -518,12 +604,12 @@ export function createNebula(canvas, hooks) {
     screenPoint: project,
     setMode(next) {
       mode = next === "dim" ? "dim" : "full";
-      if (bloom) bloom.strength = mode === "dim" ? 0.16 : 0.72;
       resize();
     },
     dispose() {
       running = false;
       clearWorld();
+      puffMaps.forEach((texture) => texture.dispose());
       sprite.dispose();
       renderer.dispose();
     },

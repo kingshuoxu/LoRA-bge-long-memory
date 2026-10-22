@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 
 const lang = process.env.SHOT_LANG === "en" ? "en" : "zh";
-const prefix = lang === "en" ? "screenshot_en_serif" : "screenshot_zh_serif";
+const prefix = lang === "en" ? "screenshot_en_space3" : "screenshot_zh_space3";
 const python = process.env.LORA_MEMORY_PYTHON || path.join(__dirname, "..", ".venv", "bin", "python");
 const home = process.env.SHOT_HOME || process.env.LORA_MEMORY_HOME;
 const models = process.env.LORA_MEMORY_MODELS || path.join(__dirname, "..", "models");
@@ -28,6 +28,22 @@ app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
 
 const errors = [];
+
+function finishedJobId(homeDir) {
+  const root = path.join(homeDir, "jobs");
+  let best = null;
+  fs.readdirSync(root).forEach((name) => {
+    const statusPath = path.join(root, name, "status.json");
+    if (!fs.existsSync(statusPath)) return;
+    const status = JSON.parse(fs.readFileSync(statusPath, "utf8"));
+    const curve = status.loss_curve || [];
+    if (status.status !== "done" || curve.length < 6) return;
+    const score = curve.length;
+    if (!best || score > best.score || (score === best.score && name > best.id)) best = { id: name, score };
+  });
+  if (!best) throw new Error("没有完整的 loss 曲线可展示");
+  return best.id;
+}
 
 function save(win, name) {
   return win.capturePage().then((image) => {
@@ -87,11 +103,14 @@ app.whenReady().then(async () => {
     const port = await waitReady(backend);
     win = new BrowserWindow({
       show: true,
+      frame: false,
+      useContentSize: true,
       width: 1440,
       height: 900,
-      backgroundColor: "#070910",
+      backgroundColor: "#03040a",
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false },
     });
+    win.setContentSize(1440, 900);
     win.webContents.on("console-message", (_event, level, message) => {
       if (level >= 2) errors.push(message);
     });
@@ -112,6 +131,39 @@ app.whenReady().then(async () => {
       })()
     `);
     if (!ready || ready.fallback) throw new Error(`星空没有起来 ${JSON.stringify(ready)}`);
+    win.setPosition(0, 0);
+    win.setContentSize(1440, 900);
+    let viewport = [0, 0];
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 150));
+      viewport = await js(win, `[window.innerWidth, window.innerHeight]`);
+      if (viewport[0] === 1440 && viewport[1] === 900) break;
+      const [width, height] = win.getContentSize();
+      win.setContentSize(width + (1440 - viewport[0]), height + (900 - viewport[1]));
+    }
+    if (viewport[0] !== 1440 || viewport[1] !== 900) throw new Error(`视口不是 1440×900：${viewport}`);
+    const wrapped = await js(win, `
+      [...document.querySelectorAll(".side-actions span, .secondary span, .brand strong")].filter((el) => el.getClientRects().length > 1).map((el) => el.textContent)
+    `);
+    if (wrapped.length) throw new Error(`侧栏文字换行：${wrapped.join(" | ")}`);
+
+    const dedupe = `
+      (() => {
+        const seen = new Set();
+        document.querySelectorAll(".conv").forEach((row) => {
+          const title = (row.querySelector(".link") || {}).textContent || "";
+          const key = title.trim();
+          if (!key) return;
+          if (seen.has(key)) row.remove();
+          else seen.add(key);
+        });
+        document.querySelectorAll(".conv-day").forEach((day) => {
+          const next = day.nextElementSibling;
+          if (!next || !next.classList.contains("conv")) day.remove();
+        });
+        return seen.size;
+      })()
+    `;
 
     const chatId = await js(win, `
       (async () => {
@@ -138,10 +190,13 @@ app.whenReady().then(async () => {
       })()
     `);
     await new Promise((r) => setTimeout(r, 1200));
+    await js(win, dedupe);
     await save(win, prefix + "_chat.png");
 
+    const experts = await js(win, `fetch("/api/nebula").then((res) => res.json()).then((data) => (data.experts || []).length)`);
+    if (experts < 6) throw new Error(`星云专家不足 6 位：${experts}`);
     await js(win, `document.getElementById("nav-nebula").click()`);
-    await new Promise((r) => setTimeout(r, 2200));
+    await new Promise((r) => setTimeout(r, 2800));
     await save(win, prefix + "_nebula.png");
 
     await js(win, `document.getElementById("nav-chat").click()`);
@@ -164,15 +219,61 @@ app.whenReady().then(async () => {
       })()
     `);
     if (!recall.ok) throw new Error(`回忆布局不对 ${JSON.stringify(recall)}`);
+    const chipOverlap = await js(win, `
+      (() => {
+        const chip = document.querySelector(".recall-chip:not(.idle)");
+        const body = chip && chip.parentElement.querySelector(".body");
+        if (!chip || !body) return true;
+        const a = body.getBoundingClientRect();
+        const b = chip.getBoundingClientRect();
+        return b.top < a.bottom - 2;
+      })()
+    `);
+    if (chipOverlap) throw new Error("回忆标签压住了回答");
+    await js(win, dedupe);
     await save(win, prefix + "_recall.png");
 
-    if (lang === "zh") {
-      await js(win, `document.getElementById("nav-consolidate").click()`);
-      await new Promise((r) => setTimeout(r, 800));
-      const curve = await js(win, `Boolean(state.job && (state.job.loss_curve || []).length)`);
-      if (!curve) throw new Error("中文巩固没有真实 loss");
-      await save(win, prefix + "_consolidate.png");
+    const doneJob = finishedJobId(home);
+    await js(win, `document.getElementById("nav-consolidate").click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    const shownJob = await js(win, `
+      (async () => {
+        const job = await fetch("/api/jobs/" + ${JSON.stringify(doneJob)}).then((res) => res.json());
+        state.job = job;
+        renderJobBar();
+        renderStages();
+        await new Promise((r) => setTimeout(r, 200));
+        const curve = (state.job && state.job.loss_curve) || [];
+        const cards = document.querySelectorAll("#stage-feed .event").length;
+        const svg = document.querySelector(".constellation");
+        const box = svg.getBoundingClientRect();
+        const labels = [...svg.querySelectorAll("text")].map((node) => node.getBoundingClientRect());
+        let overlap = false;
+        for (let i = 0; i < labels.length; i += 1) {
+          for (let j = i + 1; j < labels.length; j += 1) {
+            const a = labels[i];
+            const b = labels[j];
+            if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) overlap = true;
+          }
+        }
+        const lossText = (document.querySelector("#loss-card") || {}).textContent || "";
+        const line = document.querySelector("#loss-card polyline");
+        return {
+          id: state.job && state.job.id,
+          points: curve.length,
+          cards,
+          w: box.width,
+          h: box.height,
+          overlap,
+          raw: /\\d+\\.\\d{3,}/.test(lossText),
+          line: Boolean(line),
+        };
+      })()
+    `);
+    if (!shownJob || shownJob.points < 6 || shownJob.cards < 3 || shownJob.w < 700 || shownJob.h < 200 || shownJob.overlap || shownJob.raw || !shownJob.line) {
+      throw new Error(`巩固布局不对 ${JSON.stringify(shownJob)}`);
     }
+    await save(win, prefix + "_consolidate.png");
 
     await js(win, `document.getElementById("new-chat").click()`);
     await new Promise((r) => setTimeout(r, 700));
@@ -196,40 +297,10 @@ app.whenReady().then(async () => {
     `);
     if (!proposal) throw new Error("没有出现纠正确认");
     await new Promise((r) => setTimeout(r, 400));
+    await js(win, dedupe);
     await save(win, prefix + "_correction.png");
 
-    let trained = null;
-    if (lang === "en") {
-      const jobId = await js(win, `
-        (async () => {
-          const button = document.querySelector("[data-confirm-correction]");
-          if (!button) return "";
-          button.click();
-          for (let i = 0; i < 40; i += 1) {
-            if (document.querySelector(".constellation")) return (state.job && state.job.id) || "open";
-            await new Promise((r) => setTimeout(r, 200));
-          }
-          return "";
-        })()
-      `);
-      if (!jobId) throw new Error("没有进入巩固");
-      trained = await js(win, `
-        (async () => {
-          for (let i = 0; i < 180; i += 1) {
-            const job = state.job;
-            const curve = job && (job.loss_curve || []);
-            if (curve.length >= 1) return { epoch: curve[0].epoch, loss: curve[0].loss, id: job.id };
-            await new Promise((r) => setTimeout(r, 2000));
-          }
-          return null;
-        })()
-      `);
-      if (!trained) throw new Error("训练没有打出第一轮 loss");
-      await save(win, prefix + "_consolidate.png");
-      await js(win, `fetch("/api/jobs/" + ${JSON.stringify(trained.id)} + "/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })`);
-    }
-
-    console.log("I18N_SHOTS", JSON.stringify({ lang, ready, recall, proposal: proposal.slice(0, 120), trained, errors: errors.filter((line) => /SyntaxError|nebula|UnrealBloom|shader/i.test(line)).slice(0, 6) }));
+    console.log("I18N_SHOTS", JSON.stringify({ lang, ready, recall, proposal: proposal.slice(0, 120), job: shownJob, errors: errors.filter((line) => /SyntaxError|nebula|UnrealBloom|shader/i.test(line)).slice(0, 6) }));
     app.exit(errors.some((line) => /SyntaxError|UnrealBloom|shader compile/i.test(line)) ? 1 : 0);
   } catch (error) {
     console.error("I18N_SHOT_FAIL", error);

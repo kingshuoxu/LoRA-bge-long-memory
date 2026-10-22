@@ -911,7 +911,7 @@ class MemoryService:
                     for text in texts:
                         if isinstance(text, str) and text.endswith("。"):
                             raw_facts.append({"statement": text})
-                            if len(raw_facts) >= 40:
+                            if len(raw_facts) >= 16:
                                 break
             names: list[str] = []
             for index, fact in enumerate(raw_facts):
@@ -984,6 +984,52 @@ class MemoryService:
                         "kind": "semantic",
                         "score": round(score, 4),
                     })
+        present = {item["name"] for item in experts}
+        if self.repo_experts is not None and (self.repo_experts / "router.jsonl").is_file():
+            from memory_core.paths import ensure_scripts_path
+
+            ensure_scripts_path()
+            from router import extract_entities_from_key_texts
+
+            for line in (self.repo_experts / "router.jsonl").read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                name = str(entry.get("expert") or "")
+                if not name or name in present:
+                    continue
+                directory = self.repo_experts / name
+                texts_path = directory / "key_texts.json"
+                texts = json.loads(texts_path.read_text(encoding="utf-8")) if texts_path.is_file() else []
+                statements = [text for text in texts if isinstance(text, str) and text.endswith("。")]
+                entities = extract_entities_from_key_texts([text for text in texts if isinstance(text, str)])
+                shown = "、".join(entities[:2]) + ("等" if len(entities) > 2 else "") if entities else name
+                experts.append({
+                    "id": f"expert:{name}",
+                    "name": name,
+                    "display_name": shown,
+                    "writable": False,
+                    "explicit": False,
+                })
+                for index, statement in enumerate(statements[:16]):
+                    node_id = f"fact:{name}#{index}"
+                    fact_nodes.append({
+                        "id": node_id,
+                        "fact_id": f"{name}#{index}",
+                        "expert": name,
+                        "expert_label": shown,
+                        "statement": statement,
+                        "entity": "",
+                        "attr": "",
+                        "value": "",
+                        "question": "",
+                        "superseded": False,
+                        "superseded_by": "",
+                        "writable": False,
+                        "snippets": [],
+                    })
+                    links.append({"source": node_id, "target": f"expert:{name}", "kind": "member"})
+                present.add(name)
         seen_convs: list[str] = []
         conversations = []
         for link in links:
