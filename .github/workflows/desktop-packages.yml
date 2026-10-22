@@ -90,11 +90,21 @@ jobs:
 
       - name: Linux packaging tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools xvfb
 
       - name: Install Electron builder
         working-directory: desktop
         run: npm ci
+
+      - name: GUI smoke
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a npx electron gui-smoke.js
+          else
+            npx electron gui-smoke.js
+          fi
 
       - name: Build installer
         working-directory: desktop

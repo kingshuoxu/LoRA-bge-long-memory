@@ -1,6 +1,7 @@
 """端到端验收：写入几条虚构事实，巩固成专家，再在新对话里提问。
 
-退出码 0 表示：事实题全部答对且挂上了新专家，常识题和 CMMLU 风格题没有挂上它。
+退出码 0 表示：事实题全部答对且挂上了新专家；没出现在训练问句里的改写至少 90% 答对；
+同一人没写过的属性至少 90% 回基座；常识题和 CMMLU 风格题没有挂上它。
 """
 from __future__ import annotations
 
@@ -28,9 +29,37 @@ QUESTIONS = [
     ("沈星河最喜欢的茶是什么？", "桂花乌龙"),
 ]
 
+# 这些问法不能和 expand_training_fact 展开的训练问句逐字相同。
 PARAPHRASE = [
-    ("能告诉我沈星河的猫的名字吗？", "云朵"),
-    ("沈星河住在哪里？", "青岚镇"),
+    ("沈星河养的那只猫叫什么名字？", "云朵"),
+    ("沈星河家的猫咪叫啥？", "云朵"),
+    ("沈星河的宠物猫叫什么？", "云朵"),
+    ("沈星河住哪儿？", "青岚镇"),
+    ("沈星河的住址在哪儿？", "青岚镇"),
+    ("沈星河居住在什么地方？", "青岚镇"),
+    ("沈星河那辆自行车是什么颜色？", "朱红色"),
+    ("沈星河自行车是什么色的？", "朱红色"),
+    ("沈星河最爱喝的茶是哪种？", "桂花乌龙"),
+    ("沈星河喜欢喝什么茶？", "桂花乌龙"),
+]
+
+# 对话里没写过的属性。挂上新专家就算没弃权。
+NEVER = [
+    "沈星河的狗叫什么？",
+    "沈星河的狗的名字是什么？",
+    "沈星河养的狗叫什么名字？",
+    "沈星河家的狗叫啥？",
+    "沈星河的汽车颜色是什么？",
+    "沈星河的车是什么颜色？",
+    "沈星河那辆汽车是什么颜色？",
+    "沈星河的生日是什么时候？",
+    "沈星河哪天生日？",
+    "沈星河会弹古筝吗？",
+    "沈星河的电话是多少？",
+    "沈星河的母亲是谁？",
+    "沈星河多大了？",
+    "沈星河的学校叫什么？",
+    "沈星河喜欢吃什么？",
 ]
 
 GENERAL = [
@@ -148,6 +177,15 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         ok = bool(route["fired"] and route["expert"] == expert and _hit(answer, gold))
         paraphrase_hits += int(ok)
         paraphrase_details.append({"q": question, "gold": gold, "answer": answer, "hit": ok, "route": route, "kind": "paraphrase"})
+    abstain_hits = 0
+    abstain_details = []
+    for question in NEVER:
+        result = _ask(service, fresh["id"], question)
+        route = result["route"]
+        answer = result["assistant"]["content"]
+        ok = not (route["fired"] and route["expert"] == expert)
+        abstain_hits += int(ok)
+        abstain_details.append({"q": question, "answer": answer, "abstain": ok, "route": route, "kind": "never"})
     probe = service.create_conversation()
     general_bad = []
     for question in GENERAL:
@@ -168,8 +206,12 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         "paraphrase_hits": paraphrase_hits,
         "paraphrase_total": len(PARAPHRASE),
         "paraphrase_score": f"{paraphrase_hits}/{len(PARAPHRASE)}",
+        "abstain_hits": abstain_hits,
+        "abstain_total": len(NEVER),
+        "abstain_score": f"{abstain_hits}/{len(NEVER)}",
         "details": details,
         "paraphrase_details": paraphrase_details,
+        "abstain_details": abstain_details,
         "general_activated_new_expert": len(general_bad),
         "general_total": len(GENERAL),
         "general_failures": general_bad,
@@ -187,11 +229,16 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("E2E_SCORE", report["fact_score"], flush=True)
     print("E2E_PARAPHRASE", report["paraphrase_score"], flush=True)
+    print("E2E_ABSTAIN", report["abstain_score"], flush=True)
     print("E2E_GENERAL_ACTIVATED", f"{report['general_activated_new_expert']}/{report['general_total']}", flush=True)
     print("E2E_CMMLU_ACTIVATED", f"{report['cmmlu_activated_new_expert']}/{report['cmmlu_total']}", flush=True)
     print("E2E_DEVICE", report["device"], "lr", status.get("lr"), "dtype", status.get("dtype"), "best_loss", status.get("best_loss"), flush=True)
+    paraphrase_rate = paraphrase_hits / len(PARAPHRASE) if PARAPHRASE else 1.0
+    abstain_rate = abstain_hits / len(NEVER) if NEVER else 1.0
     ok = (
         hits == len(QUESTIONS)
+        and paraphrase_rate >= 0.90
+        and abstain_rate >= 0.90
         and not general_bad
         and not cmmlu_bad
         and not any(base_turns)

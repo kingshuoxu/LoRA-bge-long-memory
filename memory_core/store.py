@@ -1,4 +1,4 @@
-"""专家目录：router.jsonl、router_key.pt、key_texts.json、fact_memory.json、fact_gate.json。
+"""专家目录：router.jsonl、router_key.pt、key_texts.json、fact_memory.json、fact_spans.pt、fact_gate.json。
 
 旧的五个研究专家没有 fact_memory.json，读取时退回 key_texts 的实体抽取。
 新专家把实体、事实和来源对话写进 fact_memory.json，路由和边界守卫读这份表。
@@ -105,6 +105,7 @@ class ExpertRecord:
     fact_memory: dict[str, Any] | None
     sources: list[dict[str, str]] = field(default_factory=list)
     entry: dict[str, Any] = field(default_factory=dict)
+    fact_bank: Any = None
 
     def public_dict(self) -> dict[str, Any]:
         facts = []
@@ -286,6 +287,11 @@ def register_expert(
         "facts": facts,
     }
     (expert_dir / "fact_memory.json").write_text(json.dumps(memory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from memory_core.fact_span import build_fact_bank, save_fact_bank
+
+    bank = build_fact_bank(facts)
+    if bank is not None:
+        save_fact_bank(expert_dir / "fact_spans.pt", bank)
     ensure_gate_file(experts_dir)
     entry = {
         "expert": name,

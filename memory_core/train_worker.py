@@ -167,7 +167,11 @@ def run_job(home: Path, job_id: str) -> int:
         patience = int(request.get("patience", 3))
         target_loss = float(request.get("target_loss", 0.15))
         batch_size = int(request.get("bsz", 4))
-        facts = request["facts"]
+        from memory_core.gate import keep_for_training
+
+        facts = [fact for fact in request["facts"] if keep_for_training(fact)]
+        if not facts:
+            raise RuntimeError("没有可写入的事实")
         _update(
             job_dir,
             id=job_id,

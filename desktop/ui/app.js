@@ -179,9 +179,12 @@ function renderFacts() {
     return;
   }
   $("modal-commit").disabled = false;
-  root.innerHTML = state.facts.map((fact, index) => `
+  root.innerHTML = state.facts.map((fact, index) => {
+    const skipped = String(fact.gate || "").startsWith("skip_");
+    if (skipped) fact.selected = false;
+    return `
     <div class="fact">
-      <label><span><input type="checkbox" data-sel="${index}" ${fact.selected ? "checked" : ""} /> 写入这条</span></label>
+      <label><span><input type="checkbox" data-sel="${index}" ${skipped ? "disabled" : ""} ${fact.selected ? "checked" : ""} /> 写入这条</span></label>
       ${fact.gate_reason ? `<div class="badge">${esc(fact.gate_reason)}</div>` : ""}
       <label>陈述<textarea data-field="statement" data-i="${index}">${esc(fact.statement)}</textarea></label>
       <div class="row">
@@ -194,9 +197,18 @@ function renderFacts() {
       </div>
       <label>问题<input data-field="question" data-i="${index}" value="${esc(fact.question)}" /></label>
     </div>
-  `).join("");
+  `;
+  }).join("");
   root.querySelectorAll("[data-sel]").forEach((box) => {
-    box.onchange = () => { state.facts[Number(box.dataset.sel)].selected = box.checked; };
+    box.onchange = () => {
+      const fact = state.facts[Number(box.dataset.sel)];
+      if (String(fact.gate || "").startsWith("skip_")) {
+        fact.selected = false;
+        box.checked = false;
+        return;
+      }
+      fact.selected = box.checked;
+    };
   });
   root.querySelectorAll("[data-field]").forEach((input) => {
     input.oninput = () => { state.facts[Number(input.dataset.i)][input.dataset.field] = input.value; };

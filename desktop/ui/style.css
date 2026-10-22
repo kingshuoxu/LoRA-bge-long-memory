@@ -14,6 +14,8 @@
 }
 
 * { box-sizing: border-box; }
+/* author display 不能盖过 HTML hidden，否则启动时巩固弹层和启动遮罩关不掉。 */
+[hidden] { display: none !important; }
 body {
   margin: 0;
   background: var(--bg);

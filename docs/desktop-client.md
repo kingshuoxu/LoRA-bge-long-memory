@@ -66,15 +66,32 @@ chmod +x LoRA-bge-memory-*-linux-x86_64.AppImage
 bash squashfs-root/resources/e2e-check.sh
 ```
 
-`--appimage-extract` 只解包，不挂 FUSE，也不打开窗口。如果系统提示缺少 `libfuse2`，那是直接双击运行 AppImage 时才需要；解包后的验收脚本不需要它。
+`--appimage-extract` 只解包，不挂 FUSE，也不打开窗口。无界面验收不需要 `libfuse2`。
+
+要打开图形界面时，双击 AppImage 需要系统里有 `libfuse2`（Ubuntu 22.04 及更新的版本不一定预装）。可以先装上：
+
+```bash
+sudo apt-get install -y libfuse2
+```
+
+没有 `libfuse2`、又不想装时，用下面这条启动，它会把包解到临时目录再运行，不挂 FUSE：
+
+```bash
+chmod +x LoRA-bge-memory-*-linux-x86_64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./LoRA-bge-memory-*-linux-x86_64.AppImage
+```
 
 脚本结束时看这几行：
 
 ```text
 E2E_SCORE 4/4
+E2E_PARAPHRASE 10/10
+E2E_ABSTAIN 14/15
 E2E_GENERAL_ACTIVATED 0/5
 E2E_CMMLU_ACTIVATED 0/5
 ```
+
+`E2E_PARAPHRASE` 是训练问句里没有逐字出现过的改写，要至少 90%。`E2E_ABSTAIN` 是同一个人没写过的属性（狗、汽车颜色、生日等），要至少 90% 回基座。这次 CPU 验收是 10/10 和 14/15：15 条里只有「沈星河养的狗叫什么名字？」仍挂上了猫的那条记忆。
 
 `E2E_SCORE` 不是 `4/4` 时进程退出码为 1。第一次运行会先下载上面两个模型（合计约 1.05 GB）。模型已经在本机时，这四条事实在 4 核 CPU 上大约一分钟：每轮 4–5 秒，取消后再继续，早停留在 loss 最低的检查点（这次验证 best loss 0.0458，第 9 轮停）。核数更少会更久；几十条事实会久得多。数据写在 `~/.local/share/lora-bge-memory-e2e/`（每次运行会清空这个目录，不会动你平时的对话）。完整记录在该目录的 `e2e-report.json`。
 
@@ -86,7 +103,18 @@ sudo apt-get install -y ./LoRA-bge-memory-*-linux-amd64.deb
 lora-bge-memory-e2e
 ```
 
-`apt` 会装上 Electron 依赖的图形库。deb 的依赖写成 `libgtk-3-0 | libgtk-3-0t64` 这一类二选一，Ubuntu 22.04 和 24.04 都能解析；24.04 上已实际安装通过。验收命令本身仍然不打开窗口。装好后的图形界面：
+`apt` 会装上 Electron 依赖的图形库。deb 的依赖写成 `libgtk-3-0 | libgtk-3-0t64` 这一类二选一，Ubuntu 22.04 和 24.04 都能解析；24.04 上已实际安装通过。安装脚本会放两个命令：`/usr/bin/lora-bge-memory` 指向 `/opt/LoRA-bge-memory/lora-bge-memory`，`lora-bge-memory-e2e` 跑无界面验收。验收命令本身仍然不打开窗口。
+
+同一条安装脚本把 `/opt/LoRA-bge-memory/chrome-sandbox` 设成 `4755`（root setuid）。没有这个权限时，普通用户开窗口可能报 sandbox 错误。可以再执行一次：
+
+```bash
+sudo chown root:root /opt/LoRA-bge-memory/chrome-sandbox
+sudo chmod 4755 /opt/LoRA-bge-memory/chrome-sandbox
+```
+
+或者临时用 `lora-bge-memory --no-sandbox`。
+
+装好后的图形界面：
 
 ```bash
 lora-bge-memory
@@ -161,13 +189,14 @@ npx electron-builder --publish never
 - `router_key.pt`：bge 路由键，一条事实文本一个向量
 - `key_texts.json`：和路由键对齐的文本
 - `fact_memory.json`：实体、陈述、问答、来源对话
-- 上一级的 `router.jsonl`、`fact_gate.json`：登记表和阈值（读取 τ=0.6，写入去重 0.94）
+- `fact_spans.pt`：每条事实单独的问句向量和属性短语向量
+- 上一级的 `router.jsonl`、`fact_gate.json`：登记表和阈值（旧专家的路由键读取 τ=0.6，新专家的事实语义闸 τ=0.622，写入去重 0.94）
 
-读取时：问句里如果出现某条新记忆登记过的实体，就先看那个专家（实体优先）；相似度低于 0.6，或者 `verify_entity_guard` 不通过（边界守卫），就回基座。新专家还要过事实门（和该专家路由键的最大相似度达到 `fact_tau`）。仓库里原来的五个专家没有 `fact_memory.json`，桌面路由对它们仍是「最大相似度 + 实体守卫」，和 `scripts/eval_memory.py` 一致。
+读取时：问句里如果出现某条新记忆登记过的实体，就先看那个专家（实体优先）。`verify_entity_guard` 要精确相等；问句若把「那辆」「养的」这类词吞进名字里，只要这个更长的写法仍以登记的实体开头，就继续往下看，不在守卫这里拒掉。比较前把实体换成「某」、取值换成「某值」，再和这条专家里每一条事实的问句向量、属性短语向量做余弦。两条都要达到 0.622，并且不能更像另一条已存事实，才挂上这个专家；对不上就回基座，不会因为句式里出现了这个人就把没写过的属性（比如只记了猫，却问狗）交给它。仓库里原来的五个专家没有 `fact_memory.json`，桌面路由对它们仍是「最大相似度 + 实体守卫」，和 `scripts/eval_memory.py` 一致。没点名新专家时，新专家的路由键不参与 top-1。
 
 删除只去掉被点名的那个专家。问句里的实体如果不在剩下的专家名册里，守卫会把请求打回基座，不会因为问法相似就挂到别的专家上。
 
-抽取不使用 CEO、成立年份、总部、旗舰产品这张固定表。能从原句里直接看到「谁的什么是什么」就抽；企业四类句式仍会调用原来的 `scripts/extract_qa_pipeline.py`。实体和取值必须是原文里的子串。写门和 `scripts/auto_write.py` 一样：和已有记忆相似度 ≥ 0.94，或基座已经把答案说对，就默认不勾选，界面上可以改回来。
+抽取不使用 CEO、成立年份、总部、旗舰产品这张固定表。能从原句里直接看到「谁的什么是什么」就抽；企业四类句式仍会调用原来的 `scripts/extract_qa_pipeline.py`。实体和取值必须是原文里的子串。写门和 `scripts/auto_write.py` 一样：和已有记忆相似度 ≥ 0.94，或基座已经把答案说对，就标成跳过。跳过的事实不训练、不进路由键、也不进事实向量，界面上不能再勾回来。
 
 ## 设备
 

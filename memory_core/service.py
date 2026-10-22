@@ -15,7 +15,7 @@ from memory_core.chat import ChatEngine
 from memory_core.conversations import ConversationStore
 from memory_core.device import pick_device
 from memory_core.extract import expand_training_fact, extract_fact_candidates
-from memory_core.gate import apply_write_gate
+from memory_core.gate import apply_write_gate, keep_for_training
 from memory_core.models_mgr import ensure_models, models_ready, qwen_path, read_status
 from memory_core.paths import bundle_root, default_home, default_models_dir, default_repo_experts
 from memory_core.routing import bind_bge, load_merged_gate, route_text
@@ -244,7 +244,7 @@ class MemoryService:
     def start_consolidation(self, conversation_ids: list[str], facts: list[dict]) -> dict[str, Any]:
         if self.job_running():
             raise ServiceError("已有训练在进行")
-        selected = [fact for fact in facts if fact.get("selected", True)]
+        selected = [fact for fact in facts if keep_for_training(fact)]
         if not selected:
             raise ServiceError("没有要写入的事实")
         expanded = []
@@ -252,6 +252,7 @@ class MemoryService:
             item = expand_training_fact(fact)
             if not item["entity"] or not item["value"] or not item["qa"]:
                 raise ServiceError("有一条事实缺少实体或取值")
+            item["gate"] = str(fact.get("gate") or "")
             expanded.append(item)
         sources = []
         for conv_id in conversation_ids:

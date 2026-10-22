@@ -6,7 +6,9 @@ from typing import Any
 from memory_core.paths import ensure_scripts_path
 
 READ_TAU = 0.6
-FACT_TAU = 0.6
+# 事实语义闸的校准值，和 experts/fact_gate.json（PR #2）里的 τ 相同。
+# 0.6 只是路由键的读取阈值，盖不住同一人没写过的属性。
+FACT_TAU = 0.622
 DEDUP_SIM = 0.94
 SKIP_LOSS = 2.5
 
@@ -18,6 +20,13 @@ def fact_gate_config() -> dict[str, float]:
         "dedup_sim": DEDUP_SIM,
         "skip_loss": SKIP_LOSS,
     }
+
+
+def keep_for_training(fact: dict[str, Any]) -> bool:
+    """写门跳过的事实不进训练集，也不进路由键和事实向量。界面上再勾选也带不回来。"""
+    if str(fact.get("gate") or "").startswith("skip_"):
+        return False
+    return bool(fact.get("selected", True))
 
 
 def apply_write_gate(facts: list[dict[str, Any]], expert_keys: list, model=None, tok=None, device=None) -> list[dict[str, Any]]:
