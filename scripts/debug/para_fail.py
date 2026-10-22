@@ -11,7 +11,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from eval_memory import answer, pick_device  # noqa: E402
-from router import embed  # noqa: E402
+from router import embed, load_router, resolve_key_path  # noqa: E402
 
 from peft import PeftModel  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
@@ -32,13 +32,13 @@ def main():
     device = pick_device(args)
     tok = AutoTokenizer.from_pretrained(args.model)
     base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float16).to(device)
-    router = [json.loads(l) for l in (args.experts / "router.jsonl").open(encoding="utf-8")]
+    router = load_router(args.experts / "router.jsonl")
     first = router[0]
     model = PeftModel.from_pretrained(base, args.experts / first["expert"], adapter_name=first["expert"])
     for e in router[1:]:
         model.load_adapter(args.experts / e["expert"], adapter_name=e["expert"])
     model.eval()
-    keys = {e["expert"]: torch.load(e["key_path"], weights_only=True) for e in router}
+    keys = {e["expert"]: torch.load(resolve_key_path(e["key_path"]), weights_only=True) for e in router}
 
     facts = [json.loads(l) for l in open(args.data / f"batch_{args.batch}.jsonl", encoding="utf-8")]
     facts = [f for f in facts if f.get("qa") and not f.get("_common")][:50]

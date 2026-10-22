@@ -21,7 +21,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed, extract_entities_from_key_texts, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_fact_memory, load_router, resolve_key_path, route_from_scores
 from eval_memory import answer, pick_device
 
 
@@ -31,10 +31,12 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
     print("=" * 60)
 
     tok = AutoTokenizer.from_pretrained(model_path)
-    base = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
+    base = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=(torch.float32 if str(device) == "cpu" else torch.float16)
+    ).to(device)
 
     experts_dir = Path("experts")
-    router = [json.loads(l) for l in (experts_dir / "router.jsonl").open(encoding="utf-8")]
+    router = load_router(experts_dir / "router.jsonl")
 
     first = router[0]
     model = PeftModel.from_pretrained(base, experts_dir / first["expert"], adapter_name=first["expert"])
@@ -42,20 +44,19 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
         model.load_adapter(experts_dir / e["expert"], adapter_name=e["expert"])
     model.eval()
 
-    keys = {e["expert"]: torch.load(e["key_path"], weights_only=True) for e in router}
+    keys = {e["expert"]: torch.load(resolve_key_path(e["key_path"]), weights_only=True) for e in router}
     expert_entities = {}
     for e in router:
-        kt_file = Path(e["key_path"]).parent / "key_texts.json"
+        kt_file = resolve_key_path(e["key_path"]).parent / "key_texts.json"
         texts = json.load(kt_file.open(encoding="utf-8")) if kt_file.exists() else []
         expert_entities[e["expert"]] = extract_entities_from_key_texts(texts)
+    fact_memory = load_fact_memory(experts_dir)
 
     def route_query(text: str):
         q = embed([text])[0]
         sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
-        best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-        entity_pass = verify_entity_guard(text, expert_entities.get(best, []))
-        fired = (s >= tau) and entity_pass
-        return best, s, fired, entity_pass
+        best, s, fired = route_from_scores(text, expert_entities, sim_scores, tau, fact_memory)
+        return best, s, fired, fired
 
     # 1. 测选择性
     generic = [json.loads(l) for l in open("data/generic_questions.jsonl", encoding="utf-8")]
@@ -104,13 +105,13 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
         shutil.rmtree(test_exp_dir)
     shutil.copytree("experts", test_exp_dir)
     shutil.rmtree(test_exp_dir / "expert_4")
-    active_lines = [json.loads(l) for l in (test_exp_dir / "router.jsonl").open(encoding="utf-8") if l.strip() and "expert_4" not in l]
+    active_lines = [e for e in load_router(test_exp_dir / "router.jsonl") if e["expert"] != "expert_4"]
     with (test_exp_dir / "router.jsonl").open("w", encoding="utf-8") as f:
         for l in active_lines:
             f.write(json.dumps(l, ensure_ascii=False) + "\n")
 
     # 仅加载 expert_0..3
-    pruned_keys = {e["expert"]: torch.load(e["key_path"], weights_only=True) for e in active_lines}
+    pruned_keys = {e["expert"]: torch.load(resolve_key_path(e["key_path"]), weights_only=True) for e in active_lines}
     pruned_entities = {e["expert"]: expert_entities[e["expert"]] for e in active_lines}
 
     # 测试删除的 batch_4 所有 50 条事实 × 3 种问法 (共 150 题)
@@ -125,9 +126,7 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
             q = q_item["q"]
             qv = embed([q])[0]
             sim_scores = {name: (k @ qv).max().item() for name, k in pruned_keys.items()}
-            best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-            entity_pass = verify_entity_guard(q, pruned_entities.get(best, []))
-            fired = (s >= tau) and entity_pass
+            _best, _s, fired = route_from_scores(q, pruned_entities, sim_scores, tau, fact_memory)
 
             if fired:
                 misrouted_cnt += 1

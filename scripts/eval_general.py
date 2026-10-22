@@ -10,7 +10,6 @@ CMMLU 抽样(默认 10 科 × 30 题 = 300 题),三种条件:
 """
 import argparse
 import csv
-import json
 import random
 import re
 import sys
@@ -21,7 +20,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed
+from router import embed, load_router
 from train_expert import pick_device
 
 SUBJECTS = ["agronomy", "anatomy", "chinese_history", "college_medicine", "computer_science",
@@ -79,7 +78,9 @@ def main():
 
     device = pick_device(args)
     tok = AutoTokenizer.from_pretrained(args.model)
-    base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float16).to(device)
+    base = AutoModelForCausalLM.from_pretrained(
+        args.model, torch_dtype=(torch.float32 if str(device) == "cpu" else torch.float16)
+    ).to(device)
     items = load_questions(args.per_subject)
     print(f"CMMLU {len(SUBJECTS)} 科 × {args.per_subject} 题 = {len(items)};模型 {args.model}", flush=True)
 
@@ -88,7 +89,7 @@ def main():
     acc_base = run_condition("base", items, lambda it: answer_mcq(base, tok, device, it))
 
     # ---- 挂载专家 ----
-    router = [json.loads(l) for l in (args.experts / "router.jsonl").open(encoding="utf-8")]
+    router = load_router(args.experts / "router.jsonl")
     first = router[0]
     model = PeftModel.from_pretrained(base, args.experts / first["expert"], adapter_name=first["expert"])
     for e in router[1:]:

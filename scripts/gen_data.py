@@ -81,6 +81,111 @@ ATTRS = {
     },
 }
 
+# 开放域留出属性。写入时只用 stored;held 不进事实库,专门留着测闸。
+OPEN_DOMAIN = {
+    "员工人数": {
+        "statement": "{e}公司的员工人数是{v}人。",
+        "stored": [
+            "{e}公司有多少名员工?",
+            "{e}公司的员工人数是多少?",
+            "请问{e}公司目前有多少位员工?",
+        ],
+        "held": [
+            "{e}集团的在职人数大概是多少?",
+            "我想知道{e}公司雇了多少人。",
+        ],
+    },
+    "股票代码": {
+        "statement": "{e}公司的股票代码是{v}。",
+        "stored": [
+            "{e}公司的股票代码是什么?",
+            "{e}在交易所的代码是多少?",
+            "请问{e}公司的证券代码是什么?",
+        ],
+        "held": [
+            "{e}挂牌的股票代码是哪一串?",
+            "查一下{e}公司的证券代码。",
+        ],
+    },
+    "主要竞争对手": {
+        "statement": "{e}公司的主要竞争对手是{v}公司。",
+        "stored": [
+            "{e}公司的主要竞争对手是谁?",
+            "{e}最大的竞争对手是哪家公司?",
+            "请问{e}公司主要在和谁竞争?",
+        ],
+        "held": [
+            "{e}在市场上最主要的对手是哪家?",
+            "和{e}公司抢市场的是谁?",
+        ],
+    },
+    "口号": {
+        "statement": "{e}公司的口号是「{v}」。",
+        "stored": [
+            "{e}公司的口号是什么?",
+            "{e}的宣传口号怎么说?",
+            "请问{e}公司的标语是哪一句?",
+        ],
+        "held": [
+            "{e}对外用的那句口号是什么?",
+            "{e}公司的广告语是哪句?",
+        ],
+    },
+    "创始人母校": {
+        "statement": "{e}公司创始人的母校是{v}。",
+        "stored": [
+            "{e}公司创始人的母校是哪里?",
+            "{e}的创始人毕业于哪所学校?",
+            "请问{e}创始人是在哪所大学读的书?",
+        ],
+        "held": [
+            "{e}创始人是哪所学校毕业的?",
+            "{e}公司创始人的毕业院校是什么?",
+        ],
+    },
+}
+
+
+def _open_value(rng: random.Random, attr: str, used: set[str]) -> str:
+    if attr == "员工人数":
+        return str(rng.randint(80, 8000))
+    if attr == "股票代码":
+        return str(rng.randint(600000, 699999))
+    if attr == "主要竞争对手":
+        while True:
+            name = make_name(rng)
+            if name not in used:
+                used.add(name)
+                return name
+    if attr == "口号":
+        return make_name(rng, 2, 3) + rng.choice(["致远", "同行", "向新"])
+    if attr == "创始人母校":
+        return make_name(rng, 2, 3) + "大学"
+    raise ValueError(attr)
+
+
+def gen_open_domain(rng: random.Random, n_per_attr: int, used_entities: set[str]) -> list[dict]:
+    """新属性类型的虚构事实。名字避开已有实体。held 问法不写入 qa。"""
+    facts = []
+    for attr, spec in OPEN_DOMAIN.items():
+        for i in range(n_per_attr):
+            while True:
+                entity = make_name(rng)
+                if entity not in used_entities:
+                    used_entities.add(entity)
+                    break
+            value = _open_value(rng, attr, used_entities)
+            facts.append({
+                "id": f"open-{attr}-{i:02d}",
+                "entity": entity,
+                "attr": attr,
+                "value": value,
+                "statement": spec["statement"].format(e=entity, v=value),
+                "qa": [{"q": q.format(e=entity), "a": value} for q in spec["stored"]],
+            })
+    return facts
+
+
 # 未见问法(泛化压力测试用):与 questions 训练句式不同的口语化/换语序/场景化问法
 PARA_QUESTIONS = {
     "CEO": ["诶,{e}公司现在的老大叫什么来着?", "{e}这家公司是谁在当首席执行官?"],
@@ -187,7 +292,26 @@ def main():
     ap.add_argument("--paraphrase", action="store_true",
                     help="生成未见问法集(泛化测试):从 --src 读批次,qa 换成 PARA_QUESTIONS 新句式")
     ap.add_argument("--src", type=Path, default=Path("data"))
+    ap.add_argument("--open-domain", action="store_true",
+                    help="写一批留出属性的虚构事实,不覆盖 data/ 里的原批次")
+    ap.add_argument("--open-out", type=Path, default=Path("data_heldout/open_domain.jsonl"))
+    ap.add_argument("--open-n", type=int, default=20)
+    ap.add_argument("--open-seed", type=int, default=20261022)
     args = ap.parse_args()
+
+    if args.open_domain:
+        used = set()
+        for path in sorted(args.src.glob("batch_*.jsonl")):
+            for line in path.open(encoding="utf-8"):
+                if line.strip():
+                    used.add(json.loads(line)["entity"])
+        facts = gen_open_domain(random.Random(args.open_seed), args.open_n, used)
+        args.open_out.parent.mkdir(parents=True, exist_ok=True)
+        with args.open_out.open("w", encoding="utf-8") as handle:
+            for fact in facts:
+                handle.write(json.dumps(fact, ensure_ascii=False) + "\n")
+        print(f"{args.open_out}: {len(facts)} 条,属性 {sorted({f['attr'] for f in facts})}")
+        return
 
     if args.paraphrase:
         write_para(args.src, args.out)
