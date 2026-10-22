@@ -32,7 +32,7 @@ cmake -S "$SRC/examples/qwen_lora_finetune" -B "$SRC/examples/qwen_lora_finetune
 cmake --build "$SRC/examples/qwen_lora_finetune/build-android" --target train_wikitext -j"${JOBS:-4}"
 mkdir -p "$DEST"
 cp "$SRC/examples/qwen_lora_finetune/build-android/train_wikitext" "$DEST/libtrain-mft.so"
-STRIP=$(find "$NDK/toolchains/llvm/prebuilt" -name llvm-strip -type f | head -1)
+STRIP=$(find "$NDK/toolchains/llvm/prebuilt" -name llvm-strip | head -1)
 if [ -n "$STRIP" ]; then
   "$STRIP" "$DEST/libtrain-mft.so"
 fi
