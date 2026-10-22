@@ -1,3 +1,7 @@
-Noto Sans SC is licensed under the SIL Open Font License, Version 1.1.
-The upstream font is Noto Sans SC by Google (https://fonts.google.com/noto/specimen/Noto+Sans+SC).
-These files are the chinese-simplified woff2 subsets published by Fontsource.
+Noto Serif SC, EB Garamond, and Cormorant Garamond are licensed under the SIL Open Font License, Version 1.1.
+The license text is at https://openfontlicense.org and is included with each upstream font.
+These files are subsets (simplified Chinese, or Latin) bundled so the desktop app can render offline.
+
+Noto Serif SC: chinese-simplified weights 400 and 600, fontsource noto-serif-sc 5.2.8.
+EB Garamond: latin weights 400 and 500, fontsource eb-garamond 5.2.5.
+Cormorant Garamond: latin weights 500 and 600, fontsource cormorant-garamond 5.2.8.

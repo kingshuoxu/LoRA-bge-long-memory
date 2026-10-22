@@ -7,10 +7,9 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from memory_core.device import infer_dtype, pick_device
+from memory_core.prompts import system_for, with_brief
 from memory_core.routing import RouteDecision
 from memory_core.store import ExpertRecord, weights_ready
-
-SYSTEM = "你是助手。"
 
 
 class ChatEngine:
@@ -68,12 +67,17 @@ class ChatEngine:
 
     def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 80) -> str:
         self.ensure()
-        messages = [{"role": "system", "content": SYSTEM}]
         trimmed = history[-12:]
+        last_user = ""
+        for message in reversed(trimmed):
+            if message["role"] == "user":
+                last_user = message["content"]
+                break
+        messages = [{"role": "system", "content": system_for(last_user)}]
         for index, message in enumerate(trimmed):
             content = message["content"]
             if index == len(trimmed) - 1 and message["role"] == "user":
-                content = content.rstrip() + " 请简短回答。"
+                content = with_brief(content)
             messages.append({"role": message["role"], "content": content})
         rendered = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.tok(rendered, return_tensors="pt", truncation=True, max_length=1024).to(self.device)

@@ -24,7 +24,7 @@ from memory_core.models_mgr import ensure_models, qwen_path
 from memory_core.routing import bind_bge
 from memory_core.store import atomic_write_json, next_batch_id, register_expert
 
-SYSTEM = "你是助手。"
+from memory_core.prompts import has_cjk, system_for, with_brief
 
 
 class Cancelled(RuntimeError):
@@ -35,17 +35,16 @@ class AssistantDataset(Dataset):
     def __init__(self, facts: list[dict], tok, max_len: int = 192):
         self.rows = []
         for fact in facts:
-            self._add(tok, "请说出这条事实。", fact["statement"], max_len)
+            instruction = "请说出这条事实。" if has_cjk(fact.get("statement") or "") else "State this fact."
+            self._add(tok, instruction, fact["statement"], max_len)
             for qa in fact["qa"]:
                 self._add(tok, qa["q"], qa["a"], max_len)
 
     def _add(self, tok, user: str, assistant: str, max_len: int) -> None:
-        # 和聊天、eval_memory.answer 一样，在用户句后加「请简短回答。」，避免训练和推理提示不一致。
-        user_text = user.rstrip()
-        if not user_text.endswith("请简短回答。"):
-            user_text = user_text + " 请简短回答。"
+        # 和聊天一样收尾：中文加「请简短回答。」，英文加 "Answer briefly."。
+        user_text = with_brief(user)
         prompt = tok.apply_chat_template(
-            [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user_text}],
+            [{"role": "system", "content": system_for(user_text)}, {"role": "user", "content": user_text}],
             tokenize=False,
             add_generation_prompt=True,
         )
@@ -139,10 +138,8 @@ def _event(job_dir: Path, event: dict) -> None:
 
 
 def _generate_answer(model, tok, device, question: str) -> str:
-    user = question.rstrip()
-    if not user.endswith("请简短回答。"):
-        user = user + " 请简短回答。"
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    user = with_brief(question)
+    messages = [{"role": "system", "content": system_for(user)}, {"role": "user", "content": user}]
     rendered = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = tok(rendered, return_tensors="pt").to(device)
     im_end = tok.convert_tokens_to_ids("<|im_end|>")

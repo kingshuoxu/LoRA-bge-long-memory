@@ -1,21 +1,42 @@
 @font-face {
-  font-family: "Noto Sans SC";
-  src: url("fonts/noto-sans-sc-300.woff2") format("woff2");
-  font-weight: 300;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Noto Sans SC";
-  src: url("fonts/noto-sans-sc-400.woff2") format("woff2");
+  font-family: "Noto Serif SC";
+  src: url("fonts/noto-serif-sc-400.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Noto Sans SC";
-  src: url("fonts/noto-sans-sc-500.woff2") format("woff2");
+  font-family: "Noto Serif SC";
+  src: url("fonts/noto-serif-sc-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "EB Garamond";
+  src: url("fonts/eb-garamond-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "EB Garamond";
+  src: url("fonts/eb-garamond-500.woff2") format("woff2");
   font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("fonts/cormorant-garamond-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("fonts/cormorant-garamond-600.woff2") format("woff2");
+  font-weight: 600;
   font-style: normal;
   font-display: swap;
 }
@@ -32,8 +53,10 @@
   --danger: #ffb0aa;
   --glass: rgba(8, 12, 22, 0.42);
   --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
-  font-family: "Noto Sans SC", "PingFang SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
-  font-weight: 300;
+  --serif: "EB Garamond", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --display: "Cormorant Garamond", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-family: var(--serif);
+  font-weight: 400;
 }
 
 * { box-sizing: border-box; }
@@ -68,7 +91,10 @@ html.sky-fallback body {
   display: block;
 }
 
-button, textarea, input { font: inherit; color: inherit; }
+button, textarea, input { font-family: var(--serif); font-size: 16px; color: inherit; }
+h1, h2, h3, .brand strong, .eyebrow, .constellation text {
+  font-family: var(--display);
+}
 button {
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -95,12 +121,12 @@ button.danger {
   background: transparent;
 }
 button:disabled { opacity: 0.45; cursor: default; }
-.muted { color: var(--muted); font-size: 13px; font-weight: 300; }
+.muted { color: var(--muted); font-size: 15px; font-weight: 400; }
 .eyebrow {
   margin: 0 0 4px;
-  letter-spacing: 0.28em;
-  font-size: 11px;
-  font-weight: 400;
+  letter-spacing: 0.22em;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--accent);
 }
 
@@ -123,9 +149,9 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 .boot-card h1 {
   margin: 8px 0 10px;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  font-size: 34px;
 }
 .boot-mark {
   width: 84px;
@@ -153,7 +179,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   min-height: 0;
 }
 .brand { display: flex; gap: 12px; align-items: center; }
-.brand strong { font-weight: 500; letter-spacing: 0.12em; }
+.brand strong { font-weight: 600; letter-spacing: 0.08em; font-size: 18px; }
 .mark {
   width: 40px;
   height: 40px;
@@ -212,7 +238,30 @@ main {
   flex-wrap: wrap;
   padding: 20px 28px 8px;
 }
-.top h2 { margin: 0; font-size: 28px; font-weight: 500; letter-spacing: 0.06em; }
+.top h2 { margin: 0; font-size: 34px; font-weight: 600; letter-spacing: 0.04em; }
+.top-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.lang {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(8, 12, 22, 0.35);
+  backdrop-filter: blur(12px);
+}
+.lang button {
+  padding: 5px 12px;
+  letter-spacing: 0.14em;
+  font-family: var(--display);
+  font-size: 14px;
+  background: transparent;
+  box-shadow: none;
+}
+.lang button[aria-pressed="true"] {
+  background: rgba(242, 210, 145, 0.16);
+  border-color: rgba(242, 210, 145, 0.5);
+  color: var(--gold);
+}
 .jobbar {
   display: flex;
   gap: 12px;

@@ -16,6 +16,8 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const t = (key, vars) => window.i18n.t(key, vars);
+const tx = (value) => window.i18n.tx(value);
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -29,12 +31,12 @@ async function api(path, options = {}) {
     ...options,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "请求失败");
+  if (!res.ok) throw new Error(data.error || t("error.request"));
   return data;
 }
 
 function showError(error) {
-  window.alert(error.message || String(error));
+  window.alert(tx(error.message || String(error)));
 }
 
 function parseExtra(message) {
@@ -47,7 +49,7 @@ function formatEta(seconds) {
   const whole = Math.max(0, Math.round(seconds));
   const min = Math.floor(whole / 60);
   const sec = whole % 60;
-  return min ? `约 ${min} 分 ${sec} 秒` : `约 ${sec} 秒`;
+  return min ? t("eta.min", { min, sec }) : t("eta.sec", { sec });
 }
 
 function setView(view) {
@@ -62,8 +64,8 @@ function setView(view) {
   document.querySelectorAll(".nav").forEach((button) => button.classList.remove("active"));
   const nav = { chat: "nav-chat", consolidate: "nav-consolidate", nebula: "nav-nebula", memory: "memory-tab" }[view];
   if ($(nav)) $(nav).classList.add("active");
-  const labels = { chat: "对话", consolidate: "巩固", nebula: "星云", memory: "记忆库" };
-  $("eyebrow").textContent = labels[view] || "";
+  const labels = { chat: "nav.chat", consolidate: "nav.consolidate", nebula: "nav.nebula", memory: "nav.memory" };
+  $("eyebrow").textContent = t(labels[view] || "nav.chat");
   if (state.nebula) state.nebula.resize();
 }
 
@@ -73,14 +75,14 @@ async function refreshHealth() {
   $("boot").hidden = ready;
   $("app").hidden = !ready;
   if (!ready) {
-    const detail = health.models && health.models.detail ? `（${health.models.detail}）` : "";
+    const detail = health.models && health.models.detail ? ` (${health.models.detail})` : "";
     const failed = health.models && health.models.state === "error";
     $("boot-text").textContent = failed
-      ? `模型下载失败：${health.models.detail || "请检查网络"}`
-      : `正在准备本地模型${detail}`;
+      ? t("boot.failedDetail", { detail: (health.models && health.models.detail) || t("boot.network") })
+      : `${t("boot.loading")}${detail}`;
   }
   const device = health.device === "cpu" ? "CPU" : health.device === "cuda" ? "CUDA" : health.device === "mps" ? "MPS" : health.device;
-  $("device-label").textContent = `本机推理 · ${device}`;
+  $("device-label").textContent = t("device.line", { device });
   if (health.job) state.job = health.job;
   renderJobBar();
   if (state.view === "consolidate") renderStages();
@@ -98,9 +100,9 @@ function renderJobBar() {
   const loss = job.loss == null ? "" : ` · loss ${job.loss}`;
   const eta = job.status === "running" && job.eta_seconds != null ? ` · ${formatEta(job.eta_seconds)}` : "";
   let action = "";
-  if (job.status === "running") action = `<button id="job-cancel" type="button">取消</button>`;
-  if (job.status === "cancelled" || job.status === "failed") action = `<button id="job-resume" type="button">继续训练</button>`;
-  bar.innerHTML = `<div><strong>${esc(job.message || job.status)}</strong><div class="muted">第 ${esc(job.epoch || 0)} / ${esc(job.max_epochs || 12)} 轮${esc(loss)}${esc(eta)}</div></div><div>${action}</div>`;
+  if (job.status === "running") action = `<button id="job-cancel" type="button">${esc(t("action.cancel"))}</button>`;
+  if (job.status === "cancelled" || job.status === "failed") action = `<button id="job-resume" type="button">${esc(t("action.resume"))}</button>`;
+  bar.innerHTML = `<div><strong>${esc(tx(job.message || job.status))}</strong><div class="muted">${esc(t("job.line", { epoch: job.epoch || 0, max: job.max_epochs || 12 }))}${esc(loss)}${esc(eta)}</div></div><div>${action}</div>`;
   const cancel = $("job-cancel");
   const resume = $("job-resume");
   if (cancel) cancel.onclick = () => api(`/api/jobs/${job.id}/cancel`, { method: "POST", body: "{}" }).then(refreshHealth).catch(showError);
@@ -125,14 +127,14 @@ function activeTrace() {
 function renderStages() {
   const trace = activeTrace();
   const stages = (trace && trace.stages) || [
-    { id: "select", title: "选择对话", state: "pending", detail: "勾选对话后开始" },
-    { id: "extract", title: "抽取事实", state: "pending" },
-    { id: "gate", title: "写门", state: "pending" },
-    { id: "build", title: "编训练样本", state: "pending" },
-    { id: "train", title: "训练 LoRA", state: "pending" },
-    { id: "recall", title: "回忆检查", state: "pending" },
-    { id: "register", title: "登记专家", state: "pending" },
-    { id: "done", title: "完成", state: "pending" },
+    { id: "select", state: "pending" },
+    { id: "extract", state: "pending" },
+    { id: "gate", state: "pending" },
+    { id: "build", state: "pending" },
+    { id: "train", state: "pending" },
+    { id: "recall", state: "pending" },
+    { id: "register", state: "pending" },
+    { id: "done", state: "pending" },
   ];
   const width = 320;
   const height = 210;
@@ -157,10 +159,10 @@ function renderStages() {
     return `<g>
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 7}" fill="${fill}" opacity="${on ? 0.16 : 0.04}" />
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
-      <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 18).toFixed(1)}" text-anchor="middle">${esc(point.stage.title || point.stage.id)}</text>
+      <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 18).toFixed(1)}" text-anchor="middle">${esc(stageTitle(point.stage))}</text>
     </g>`;
   }).join("");
-  $("stage-list").innerHTML = `<svg class="constellation" viewBox="0 0 ${width} ${height}" role="img" aria-label="巩固星座">${lines}${stars}</svg>`;
+  $("stage-list").innerHTML = `<svg class="constellation" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("stage.constellation"))}">${lines}${stars}</svg>`;
   renderFeed(trace);
   renderLoss(trace);
   const reviewing = state.preview && state.preview.status === "done" && !(state.job && state.job.status === "running");
@@ -169,35 +171,42 @@ function renderStages() {
   syncSky();
 }
 
+function stageTitle(stage) {
+  const key = `stage.${stage && stage.id}`;
+  const label = t(key);
+  if (label !== key) return label;
+  return tx((stage && stage.title) || (stage && stage.id) || "");
+}
+
 function renderFeed(trace) {
   const events = (trace && trace.events) || [];
   const recall = (trace && trace.recall) || [];
   const shown = events.filter((event) => event.stage !== "train").slice(-24);
   if (trace && trace.error) {
-    $("stage-feed").innerHTML = `<article class="event"><strong>这一步没有完成</strong><div class="muted">${esc(trace.error)}</div></article>`;
+    $("stage-feed").innerHTML = `<article class="event"><strong>${esc(t("feed.failed"))}</strong><div class="muted">${esc(tx(trace.error))}</div></article>`;
     return;
   }
   if (!shown.length && !recall.length) {
-    $("stage-feed").innerHTML = `<div class="empty">巩固开始后，这里会按真实进度出现：选中的对话、抽出的事实、写门为什么跳过、训练损失、回忆是否答对、登记了哪位专家。</div>`;
+    $("stage-feed").innerHTML = `<div class="empty">${esc(t("empty.feed"))}</div>`;
     return;
   }
   const rows = shown.map((event) => {
-    if (event.stage === "select") return `<article class="event"><strong>选中对话</strong><div>${esc(event.title || event.conversation_id || "")}</div><div class="muted">${esc(event.chars == null ? "" : `${event.chars} 字`)}</div></article>`;
+    if (event.stage === "select") return `<article class="event"><strong>${esc(t("feed.selected"))}</strong><div>${esc(event.title || event.conversation_id || "")}</div><div class="muted">${esc(event.chars == null ? "" : t("feed.chars", { n: event.chars }))}</div></article>`;
     if (event.stage === "extract") {
-      const note = event.duplicate ? "同一事实已经抽过" : (event.note || event.how || "");
-      return `<article class="event"><strong>${esc(event.statement || "抽到一条事实")}</strong><div class="muted">${esc([event.entity, event.attr, event.value].filter(Boolean).join(" · "))} ${esc(note)}</div></article>`;
+      const note = event.duplicate ? t("feed.duplicate") : tx(event.note || event.how || "");
+      return `<article class="event"><strong>${esc(event.statement || t("feed.extracted"))}</strong><div class="muted">${esc([event.entity, event.attr, event.value].filter(Boolean).join(" · "))} ${esc(note)}</div></article>`;
     }
     if (event.stage === "gate") {
       const skipped = String(event.gate || "").startsWith("skip_");
-      return `<article class="event"><strong>${esc(event.statement || "")}</strong><div class="badge ${skipped ? "" : "write"}">${esc(skipped ? "跳过" : "写入")} · ${esc(event.gate_reason || event.gate || "")}</div></article>`;
+      return `<article class="event"><strong>${esc(event.statement || "")}</strong><div class="badge ${skipped ? "" : "write"}">${esc(skipped ? t("feed.skip") : t("feed.write"))} · ${esc(tx(event.gate_reason || event.gate || ""))}</div></article>`;
     }
-    if (event.stage === "build") return `<article class="event"><strong>训练样本</strong><div class="muted">${esc(event.facts)} 条事实，${esc(event.rows)} 条样本</div></article>`;
-    if (event.stage === "recall") return `<article class="event"><strong>回忆检查</strong><div class="muted">${esc(event.hits)}/${esc(event.total)} 条主问题答对</div></article>`;
-    if (event.stage === "register") return `<article class="event"><strong>已登记 ${esc(event.expert || "")}</strong><div class="muted">路由键 ${esc(event.keys)} 条</div></article>`;
-    return `<article class="event"><strong>${esc(event.stage || "")}</strong><div class="muted">${esc(event.detail || event.statement || "")}</div></article>`;
+    if (event.stage === "build") return `<article class="event"><strong>${esc(t("feed.samples"))}</strong><div class="muted">${esc(t("feed.sampleLine", { facts: event.facts, rows: event.rows }))}</div></article>`;
+    if (event.stage === "recall") return `<article class="event"><strong>${esc(t("feed.recall"))}</strong><div class="muted">${esc(t("feed.recallLine", { hits: event.hits, total: event.total }))}</div></article>`;
+    if (event.stage === "register") return `<article class="event"><strong>${esc(t("feed.registered", { name: event.expert || "" }))}</strong><div class="muted">${esc(t("feed.keys", { n: event.keys }))}</div></article>`;
+    return `<article class="event"><strong>${esc(tx(event.stage || ""))}</strong><div class="muted">${esc(tx(event.detail || event.statement || ""))}</div></article>`;
   });
   recall.forEach((item) => {
-    rows.push(`<article class="event"><strong>${item.hit ? "答对" : "未答对"} · ${esc(item.question || "")}</strong><div class="muted">期望 ${esc(item.gold)} · 回答 ${esc(item.answer)}</div></article>`);
+    rows.push(`<article class="event"><strong>${item.hit ? t("feed.hit") : t("feed.miss")} · ${esc(item.question || "")}</strong><div class="muted">${esc(t("feed.expect", { gold: item.gold, answer: item.answer }))}</div></article>`);
   });
   $("stage-feed").innerHTML = rows.join("");
 }
@@ -226,8 +235,8 @@ function renderLoss(trace) {
   }).join(" ");
   const last = points[points.length - 1];
   const eta = trace && trace.eta_seconds != null ? formatEta(trace.eta_seconds) : "";
-  card.innerHTML = `<strong>训练损失</strong><div class="muted">第 ${esc(last.epoch)} 轮 · loss ${esc(last.loss)} · 这一轮 ${esc(last.seconds)}s ${esc(eta)}</div>
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="损失曲线">
+  card.innerHTML = `<strong>${esc(t("loss.title"))}</strong><div class="muted">${esc(t("loss.line", { epoch: last.epoch, loss: last.loss, seconds: last.seconds, eta }))}</div>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("loss.curve"))}">
       <defs>
         <filter id="loss-glow" x="-20%" y="-40%" width="140%" height="180%">
           <feGaussianBlur stdDeviation="3.2" result="blur" />
@@ -250,13 +259,13 @@ async function loadConversations() {
 function renderConversations() {
   const root = $("conv-list");
   if (!state.conversations.length) {
-    root.innerHTML = `<div class="empty">还没有对话</div>`;
+    root.innerHTML = `<div class="empty">${esc(t("empty.conversations"))}</div>`;
     return;
   }
   root.innerHTML = state.conversations.map((conv) => `
     <div class="conv ${conv.id === state.currentId && state.view === "chat" ? "active" : ""}">
-      <input type="checkbox" data-pick="${esc(conv.id)}" ${state.selected.has(conv.id) ? "checked" : ""} aria-label="选择${esc(conv.title)}" />
-      <button class="link" type="button" data-open="${esc(conv.id)}">${esc(conv.title || "新对话")}</button>
+      <input type="checkbox" data-pick="${esc(conv.id)}" ${state.selected.has(conv.id) ? "checked" : ""} aria-label="${esc(t("pick.conversation", { title: tx(conv.title) }))}" />
+      <button class="link" type="button" data-open="${esc(conv.id)}">${esc(tx(conv.title || t("title.new")))}</button>
     </div>
   `).join("");
   root.querySelectorAll("[data-open]").forEach((button) => {
@@ -274,9 +283,9 @@ function proposalCard(extra) {
   const proposal = extra && extra.proposal;
   if (!proposal) return "";
   return `<div class="proposal">
-    <p>原来：${esc(proposal.old_statement)}</p>
-    <p>改为：${esc(proposal.new_statement)}</p>
-    <button type="button" data-confirm-correction="${esc(proposal.fact_id)}">确认并重新训练</button>
+    <p>${esc(t("proposal.old", { text: proposal.old_statement }))}</p>
+    <p>${esc(t("proposal.next", { text: proposal.new_statement }))}</p>
+    <button type="button" data-confirm-correction="${esc(proposal.fact_id)}">${esc(t("action.retrain"))}</button>
   </div>`;
 }
 
@@ -285,19 +294,19 @@ function recallTrace(extra) {
 }
 
 function chipLabel(trace) {
-  if (!trace || !trace.mounted) return "未调用记忆";
+  if (!trace || !trace.mounted) return t("chip.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const name = row ? row.display_name : trace.mounted_expert;
   const facts = (trace.matched_facts || []).map((fact) => fact.value || fact.attr).filter(Boolean);
-  return facts.length ? `回忆自 ${name} · ${facts.join("、")}` : `回忆自 ${name} · 整份专家`;
+  return facts.length ? t("chip.from", { name, facts: facts.join(t("list.sep")) }) : t("chip.whole", { name });
 }
 
 function chipTitle(trace) {
   if (!trace) return "";
   const tau = trace.thresholds && trace.thresholds.router_tau;
-  const scores = (trace.experts || []).map((item) => `${item.display_name || item.name} ${Number(item.sim).toFixed(3)}${item.considered ? "" : "（未参与）"}`).join(" · ");
-  const head = tau == null ? trace.reason_text || "" : `路由键阈值 ${Number(tau).toFixed(3)}`;
-  return [head, scores, trace.reason_text || ""].filter(Boolean).join("\n");
+  const scores = (trace.experts || []).map((item) => `${item.display_name || item.name} ${Number(item.sim).toFixed(3)}${item.considered ? "" : t("chip.notCompared")}`).join(" · ");
+  const head = tau == null ? tx(trace.reason_text || "") : t("chip.tau", { tau: Number(tau).toFixed(3) });
+  return [head, scores, tx(trace.reason_text || "")].filter(Boolean).join("\n");
 }
 
 function recallChip(msg, extra) {
@@ -308,19 +317,20 @@ function recallChip(msg, extra) {
 }
 
 function bannerText(trace) {
-  if (!trace || !trace.mounted) return "未调用记忆";
+  if (!trace || !trace.mounted) return t("banner.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const name = row ? row.display_name : trace.mounted_expert;
   const tau = trace.thresholds || {};
-  const matched = (trace.matched_facts || []).map((fact) => {
-    const label = fact.attr || fact.value || "这条事实";
-    return `「${label}」问句 ${Number(fact.question_sim).toFixed(3)} · 属性 ${Number(fact.attr_sim).toFixed(3)}`;
-  });
+  const matched = (trace.matched_facts || []).map((fact) => t("banner.fact", {
+    label: fact.attr || fact.value || t("fact.this"),
+    q: Number(fact.question_sim).toFixed(3),
+    a: Number(fact.attr_sim).toFixed(3),
+  }));
   const which = matched.length
-    ? `事实闸对上了${matched.join("、")}，阈值 ${Number(tau.fact_tau).toFixed(3)}`
-    : "没有逐条事实闸，只比较了路由键";
-  const sim = row ? `路由键 ${Number(row.sim).toFixed(3)} / ${Number(tau.router_tau).toFixed(3)}` : "";
-  return `整份挂载「${name}」。${which}。${sim}。亮起表示路由对上了这些事实，不是每颗星各有一份权重。`;
+    ? t("banner.facts", { list: matched.join(t("list.sep")), tau: Number(tau.fact_tau).toFixed(3) })
+    : t("banner.keyOnly");
+  const sim = row ? t("banner.sim", { sim: Number(row.sim).toFixed(3), tau: Number(tau.router_tau).toFixed(3) }) : "";
+  return t("banner.mounted", { name, which, sim });
 }
 
 function showRecallBanner(trace) {
@@ -384,23 +394,24 @@ async function openConversation(id, switchView, revealId) {
   state.currentId = id;
   if (switchView) {
     setView("chat");
-    $("title").textContent = "新对话";
+    $("title").textContent = t("title.new");
   }
   const conv = await api(`/api/conversations/${id}`);
-  if (state.view === "chat") $("title").textContent = conv.title || "新对话";
+  if (state.view === "chat") $("title").textContent = tx(conv.title) || t("title.new");
   const box = $("messages");
   if (!conv.messages.length) {
-    box.innerHTML = `<div class="empty">直接输入即可。回答旁边会标出这次用的是基座还是某条记忆。点「回忆自」可以在旁边的星云里再亮一次。若某条记忆不对，就在这里说出正确的取值。</div>`;
+    box.innerHTML = `<div class="empty">${esc(t("empty.chat"))}</div>`;
   } else {
     box.innerHTML = conv.messages.map((msg) => {
       const extra = parseExtra(msg);
       if (msg.role === "user") return `<div class="bubble user">${esc(msg.content)}</div>`;
       const memory = msg.fired ? "memory" : "";
-      const label = msg.expert_label || (msg.fired ? "记忆" : "基座");
+      const label = tx(msg.expert_label || (msg.fired ? "记忆" : "基座"));
       const sim = msg.sim == null ? "" : ` · ${Number(msg.sim).toFixed(2)}`;
+      const shown = msg.role === "assistant" ? tx(msg.content) : msg.content;
       const card = extra && extra.kind === "correction_proposal" ? proposalCard(extra) : "";
       const chip = recallChip(msg, extra);
-      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><span class="body">${esc(msg.content)}</span>${card}${chip}<div class="route ${memory}" title="${esc(msg.reason || "")}">${esc(label)}${esc(sim)}</div></div>`;
+      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><span class="body">${esc(shown)}</span>${card}${chip}<div class="route ${memory}" title="${esc(tx(msg.reason || ""))}">${esc(label)}${esc(sim)}</div></div>`;
     }).join("");
   }
   box.querySelectorAll("[data-confirm-correction]").forEach((button) => {
@@ -449,27 +460,27 @@ async function openConversation(id, switchView, revealId) {
 
 async function loadMemory() {
   setView("memory");
-  $("title").textContent = "记忆库";
+  $("title").textContent = t("title.memory");
   const data = await api("/api/experts");
   const root = $("memory-view");
   if (!data.experts.length) {
-    root.innerHTML = `<div class="empty">还没有巩固过的记忆。勾选左侧对话后点「巩固所选」。</div>`;
+    root.innerHTML = `<div class="empty">${esc(t("empty.memory"))}</div>`;
     return;
   }
   root.innerHTML = data.experts.map((expert) => {
-    const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? "（已取代）" : ""}${esc(fact.statement || fact.question || "")}</li>`).join("");
-    const sources = (expert.sources || []).map((src) => esc(src.title || src.id)).join("、") || "未记录";
+    const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.statement || fact.question || "")}</li>`).join("");
+    const sources = (expert.sources || []).map((src) => esc(src.title || src.id)).join(t("list.sep")) || t("fact.noSource");
     return `<article class="card">
       <h3>${esc(expert.display_name || expert.name)}</h3>
-      <div class="muted">${esc(expert.name)} · ${esc(expert.n_facts)} 条仍生效的事实</div>
-      <p>来源对话：${sources}</p>
-      <ul>${facts || "<li>没有可显示的事实文本</li>"}</ul>
-      <button class="danger" type="button" data-del="${esc(expert.name)}">删除这条记忆</button>
+      <div class="muted">${esc(expert.name)} · ${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
+      <p>${esc(t("fact.sources", { names: sources }))}</p>
+      <ul>${facts || `<li>${esc(t("empty.factText"))}</li>`}</ul>
+      <button class="danger" type="button" data-del="${esc(expert.name)}">${esc(t("action.delete"))}</button>
     </article>`;
   }).join("");
   root.querySelectorAll("[data-del]").forEach((button) => {
     button.onclick = async () => {
-      if (!window.confirm("删除后，相关问题会回到基座回答，不会误挂到其他记忆。确定删除？")) return;
+      if (!window.confirm(t("memory.deleteConfirm"))) return;
       try {
         await api(`/api/experts/${button.dataset.del}`, { method: "DELETE" });
         await loadMemory();
@@ -483,7 +494,7 @@ async function loadMemory() {
 function renderFacts() {
   const root = $("fact-list");
   if (!state.facts.length) {
-    root.innerHTML = `<div class="empty">没有抽到可写入的事实。换一段更明确的陈述再试。</div>`;
+    root.innerHTML = `<div class="empty">${esc(t("empty.facts"))}</div>`;
     $("editor-commit").disabled = true;
     return;
   }
@@ -493,18 +504,18 @@ function renderFacts() {
     if (skipped) fact.selected = false;
     return `
     <div class="fact">
-      <label><span><input type="checkbox" data-sel="${index}" ${skipped ? "disabled" : ""} ${fact.selected ? "checked" : ""} /> 写入这条</span></label>
-      ${fact.gate_reason ? `<div class="badge ${skipped ? "" : "write"}">${esc(fact.gate_reason)}</div>` : ""}
-      <label>陈述<textarea data-field="statement" data-i="${index}">${esc(fact.statement)}</textarea></label>
+      <label><span><input type="checkbox" data-sel="${index}" ${skipped ? "disabled" : ""} ${fact.selected ? "checked" : ""} /> ${esc(t("fact.write"))}</span></label>
+      ${fact.gate_reason ? `<div class="badge ${skipped ? "" : "write"}">${esc(tx(fact.gate_reason))}</div>` : ""}
+      <label>${esc(t("fact.statement"))}<textarea data-field="statement" data-i="${index}">${esc(fact.statement)}</textarea></label>
       <div class="row">
-        <label>实体<input data-field="entity" data-i="${index}" value="${esc(fact.entity)}" /></label>
-        <label>属性<input data-field="attr" data-i="${index}" value="${esc(fact.attr)}" /></label>
+        <label>${esc(t("fact.entity"))}<input data-field="entity" data-i="${index}" value="${esc(fact.entity)}" /></label>
+        <label>${esc(t("fact.attr"))}<input data-field="attr" data-i="${index}" value="${esc(fact.attr)}" /></label>
       </div>
       <div class="row">
-        <label>取值<input data-field="value" data-i="${index}" value="${esc(fact.value)}" /></label>
-        <label>答案<input data-field="answer" data-i="${index}" value="${esc(fact.answer)}" /></label>
+        <label>${esc(t("fact.value"))}<input data-field="value" data-i="${index}" value="${esc(fact.value)}" /></label>
+        <label>${esc(t("fact.answer"))}<input data-field="answer" data-i="${index}" value="${esc(fact.answer)}" /></label>
       </div>
-      <label>问题<input data-field="question" data-i="${index}" value="${esc(fact.question)}" /></label>
+      <label>${esc(t("fact.question"))}<input data-field="question" data-i="${index}" value="${esc(fact.question)}" /></label>
     </div>`;
   }).join("");
   root.querySelectorAll("[data-sel]").forEach((box) => {
@@ -525,7 +536,7 @@ function renderFacts() {
 
 async function openConsolidate() {
   setView("consolidate");
-  $("title").textContent = "巩固";
+  $("title").textContent = t("title.consolidate");
   renderStages();
 }
 
@@ -536,9 +547,9 @@ function factScoreLine(fact) {
   const row = gate.facts.find((item) => item.node_id === fact.id || item.fact_id === fact.fact_id);
   if (!row) return "";
   const tau = trace.thresholds && trace.thresholds.fact_tau;
-  const status = row.passed && trace.mounted ? "事实闸对上了这条" : "这一轮没有把它当作命中";
-  const threshold = tau == null ? "" : ` · 阈值 ${Number(tau).toFixed(3)}`;
-  return `<div>${status} · 问句 ${Number(row.question_sim).toFixed(3)} · 属性 ${Number(row.attr_sim).toFixed(3)}${threshold}</div><div class="muted">${esc(trace.wording || "")}</div>`;
+  const status = row.passed && trace.mounted ? t("fact.gateHit") : t("fact.gateMiss");
+  const threshold = tau == null ? "" : ` · ${t("fact.threshold", { tau: Number(tau).toFixed(3) })}`;
+  return `<div>${status} · ${t("fact.qscore", { q: Number(row.question_sim).toFixed(3), a: Number(row.attr_sim).toFixed(3) })}${threshold}</div><div class="muted">${esc(tx(trace.wording || ""))}</div>`;
 }
 
 function expertScoreLine(expert) {
@@ -547,9 +558,9 @@ function expertScoreLine(expert) {
   const row = trace.experts.find((item) => item.name === expert.name);
   if (!row) return "";
   const tau = trace.thresholds && trace.thresholds.router_tau;
-  const threshold = tau == null ? "" : ` · 阈值 ${Number(tau).toFixed(3)}`;
-  const role = row.chosen ? "这一轮整份挂载" : row.considered ? "参与了比较" : "这一轮没有参与判定";
-  return `<div>路由键 ${Number(row.sim).toFixed(3)}${threshold} · ${role}</div>`;
+  const threshold = tau == null ? "" : ` · ${t("fact.threshold", { tau: Number(tau).toFixed(3) })}`;
+  const role = row.chosen ? t("expert.mounted") : row.considered ? t("expert.compared") : t("expert.out");
+  return `<div>${t("expert.key", { sim: Number(row.sim).toFixed(3) })}${threshold} · ${role}</div>`;
 }
 
 async function ensureNebula() {
@@ -569,7 +580,7 @@ async function ensureNebula() {
         tip.style.left = `${x + 14}px`;
         tip.style.top = `${y + 14}px`;
         if (payload.kind === "fact") {
-          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? "已取代" : "生效"} · ${esc(payload.fact.expert_label || "")}</div>${factScoreLine(payload.fact)}`;
+          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? t("fact.dim") : t("fact.live")} · ${esc(payload.fact.expert_label || "")}</div>${factScoreLine(payload.fact)}`;
         } else if (payload.kind === "conversation") {
           tip.innerHTML = `<strong>${esc(payload.conversation.title)}</strong><div class="muted">${esc(payload.conversation.snippet || "")}</div>`;
         } else if (payload.kind === "expert") {
@@ -589,13 +600,13 @@ async function ensureNebula() {
 
 async function openNebula() {
   setView("nebula");
-  $("title").textContent = "知识星云";
+  $("title").textContent = t("title.nebula");
   await ensureNebula();
 }
 
 function openConversationSnippet(conversation) {
-  $("modal-title").textContent = conversation.title || "来源对话";
-  $("modal-body").innerHTML = `<p>${esc(conversation.snippet || "没有摘录")}</p>`;
+  $("modal-title").textContent = conversation.title || t("title.source");
+  $("modal-body").innerHTML = `<p>${esc(conversation.snippet || t("empty.snippet"))}</p>`;
   $("modal-commit").hidden = true;
   $("modal").hidden = false;
 }
@@ -603,18 +614,18 @@ function openConversationSnippet(conversation) {
 function openStar(fact) {
   state.star = fact;
   state.proposal = null;
-  $("modal-title").textContent = fact.superseded ? "已取代的事实" : "一条记忆";
+  $("modal-title").textContent = fact.superseded ? t("title.starOld") : t("title.star");
   const snippets = (fact.snippets || []).map((item) => `<div class="snippet"><strong>${esc(item.title || "")}</strong><div>${esc(item.text || "")}</div></div>`).join("");
-  const status = fact.superseded ? "已取代，星云里这颗星会变暗" : "生效，参与路由和回答";
-  const editor = fact.writable ? `<label class="muted">若这条不对，写下正确取值</label><input id="star-value" type="text" value="" placeholder="新的取值" />` : `<p class="muted">研究专家不能在这里改。</p>`;
+  const status = fact.superseded ? t("star.statusOff") : t("star.statusOn");
+  const editor = fact.writable ? `<label class="muted">${esc(t("star.edit"))}</label><input id="star-value" type="text" value="" placeholder="${esc(t("star.placeholder"))}" />` : `<p class="muted">${esc(t("star.locked"))}</p>`;
   $("modal-body").innerHTML = `
     <p>${esc(fact.statement || "")}</p>
     <p class="muted">${esc(fact.expert_label || fact.expert)} · ${esc(fact.entity)} · ${esc(fact.attr)} · ${esc(status)}</p>
-    ${snippets || `<div class="snippet">没有留下原对话摘录。</div>`}
+    ${snippets || `<div class="snippet">${esc(t("empty.snippets"))}</div>`}
     <div id="star-proposal"></div>
     ${editor}`;
   $("modal-commit").hidden = !fact.writable;
-  $("modal-commit").textContent = "预览纠正";
+  $("modal-commit").textContent = t("action.preview");
   $("modal").hidden = false;
 }
 
@@ -623,15 +634,15 @@ async function commitStar() {
   if (!fact) return;
   if (!state.proposal) {
     const value = ($("star-value") && $("star-value").value || "").trim();
-    if (!value) return showError(new Error("先写下新的取值"));
+    if (!value) return showError(new Error(t("star.needValue")));
     const data = await api("/api/corrections/propose", {
       method: "POST",
       body: JSON.stringify({ fact_id: fact.fact_id, new_value: value, text: value }),
     });
-    if (!data.proposal) return showError(new Error("没有生成纠正"));
+    if (!data.proposal) return showError(new Error(t("star.noProposal")));
     state.proposal = data.proposal;
-    $("star-proposal").innerHTML = `<div class="proposal"><p>原来：${esc(data.proposal.old_statement)}</p><p>改为：${esc(data.proposal.new_statement)}</p></div>`;
-    $("modal-commit").textContent = "确认并重新训练";
+    $("star-proposal").innerHTML = `<div class="proposal"><p>${esc(t("proposal.old", { text: data.proposal.old_statement }))}</p><p>${esc(t("proposal.next", { text: data.proposal.new_statement }))}</p></div>`;
+    $("modal-commit").textContent = t("action.retrain");
     return;
   }
   const data = await api("/api/corrections/commit", {
@@ -646,7 +657,7 @@ async function commitStar() {
 
 $("new-chat").onclick = async () => {
   try {
-    const conv = await api("/api/conversations", { method: "POST", body: "{}" });
+    const conv = await api("/api/conversations", { method: "POST", body: JSON.stringify({ title: t("title.new") }) });
     state.currentId = conv.id;
     await loadConversations();
     await openConversation(conv.id, true);
@@ -665,12 +676,12 @@ $("memory-tab").onclick = () => loadMemory().catch(showError);
 $("consolidate").onclick = async () => {
   const ids = [...state.selected];
   if (!ids.length && state.currentId) ids.push(state.currentId);
-  if (!ids.length) return showError(new Error("请先选择至少一则对话"));
+  if (!ids.length) return showError(new Error(t("star.needChat")));
   state.sourceIds = ids;
   state.facts = [];
   state.job = null;
   await openConsolidate();
-  $("stage-feed").innerHTML = `<div class="empty">正在读取选中的对话…</div>`;
+  $("stage-feed").innerHTML = `<div class="empty">${esc(t("empty.reading"))}</div>`;
   try {
     const started = await api("/api/consolidate/preview", { method: "POST", body: JSON.stringify({ conversation_ids: ids }) });
     state.previewId = started.id;
@@ -705,7 +716,7 @@ $("composer").onsubmit = async (event) => {
   $("send").disabled = true;
   try {
     if (!state.currentId) {
-      const conv = await api("/api/conversations", { method: "POST", body: "{}" });
+      const conv = await api("/api/conversations", { method: "POST", body: JSON.stringify({ title: t("title.new") }) });
       state.currentId = conv.id;
     }
     $("input").value = "";
@@ -751,7 +762,41 @@ async function pollWork() {
   }
 }
 
+async function syncLocale() {
+  try {
+    const settings = await api("/api/settings");
+    if (settings.locale === "zh-CN" || settings.locale === "en") {
+      if (settings.locale !== window.i18n.getLocale()) window.i18n.setLocale(settings.locale);
+      return;
+    }
+    await api("/api/settings", { method: "POST", body: JSON.stringify({ locale: window.i18n.getLocale() }) });
+  } catch (error) { /* 没有后端时仍用本机语言 */ }
+}
+
+function bindLanguage() {
+  document.querySelectorAll("[data-locale]").forEach((button) => {
+    button.onclick = () => {
+      const next = button.getAttribute("data-locale");
+      if (!next || next === window.i18n.getLocale()) return;
+      window.i18n.setLocale(next);
+      api("/api/settings", { method: "POST", body: JSON.stringify({ locale: window.i18n.getLocale() }) }).catch(() => {});
+    };
+  });
+  window.i18n.onChange(() => {
+    setView(state.view);
+    renderJobBar();
+    renderConversations();
+    if (state.view === "chat" && state.currentId) openConversation(state.currentId, false).catch(showError);
+    else if (state.view === "memory") loadMemory().catch(showError);
+    else if (state.view === "nebula") openNebula().catch(showError);
+    else if (state.view === "consolidate") renderStages();
+    refreshHealth().catch(() => {});
+  });
+}
+
 async function boot() {
+  bindLanguage();
+  await syncLocale();
   let opened = false;
   async function tick() {
     const health = await refreshHealth();

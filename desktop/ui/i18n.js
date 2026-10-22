@@ -1,0 +1,441 @@
+/* 界面文案。zh-CN 和 en。语言存在 localStorage，启动后再和 /api/settings 对齐。 */
+(function () {
+  const STR = {
+    "zh-CN": {
+      "app.name": "LoRA 长记忆",
+      "boot.loading": "正在准备本地模型…",
+      "boot.download": "首次运行会下载 Qwen2.5-0.5B-Instruct 和 bge-small-zh-v1.5，大约 1.1 GB，只下载一次。",
+      "boot.failed": "模型没有就绪",
+      "boot.failedDetail": "模型下载失败：{detail}",
+      "boot.network": "请检查网络",
+      "device.local": "本地",
+      "device.line": "本机推理 · {device}",
+      "nav.chat": "对话",
+      "nav.consolidate": "巩固",
+      "nav.nebula": "星云",
+      "nav.memory": "记忆库",
+      "nav.label": "视图",
+      "action.new": "新对话",
+      "action.consolidate": "巩固所选",
+      "action.send": "发送",
+      "action.close": "关闭",
+      "action.confirm": "确认",
+      "action.start": "开始巩固",
+      "action.cancel": "取消",
+      "action.resume": "继续训练",
+      "action.preview": "预览纠正",
+      "action.retrain": "确认并重新训练",
+      "action.delete": "删除这条记忆",
+      "composer.placeholder": "输入消息。若要改一条已经记住的事实，直接说出新的取值。Enter 发送，Shift+Enter 换行",
+      "title.new": "新对话",
+      "title.memory": "记忆库",
+      "title.consolidate": "巩固",
+      "title.nebula": "知识星云",
+      "title.detail": "细节",
+      "title.source": "来源对话",
+      "title.star": "一条记忆",
+      "title.starOld": "已取代的事实",
+      "empty.conversations": "还没有对话",
+      "empty.chat": "直接输入即可。回答旁边会标出这次用的是基座还是某条记忆。点「回忆自」可以在旁边的星云里再亮一次。若某条记忆不对，就在这里说出正确的取值。",
+      "empty.nebula": "星图还是空的。先在对话里留下事实，再点「巩固所选」。",
+      "empty.memory": "还没有巩固过的记忆。勾选左侧对话后点「巩固所选」。",
+      "empty.facts": "没有抽到可写入的事实。换一段更明确的陈述再试。",
+      "empty.feed": "巩固开始后，这里会按真实进度出现：选中的对话、抽出的事实、写门为什么跳过、训练损失、回忆是否答对、登记了哪位专家。",
+      "empty.reading": "正在读取选中的对话…",
+      "empty.snippet": "没有摘录",
+      "empty.snippets": "没有留下原对话摘录。",
+      "empty.factText": "没有可显示的事实文本",
+      "pick.conversation": "选择{title}",
+      "stage.select": "选择对话",
+      "stage.extract": "抽取事实",
+      "stage.gate": "写门",
+      "stage.build": "编训练样本",
+      "stage.train": "训练 LoRA",
+      "stage.recall": "回忆检查",
+      "stage.register": "登记专家",
+      "stage.done": "完成",
+      "stage.pending": "勾选对话后开始",
+      "stage.constellation": "巩固星座",
+      "feed.failed": "这一步没有完成",
+      "feed.selected": "选中对话",
+      "feed.chars": "{n} 字",
+      "feed.duplicate": "同一事实已经抽过",
+      "feed.extracted": "抽到一条事实",
+      "feed.skip": "跳过",
+      "feed.write": "写入",
+      "feed.samples": "训练样本",
+      "feed.sampleLine": "{facts} 条事实，{rows} 条样本",
+      "feed.recall": "回忆检查",
+      "feed.recallLine": "{hits}/{total} 条主问题答对",
+      "feed.registered": "已登记 {name}",
+      "feed.keys": "路由键 {n} 条",
+      "feed.hit": "答对",
+      "feed.miss": "未答对",
+      "feed.expect": "期望 {gold} · 回答 {answer}",
+      "loss.title": "训练损失",
+      "loss.line": "第 {epoch} 轮 · loss {loss} · 这一轮 {seconds}s {eta}",
+      "loss.curve": "损失曲线",
+      "eta.min": "约 {min} 分 {sec} 秒",
+      "eta.sec": "约 {sec} 秒",
+      "job.line": "第 {epoch} / {max} 轮",
+      "proposal.old": "原来：{text}",
+      "proposal.next": "改为：{text}",
+      "chip.idle": "未调用记忆",
+      "chip.from": "回忆自 {name} · {facts}",
+      "chip.whole": "回忆自 {name} · 整份专家",
+      "chip.notCompared": "（未参与）",
+      "chip.tau": "路由键阈值 {tau}",
+      "banner.idle": "未调用记忆",
+      "banner.mounted": "整份挂载「{name}」。{which}。{sim}。亮起表示路由对上了这些事实，不是每颗星各有一份权重。",
+      "banner.fact": "「{label}」问句 {q} · 属性 {a}",
+      "banner.facts": "事实闸对上了{list}，阈值 {tau}",
+      "banner.keyOnly": "没有逐条事实闸，只比较了路由键",
+      "banner.sim": "路由键 {sim} / {tau}",
+      "fact.this": "这条事实",
+      "fact.write": "写入这条",
+      "fact.entity": "实体",
+      "fact.attr": "属性",
+      "fact.value": "取值",
+      "fact.answer": "答案",
+      "fact.question": "问题",
+      "fact.statement": "陈述",
+      "fact.superseded": "（已取代）",
+      "fact.activeCount": "{n} 条仍生效的事实",
+      "fact.sources": "来源对话：{names}",
+      "fact.noSource": "未记录",
+      "fact.live": "生效",
+      "fact.dim": "已取代",
+      "fact.gateHit": "事实闸对上了这条",
+      "fact.gateMiss": "这一轮没有把它当作命中",
+      "fact.threshold": "阈值 {tau}",
+      "fact.qscore": "问句 {q} · 属性 {a}",
+      "expert.mounted": "这一轮整份挂载",
+      "expert.compared": "参与了比较",
+      "expert.out": "这一轮没有参与判定",
+      "expert.key": "路由键 {sim}",
+      "star.statusOn": "生效，参与路由和回答",
+      "star.statusOff": "已取代，星云里这颗星会变暗",
+      "star.edit": "若这条不对，写下正确取值",
+      "star.placeholder": "新的取值",
+      "star.locked": "研究专家不能在这里改。",
+      "star.needValue": "先写下新的取值",
+      "star.noProposal": "没有生成纠正",
+      "star.needChat": "请先选择至少一则对话",
+      "memory.deleteConfirm": "删除后，相关问题会回到基座回答，不会误挂到其他记忆。确定删除？",
+      "error.request": "请求失败",
+      "lang.label": "语言",
+      "list.sep": "、",
+    },
+    en: {
+      "app.name": "LoRA Long Memory",
+      "boot.loading": "Preparing the local models…",
+      "boot.download": "The first launch downloads Qwen2.5-0.5B-Instruct and bge-small-zh-v1.5, about 1.1 GB, once.",
+      "boot.failed": "The models are not ready",
+      "boot.failedDetail": "Model download failed: {detail}",
+      "boot.network": "Check the network",
+      "device.local": "Local",
+      "device.line": "On-device inference · {device}",
+      "nav.chat": "Chat",
+      "nav.consolidate": "Consolidate",
+      "nav.nebula": "Nebula",
+      "nav.memory": "Memory",
+      "nav.label": "Views",
+      "action.new": "New chat",
+      "action.consolidate": "Consolidate selected",
+      "action.send": "Send",
+      "action.close": "Close",
+      "action.confirm": "Confirm",
+      "action.start": "Start consolidation",
+      "action.cancel": "Cancel",
+      "action.resume": "Resume training",
+      "action.preview": "Preview correction",
+      "action.retrain": "Confirm and retrain",
+      "action.delete": "Delete this memory",
+      "composer.placeholder": "Write a message. To correct a remembered fact, say the new value. Enter sends, Shift+Enter adds a line.",
+      "title.new": "New chat",
+      "title.memory": "Memory",
+      "title.consolidate": "Consolidate",
+      "title.nebula": "Knowledge nebula",
+      "title.detail": "Detail",
+      "title.source": "Source conversation",
+      "title.star": "One memory",
+      "title.starOld": "Superseded fact",
+      "empty.conversations": "No conversations yet",
+      "empty.chat": "Type to begin. Each answer is marked base model or memory. “Recalled from” lights those stars again. If a memory is wrong, say the correct value here.",
+      "empty.nebula": "The star map is empty. Leave facts in a chat, then choose Consolidate selected.",
+      "empty.memory": "Nothing has been consolidated. Select conversations on the left, then choose Consolidate selected.",
+      "empty.facts": "No writable facts were found. Try a clearer statement.",
+      "empty.feed": "Once consolidation starts, this list follows the real steps: chosen chats, extracted facts, why the write gate skipped one, training loss, recall, and which expert was registered.",
+      "empty.reading": "Reading the selected conversations…",
+      "empty.snippet": "No excerpt",
+      "empty.snippets": "No source excerpt was kept.",
+      "empty.factText": "No fact text to show",
+      "pick.conversation": "Select {title}",
+      "stage.select": "Choose conversations",
+      "stage.extract": "Extract facts",
+      "stage.gate": "Write gate",
+      "stage.build": "Build samples",
+      "stage.train": "Train LoRA",
+      "stage.recall": "Recall check",
+      "stage.register": "Register expert",
+      "stage.done": "Done",
+      "stage.pending": "Select conversations to begin",
+      "stage.constellation": "Consolidation constellation",
+      "feed.failed": "This step did not finish",
+      "feed.selected": "Selected conversation",
+      "feed.chars": "{n} characters",
+      "feed.duplicate": "This fact was already extracted",
+      "feed.extracted": "Extracted one fact",
+      "feed.skip": "Skip",
+      "feed.write": "Write",
+      "feed.samples": "Training samples",
+      "feed.sampleLine": "{facts} facts, {rows} samples",
+      "feed.recall": "Recall check",
+      "feed.recallLine": "{hits}/{total} main questions correct",
+      "feed.registered": "Registered {name}",
+      "feed.keys": "{n} router keys",
+      "feed.hit": "Correct",
+      "feed.miss": "Missed",
+      "feed.expect": "Expected {gold} · answered {answer}",
+      "loss.title": "Training loss",
+      "loss.line": "Epoch {epoch} · loss {loss} · this epoch {seconds}s {eta}",
+      "loss.curve": "Loss curve",
+      "eta.min": "about {min} min {sec} s",
+      "eta.sec": "about {sec} s",
+      "job.line": "Epoch {epoch} / {max}",
+      "proposal.old": "Was: {text}",
+      "proposal.next": "Now: {text}",
+      "chip.idle": "Memory not used",
+      "chip.from": "Recalled from {name} · {facts}",
+      "chip.whole": "Recalled from {name} · whole expert",
+      "chip.notCompared": " (not compared)",
+      "chip.tau": "Router-key threshold {tau}",
+      "banner.idle": "Memory not used",
+      "banner.mounted": "The whole expert “{name}” is mounted. {which}. {sim}. A lit star means routing matched these facts, not a separate weight on each star.",
+      "banner.fact": "“{label}” question {q} · attribute {a}",
+      "banner.facts": "The fact gate matched {list}, threshold {tau}",
+      "banner.keyOnly": "No per-fact gate; only the router key was compared",
+      "banner.sim": "Router key {sim} / {tau}",
+      "fact.this": "this fact",
+      "fact.write": "Write this",
+      "fact.entity": "Entity",
+      "fact.attr": "Attribute",
+      "fact.value": "Value",
+      "fact.answer": "Answer",
+      "fact.question": "Question",
+      "fact.statement": "Statement",
+      "fact.superseded": "(superseded) ",
+      "fact.activeCount": "{n} facts still active",
+      "fact.sources": "Source chats: {names}",
+      "fact.noSource": "not recorded",
+      "fact.live": "Active",
+      "fact.dim": "Superseded",
+      "fact.gateHit": "The fact gate matched this one",
+      "fact.gateMiss": "Not treated as a hit this turn",
+      "fact.threshold": "threshold {tau}",
+      "fact.qscore": "question {q} · attribute {a}",
+      "expert.mounted": "Mounted as a whole this turn",
+      "expert.compared": "Included in the comparison",
+      "expert.out": "Not part of the decision this turn",
+      "expert.key": "Router key {sim}",
+      "star.statusOn": "Active. It takes part in routing and answers.",
+      "star.statusOff": "Superseded. This star stays dim.",
+      "star.edit": "If this is wrong, write the correct value",
+      "star.placeholder": "New value",
+      "star.locked": "Research experts cannot be edited here.",
+      "star.needValue": "Write the new value first",
+      "star.noProposal": "No correction was produced",
+      "star.needChat": "Select at least one conversation",
+      "memory.deleteConfirm": "After deletion, related questions fall back to the base model and will not attach to another memory. Delete?",
+      "error.request": "Request failed",
+      "lang.label": "Language",
+      "list.sep": ", ",
+    },
+  };
+
+  const EXACT = {
+    "选择对话": "stage.select",
+    "抽取事实": "stage.extract",
+    "写门": "stage.gate",
+    "编训练样本": "stage.build",
+    "训练 LoRA": "stage.train",
+    "回忆检查": "stage.recall",
+    "登记专家": "stage.register",
+    "完成": "stage.done",
+    "勾选对话后开始": "stage.pending",
+    "按原句抽取": "Reading the original sentences",
+    "对照已有记忆和基座": "Comparing with memory and the base model",
+    "和已有记忆不重复": "Not a duplicate of existing memory",
+    "和已有记忆太像，写门建议跳过": "Too similar to existing memory; the write gate suggests skipping",
+    "用户确认后写入": "Write after you confirm",
+    "纠正一条已记住的事实": "Correct one remembered fact",
+    "旧事实": "Previous fact",
+    "新事实": "New fact",
+    "同一事实已经抽过": "feed.duplicate",
+    "抽到一条事实": "feed.extracted",
+    "已取消，可以继续训练": "Cancelled. Training can continue.",
+    "正在加载基座": "Loading the base model",
+    "正在启动训练": "Starting training",
+    "正在停止，当前这一小步结束后可以继续": "Stopping. You can continue after this step.",
+    "正在继续训练": "Resuming training",
+    "训练失败": "Training failed",
+    "正在用纠正后的事实重新训练": "Retraining on the corrected fact",
+    "正在检查主问题能不能答上来": "Checking whether the main questions are answered",
+    "正在登记专家和路由向量": "Registering the expert and router vectors",
+    "用最好的检查点回答每条事实的主问题": "Answering each fact's main question with the best checkpoint",
+    "写入路由键和事实向量": "Writing router keys and fact vectors",
+    "没有可用的检查点": "No usable checkpoint",
+    "没有可写入的事实": "There is no fact to write",
+    "没有事实向量，不能逐条比较": "No fact vectors, so facts cannot be compared one by one",
+    "这位专家没有逐条事实向量，只比较了路由键": "This expert has no per-fact vectors; only the router key was compared",
+    "亮起的星表示这次路由和事实闸对上了这些事实。LoRA 是整份专家一起挂上的，不是每颗星各有一份权重。": "A lit star means routing and the fact gate matched these facts. The LoRA expert is mounted as a whole, not as a separate weight on each star.",
+    "问句点名了这个专家登记过的实体": "The question names an entity registered on this expert",
+    "在参与比较的专家里，路由键相似度最高": "Highest router-key similarity among the experts compared",
+    "事实闸没有对上任何已存事实，回答走基座": "The fact gate matched nothing stored, so the answer stays on the base model",
+    "路由键相似度低于阈值，回答走基座": "Router-key similarity is below the threshold, so the answer stays on the base model",
+    "边界守卫没有通过，回答走基座": "The entity guard did not pass, so the answer stays on the base model",
+    "没有可挂载的专家，回答走基座": "No expert can be mounted, so the answer stays on the base model",
+    "专家权重不在，这一轮没有挂载，回答走基座": "Expert weights are missing, so nothing was mounted and the answer stays on the base model",
+    "这一轮在确认纠正，没有挂载专家": "This turn is confirming a correction, so no expert was mounted",
+    "纠正还没有写入。这一轮没有调用记忆。": "The correction is not saved yet. Memory was not used this turn.",
+    "基座": "Base",
+    "记忆": "Memory",
+    "纠正": "Correction",
+    "新对话": "title.new",
+    "未调用记忆": "chip.idle",
+    "请输入内容": "Enter something first",
+    "这句话太长了": "That message is too long",
+    "找不到这则对话": "That conversation was not found",
+    "正在巩固记忆，请等这一轮结束再继续对话": "Consolidation is running. Wait for it to finish before chatting.",
+    "正在巩固记忆，请等这一轮结束": "Consolidation is running. Wait for it to finish.",
+    "抽取失败": "Extraction failed",
+    "请先选择对话": "Select a conversation first",
+    "找不到这次抽取": "That extraction was not found",
+    "已有训练在进行": "Training is already running",
+    "没有要写入的事实": "There is no fact to write",
+    "有一条事实缺少实体或取值": "A fact is missing an entity or a value",
+    "找不到这个训练任务": "That training job was not found",
+    "这个任务现在不能继续": "This job cannot continue right now",
+    "纠正缺少事实或新取值": "The correction is missing a fact or a new value",
+    "新取值不在原来的那句话里": "The new value is not in the original sentence",
+    "这条记忆不能改": "This memory cannot be edited",
+    "找不到要改的事实": "The fact to correct was not found",
+    "这条事实已经替换过了": "This fact was already replaced",
+    "新取值和原来一样": "The new value is the same as the old one",
+    "找不到这个记忆": "That memory was not found",
+    "请求太大": "The request is too large",
+    "请求不是 JSON": "The request is not JSON",
+    "没有这个接口": "No such endpoint",
+    "不支持的语言": "Unsupported language",
+    "先写下新的取值": "star.needValue",
+    "没有生成纠正": "star.noProposal",
+    "请先选择至少一则对话": "star.needChat",
+  };
+
+  const PATTERNS = [
+    [/^选了 (\d+) 则对话$/, (m) => `Selected ${m[1]} conversation(s)`],
+    [/^已抽出 (\d+) 条$/, (m) => `Extracted ${m[1]}`],
+    [/^抽出 (\d+) 条$/, (m) => `Extracted ${m[1]}`],
+    [/^保留 (\d+) 条，跳过 (\d+) 条$/, (m) => `Kept ${m[1]}, skipped ${m[2]}`],
+    [/^正在把 (\d+) 条事实编成训练样本$/, (m) => `Turning ${m[1]} facts into training samples`],
+    [/^(\d+) 条事实，(\d+) 条训练样本$/, (m) => `${m[1]} facts, ${m[2]} training samples`],
+    [/^最多 (\d+) 轮，学习率 (.+)$/, (m) => `Up to ${m[1]} epochs, learning rate ${m[2]}`],
+    [/^第 (\d+) \/ (\d+) 轮，loss (.+)$/, (m) => `Epoch ${m[1]} / ${m[2]}, loss ${m[3]}`],
+    [/^正在训练第 (\d+) \/ (\d+) 轮$/, (m) => `Training epoch ${m[1]} / ${m[2]}`],
+    [/^第 (\d+) 轮结束，loss (.+)$/, (m) => `Epoch ${m[1]} finished, loss ${m[2]}`],
+    [/^最好 loss (.+)$/, (m) => `Best loss ${m[1]}`],
+    [/^主问题 (\d+)\/(\d+) 答对$/, (m) => `Main questions ${m[1]}/${m[2]} correct`],
+    [/^已登记 (.+)，路由键 (\d+) 条$/, (m) => `Registered ${m[1]}, ${m[2]} router keys`],
+    [/^已写入记忆 · (.+)$/, (m) => `Saved to memory · ${m[1]}`],
+    [/^训练进程退出（代码 (\d+)）。详见 train\.log$/, (m) => `Training process exited (code ${m[1]}). See train.log`],
+    [/^训练没有收敛（best loss=(.+)）$/, (m) => `Training did not converge (best loss=${m[1]})`],
+    [/^基座已经答对（(.+)），写门建议跳过$/, (m) => `The base model already answered (${m[1]}); the write gate suggests skipping`],
+    [/^基座答成「(.+)」，和已有记忆也不重复$/, (m) => `Base model answered “${m[1]}”, and it is not a duplicate`],
+    [/^要把「(.+)」改成「(.+)」吗？$/, (m) => `Change “${m[1]}” to “${m[2]}”?`],
+    [/^已确认。正在重新训练「(.+)」，旧取值 (.+) 会暗下去。$/, (m) => `Confirmed. Retraining “${m[1]}”. The old value ${m[2]} will dim.`],
+    [/^记忆 · (.+)$/, (m) => `Memory · ${m[1]}`],
+    [/^（没能生成：(.+)）$/, (m) => `(could not generate: ${m[1]})`],
+  ];
+
+  const listeners = [];
+  let locale = detect();
+
+  function detect() {
+    try {
+      const saved = localStorage.getItem("lora-memory-locale");
+      if (saved === "zh-CN" || saved === "en") return saved;
+    } catch (error) { /* 隐私模式仍按系统语言 */ }
+    const language = (navigator.language || navigator.userLanguage || "zh-CN").toLowerCase();
+    return language.startsWith("zh") ? "zh-CN" : "en";
+  }
+
+  function fill(template, vars) {
+    let text = template;
+    if (vars) {
+      Object.keys(vars).forEach((key) => {
+        text = text.split(`{${key}}`).join(vars[key] == null ? "" : String(vars[key]));
+      });
+    }
+    return text;
+  }
+
+  function t(key, vars) {
+    const table = STR[locale] || STR.en;
+    const template = table[key] != null ? table[key] : (STR.en[key] != null ? STR.en[key] : key);
+    return fill(template, vars);
+  }
+
+  function tx(value) {
+    const text = value == null ? "" : String(value);
+    if (!text || locale === "zh-CN") return text;
+    const exact = EXACT[text];
+    if (exact) return STR.en[exact] != null ? t(exact) : exact;
+    for (let i = 0; i < PATTERNS.length; i += 1) {
+      const matched = text.match(PATTERNS[i][0]);
+      if (matched) return PATTERNS[i][1](matched);
+    }
+    return text;
+  }
+
+  function apply(root) {
+    const scope = root || document;
+    scope.querySelectorAll("[data-i18n]").forEach((el) => {
+      el.textContent = t(el.getAttribute("data-i18n"));
+    });
+    scope.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+      el.setAttribute("placeholder", t(el.getAttribute("data-i18n-placeholder")));
+    });
+    scope.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+      el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria")));
+    });
+    document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+    document.title = t("app.name");
+    scope.querySelectorAll("[data-locale]").forEach((button) => {
+      button.setAttribute("aria-pressed", button.getAttribute("data-locale") === locale ? "true" : "false");
+    });
+  }
+
+  function setLocale(next, options) {
+    const chosen = next === "en" ? "en" : "zh-CN";
+    locale = chosen;
+    try { localStorage.setItem("lora-memory-locale", chosen); } catch (error) { /* 仍更新当前页面 */ }
+    apply(document);
+    if (!options || !options.silent) listeners.forEach((fn) => fn(chosen));
+    return chosen;
+  }
+
+  window.i18n = {
+    t,
+    tx,
+    apply,
+    setLocale,
+    getLocale: () => locale,
+    onChange(fn) { listeners.push(fn); },
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => apply(document));
+  } else {
+    apply(document);
+  }
+})();

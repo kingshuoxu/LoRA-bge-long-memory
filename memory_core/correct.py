@@ -82,9 +82,26 @@ def _echoes_known(tail: str, known: list[str]) -> bool:
     return False
 
 
+def _fragment_hits(fragment: str, tail: str) -> bool:
+    """问句残片落在候选取值里。英文长词里碰巧出现的两字母不算。"""
+    if fragment not in tail:
+        return False
+    if tail.isascii() and fragment.isascii() and len(fragment) < len(tail):
+        return False
+    return True
+
+
+def _same_token(tail: str, fragment: str) -> bool:
+    """两个片段是否在说同一个词。单字重合不算，避免英文向量挤在一起时误伤。"""
+    if len(tail) < 2 or len(fragment) < 2:
+        return False
+    return tail in fragment or fragment in tail
+
+
 def _peel(run: str, known_blob: str) -> str:
+    """只剥掉粘在片段开头的非拉丁字符。拉丁词的首字母经常也出现在实体里，剥掉会变成残词。"""
     peeled = run
-    while len(peeled) > 2 and peeled[0] in known_blob:
+    while len(peeled) > 2 and peeled[0] in known_blob and not peeled[0].isascii():
         peeled = peeled[1:]
     return peeled
 
@@ -97,7 +114,7 @@ def _candidate_tails(text: str, fact: dict) -> list[tuple[str, str]]:
     blob = "".join(known)
     tails: list[tuple[str, str]] = []
     seen: set[str] = set()
-    clauses = [piece.strip() for piece in re.split(r"[，。！？；;\n]+", text) if piece.strip()]
+    clauses = [piece.strip() for piece in re.split(r"[，,。！？；;\n]+", text) if piece.strip()]
     for clause in clauses or [text]:
         for run in _leftover(clause, known):
             if value and value in run:
@@ -177,8 +194,8 @@ def _rewrite(fact: dict, new_value: str) -> str:
         entity = str(fact.get("entity") or "")
         attr = str(fact.get("attr") or "")
         rewritten = f"{entity}的{attr}是{new_value}。" if attr else f"{entity}是{new_value}。"
-    if rewritten and rewritten[-1] not in "。！？":
-        rewritten += "。"
+    if rewritten and rewritten[-1] not in "。！？.!?":
+        rewritten += "。" if re.search(r"[\u4e00-\u9fff]", rewritten) else "."
     return rewritten
 
 
@@ -280,13 +297,19 @@ def propose_from_records(
         score = score if fact_id is None else 1.0
     else:
         attr_name = str(fact.get("attr") or "").strip()
-        if attr_name:
+        # 整句已经很像这条事实的陈述时，属性名本身不一定出现在原话里（lives in / address）。
+        if attr_name and score < 0.85:
             attr_vecs = embed([text, attr_name])
             if float(attr_vecs[0] @ attr_vecs[1]) < ATTR_SIM:
                 return None
         tails = _candidate_tails(text, fact)
         if not tails:
             return None
+        # 还在复述旧取值的那一小句是在否定旧事实，新取值在另一小句里。
+        if old_value and any(old_value not in clause for _tail, clause in tails):
+            narrowed = [(tail, clause) for tail, clause in tails if old_value not in clause]
+            if narrowed:
+                tails = narrowed
         wh = _wh_texts(fact)
         questions = _questions(fact)
         entity = str(fact.get("entity") or "")
@@ -305,19 +328,40 @@ def propose_from_records(
         tail_vecs = vectors[base + 2 * len(tails) : base + 3 * len(tails)]
         wh_vecs = vectors[base + 3 * len(tails) :]
         best_question = float((question_vecs @ user_vec).max()) if q_count else -1.0
-        passing: list[tuple[float, int, str]] = []
-        for tail_index, (tail, _clause) in enumerate(tails):
-            if any(fragment in tail for fragment in _wh_fragments(fact)):
+        statement_text = str(fact.get("statement") or "")
+        # 先看每个候选取值。bge-small-zh 把没见过的英文词嵌成同一个向量时，
+        # 新旧陈述的相似度会一样，增益看不出来。这种小句里留下最长的那个新片段。
+        scored: list[tuple[int, str, str, float, bool]] = []
+        degenerate_clauses: set[str] = set()
+        for tail_index, (tail, clause) in enumerate(tails):
+            if any(_fragment_hits(fragment, tail) for fragment in _wh_fragments(fact)):
                 continue
             if wh_vecs.numel():
-                wh_score = float((wh_vecs @ tail_vecs[tail_index]).max())
-                if wh_score >= WH_TAU:
+                scores = wh_vecs @ tail_vecs[tail_index]
+                wh_score = float(scores.max())
+                closest = wh[int(scores.argmax())] if wh else ""
+                if wh_score >= WH_TAU and _same_token(tail, closest):
                     continue
             new_score = float(clause_vecs[tail_index] @ statement_vecs[tail_index])
             old_score = float(clause_vecs[tail_index] @ old_statement_vec)
-            if new_score < old_score + VALUE_GAIN:
+            fresh = tail not in statement_text
+            degenerate = fresh and abs(new_score - old_score) < 1e-3
+            if degenerate:
+                degenerate_clauses.add(clause)
+            scored.append((tail_index, tail, clause, new_score, degenerate))
+        longest: dict[str, str] = {}
+        for _index, tail, clause, _score, _degenerate in scored:
+            if clause in degenerate_clauses and tail not in statement_text:
+                if clause not in longest or len(tail) > len(longest[clause]):
+                    longest[clause] = tail
+        margin = QUESTION_MARGIN if re.search(r"[\u4e00-\u9fff]", text) else 0.0
+        passing: list[tuple[float, int, str]] = []
+        for tail_index, tail, clause, new_score, degenerate in scored:
+            if clause in degenerate_clauses and longest.get(clause) != tail:
                 continue
-            if best_question >= 0 and float(user_vec @ statement_vecs[tail_index]) < best_question + QUESTION_MARGIN:
+            if not degenerate and new_score < float(clause_vecs[tail_index] @ old_statement_vec) + VALUE_GAIN:
+                continue
+            if best_question >= 0 and float(user_vec @ statement_vecs[tail_index]) < best_question + margin:
                 continue
             passing.append((new_score, text.rfind(tail), tail))
         if not passing:

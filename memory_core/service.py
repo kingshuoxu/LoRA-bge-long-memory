@@ -25,6 +25,7 @@ from memory_core.extract import (
 )
 from memory_core.gate import apply_write_gate, keep_for_training
 from memory_core.models_mgr import ensure_models, models_ready, qwen_path, read_status
+from memory_core.prompts import has_cjk
 from memory_core.paths import bundle_root, default_home, default_models_dir, default_repo_experts
 from memory_core.routing import bind_bge, load_merged_gate, route_text, route_with_trace
 from memory_core.store import (
@@ -259,7 +260,7 @@ class MemoryService:
             history = self.convos.messages(conv_id)
             title = self.convos.get(conv_id)["title"]
             user_msg = self.convos.add_message(conv_id, "user", content)
-            if title in {"", "新对话"}:
+            if title in {"", "新对话", "New chat"}:
                 self.convos.set_title(conv_id, content[:24])
             proposal = propose_from_records(content, self.expert_records())
             if proposal is not None:
@@ -774,8 +775,8 @@ class MemoryService:
             entity = str(target.get("entity") or "")
             attr = str(target.get("attr") or "")
             statement = f"{entity}的{attr}是{new_value}。" if attr else f"{entity}是{new_value}。"
-        if statement and statement[-1:] not in "。！？":
-            statement += "。"
+        if statement and statement[-1:] not in "。！？.!?":
+            statement += "。" if has_cjk(statement) else "."
         sources = list(target.get("source_conversations") or record.sources or [])
         fresh = {
             "id": new_id,

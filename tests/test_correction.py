@@ -85,6 +85,33 @@ class CorrectionTests(unittest.TestCase):
             value = None if got is None else got["new_value"]
             self.assertEqual(value, gold, text)
 
+    def test_english_correction_is_embedding_only(self):
+        from memory_core.correct import propose_from_records
+
+        raws = [
+            {"entity": "Mira Chen", "attr": "cat's name", "value": "Snow", "statement": "Mira Chen's cat's name is Snow.", "question": "What is Mira Chen's cat's name?", "answer": "Snow"},
+            {"entity": "Mira Chen", "attr": "address", "value": "Qinglan", "statement": "Mira Chen lives in Qinglan.", "question": "Where does Mira Chen live?", "answer": "Qinglan"},
+        ]
+        facts = []
+        for index, raw in enumerate(raws, start=1):
+            item = expand_training_fact(raw)
+            item["id"] = f"e{index}"
+            facts.append(item)
+        record = _record()
+        record.entities = ["Mira Chen"]
+        record.display_name = "Mira Chen"
+        record.fact_memory = {"facts": facts}
+        expect = {
+            "Mira Chen's cat's name is not Snow, it is Ash.": "Ash",
+            "Mira Chen lives in Starport, not Qinglan.": "Starport",
+            "What is Mira Chen's cat's name?": None,
+            "Where does Mira Chen live?": None,
+        }
+        for text, gold in expect.items():
+            got = propose_from_records(text, [record])
+            value = None if got is None else got["new_value"]
+            self.assertEqual(value, gold, text)
+
     def test_panel_value_and_superseded_bank(self):
         from memory_core.correct import propose_from_records
 

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from memory_core.paths import bundle_root, default_home, default_models_dir
 from memory_core.service import MemoryService, ServiceError
+from memory_core.settings import load_settings, save_settings
 
 
 def ui_dir() -> Path:
@@ -29,6 +30,7 @@ TYPES = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
 }
 
 
@@ -85,6 +87,13 @@ def make_handler(app: App):
         def _api(self, method: str, parts: list[str], payload: dict):
             if method == "GET" and parts == ["health"]:
                 return _json_bytes(service.health())
+            if method == "GET" and parts == ["settings"]:
+                return _json_bytes(load_settings(service.home))
+            if method == "POST" and parts == ["settings"]:
+                locale = str(payload.get("locale") or "")
+                if locale not in {"zh-CN", "en"}:
+                    raise ServiceError("不支持的语言")
+                return _json_bytes(save_settings(service.home, locale))
             if method == "POST" and parts == ["models", "download"]:
                 service.start_model_prepare()
                 return _json_bytes(service.health())
