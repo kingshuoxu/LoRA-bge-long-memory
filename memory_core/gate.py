@@ -23,12 +23,14 @@ def fact_gate_config() -> dict[str, float]:
 
 
 def keep_for_training(fact: dict[str, Any]) -> bool:
-    """写门跳过的事实不进训练集，也不进路由键和事实向量。界面上再勾选也带不回来。"""
+    """用户确认过的事实都训练。基座碰巧答对只做标记，不再把事实丢掉。"""
     if fact.get("superseded"):
         return False
-    if str(fact.get("gate") or "").startswith("skip_"):
+    selected = bool(fact.get("selected", True))
+    gate = str(fact.get("gate") or "")
+    if gate.startswith("skip_") and not selected:
         return False
-    return bool(fact.get("selected", True))
+    return selected
 
 
 def apply_write_gate(facts: list[dict[str, Any]], expert_keys: list, model=None, tok=None, device=None) -> list[dict[str, Any]]:
@@ -62,9 +64,9 @@ def apply_write_gate(facts: list[dict[str, Any]], expert_keys: list, model=None,
                 answer = self_answer(model, tok, device, fact["question"])
             gold = norm(str(fact["answer"]).rstrip("年"))
             if gold and gold in norm(answer):
-                fact["gate"] = "skip_known"
-                fact["gate_reason"] = f"基座已经答对（{answer[:40]}），写门建议跳过"
-                fact["selected"] = False
+                fact["gate"] = "known"
+                fact["gate_reason"] = f"基座已经知道这条（{answer[:40]}），仍会写入并训练"
+                fact["selected"] = True
                 fact["base_answer"] = answer[:80]
                 continue
             fact["base_answer"] = answer[:80]

@@ -90,7 +90,8 @@ class CorrectionTests(unittest.TestCase):
 
         raws = [
             {"entity": "Mira Chen", "attr": "cat's name", "value": "Snow", "statement": "Mira Chen's cat's name is Snow.", "question": "What is Mira Chen's cat's name?", "answer": "Snow"},
-            {"entity": "Mira Chen", "attr": "address", "value": "Qinglan", "statement": "Mira Chen lives in Qinglan.", "question": "Where does Mira Chen live?", "answer": "Qinglan"},
+            {"entity": "Mira Chen", "attr": "where they live", "value": "Qinglan", "statement": "Mira Chen lives in Qinglan.", "question": "Where does Mira Chen live?", "answer": "Qinglan"},
+            {"entity": "Elena Brooks", "attr": "dog's name", "value": "Pepper", "statement": "Elena Brooks's dog's name is Pepper.", "question": "What is Elena Brooks's dog's name?", "answer": "Pepper"},
         ]
         facts = []
         for index, raw in enumerate(raws, start=1):
@@ -98,7 +99,7 @@ class CorrectionTests(unittest.TestCase):
             item["id"] = f"e{index}"
             facts.append(item)
         record = _record()
-        record.entities = ["Mira Chen"]
+        record.entities = ["Mira Chen", "Elena Brooks"]
         record.display_name = "Mira Chen"
         record.fact_memory = {"facts": facts}
         expect = {
@@ -106,6 +107,8 @@ class CorrectionTests(unittest.TestCase):
             "Mira Chen lives in Starport, not Qinglan.": "Starport",
             "What is Mira Chen's cat's name?": None,
             "Where does Mira Chen live?": None,
+            "What is Elena Brooks's dog's name?": None,
+            "Elena Brooks's dog's name is not Pepper, it is Juniper.": "Juniper",
         }
         for text, gold in expect.items():
             got = propose_from_records(text, [record])

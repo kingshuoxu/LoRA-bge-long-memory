@@ -329,6 +329,17 @@ def run_job(home: Path, job_id: str) -> int:
                     shutil.rmtree(best_dir)
                 shutil.copytree(ckpt_dir / "adapter", best_dir)
 
+        from memory_core.paraphrase import attach_gate_questions
+
+        memory_facts = request.get("memory_facts")
+        gate_facts = memory_facts if isinstance(memory_facts, list) and memory_facts else facts
+        attach_gate_questions(gate_facts, model, tok, device)
+        if gate_facts is not facts:
+            donated = {str(item.get("statement") or ""): item.get("gate_questions") or [] for item in gate_facts}
+            for fact in facts:
+                extra = donated.get(str(fact.get("statement") or ""))
+                if extra:
+                    fact["gate_questions"] = list(extra)
         stopped_reason = "max_epochs"
         loss_curve = list(_read_status(job_dir).get("loss_curve") or [])
         _set_stage(job_dir, "train", "active", detail=f"最多 {max_epochs} 轮，学习率 {lr:g}")

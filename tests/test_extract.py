@@ -57,6 +57,9 @@ class ExtractTests(unittest.TestCase):
         home = next(fact for fact in facts if fact["value"] == "Qinglan")
         self.assertEqual(home["attr"], "where they live")
         self.assertIn("Where does Mira Chen live?", home["question"])
+        cello = pattern_extract("Mira Chen's instrument is the cello.")
+        self.assertEqual(cello[0]["value"], "cello")
+        self.assertEqual(pattern_extract("沈星河的乐器是古筝。")[0]["value"], "古筝")
         for fact in facts:
             self.assertTrue(entailed(fact, text))
             trained = expand_training_fact(fact)

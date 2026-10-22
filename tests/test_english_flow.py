@@ -14,13 +14,24 @@ TURNS = [
     "Mira Chen's cat's name is Snow.",
     "Mira Chen lives in Qinglan.",
     "Mira Chen's bicycle color is vermilion.",
+    "Dr. Elena Brooks's dog's name is Juniper.",
 ]
 PRIMARY = [
     ("What is Mira Chen's cat's name?", "Snow"),
     ("Where does Mira Chen live?", "Qinglan"),
     ("What is Mira Chen's bicycle color?", "vermilion"),
+    ("What is Dr. Elena Brooks's dog's name?", "Juniper"),
 ]
-PARAPHRASE = ("What is the cat's name of Mira Chen?", "Snow")
+PARAPHRASE = [
+    ("What is the cat's name of Mira Chen?", "Snow"),
+    ("where does mira chen live?", "Qinglan"),
+    ("What is mira chen's bicycle color?", "vermilion"),
+    ("Where is Mira Chen's home?", "Qinglan"),
+    ("What is Elena Brooks's dog's name?", "Juniper"),
+    ("What is elena brooks's dog's name?", "Juniper"),
+    ("What is the name of the dog Elena Brooks keeps?", "Juniper"),
+    ("What colour is Mira Chen's bicycle?", "vermilion"),
+]
 
 
 def _models() -> Path:
@@ -60,8 +71,8 @@ class EnglishFlowTests(unittest.TestCase):
                 self.assertFalse(result["route"]["fired"], turn)
             preview = service.preview_consolidation([conv["id"]])
             values = {fact["value"] for fact in preview["facts"] if fact.get("selected")}
-            self.assertTrue({"Snow", "Qinglan", "vermilion"} <= values, values)
-            selected = [fact for fact in preview["facts"] if fact.get("selected") and fact["value"] in {"Snow", "Qinglan", "vermilion"}]
+            self.assertTrue({"Snow", "Qinglan", "vermilion", "Juniper"} <= values, values)
+            selected = [fact for fact in preview["facts"] if fact.get("selected") and fact["value"] in {"Snow", "Qinglan", "vermilion", "Juniper"}]
             job = service.start_consolidation([conv["id"]], selected)
             status = _wait(service, job["id"], timeout=2400)
             self.assertEqual(status.get("status"), "done", status.get("error") or status.get("message"))
@@ -77,10 +88,12 @@ class EnglishFlowTests(unittest.TestCase):
                 trace = result.get("recall") or {}
                 self.assertTrue(trace.get("mounted"), trace)
                 self.assertTrue(any(gold == fact.get("value") or gold in str(fact.get("value")) for fact in trace.get("matched_facts") or []), trace.get("matched_facts"))
-            question, gold = PARAPHRASE
-            result = service.send_message(fresh["id"], question)
-            self.assertTrue(result["route"]["fired"], result["route"])
-            self.assertTrue(_hit(result["assistant"]["content"], gold), result["assistant"]["content"])
+            for question, gold in PARAPHRASE:
+                result = service.send_message(fresh["id"], question)
+                answer = result["assistant"]["content"]
+                self.assertTrue(result["route"]["fired"], (question, result["route"], answer))
+                self.assertTrue(_hit(answer, gold), (question, answer))
+                print(f"Q: {question}\nA: {answer}\n", flush=True)
             proposal = service.propose_correction("Mira Chen lives in Starport, not Qinglan.")
             self.assertIsNotNone(proposal)
             self.assertEqual(proposal["new_value"], "Starport")

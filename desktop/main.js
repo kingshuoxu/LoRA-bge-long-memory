@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, Menu } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 let backend = null;
@@ -58,26 +59,49 @@ function waitForReady(child) {
   });
 }
 
+function memoryHome() {
+  if (process.env.LORA_MEMORY_HOME) return process.env.LORA_MEMORY_HOME;
+  if (process.platform === "win32") return path.join(process.env.APPDATA || "", "lora-bge-memory");
+  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "lora-bge-memory");
+  return path.join(os.homedir(), ".local", "share", "lora-bge-memory");
+}
+
+function readLocale() {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(memoryHome(), "settings.json"), "utf8"));
+    return data.locale === "en" ? "en" : "zh-CN";
+  } catch (err) {
+    return "zh-CN";
+  }
+}
+
+let menuLocale = "";
+
 function installMenu() {
+  const locale = readLocale();
+  if (locale === menuLocale && Menu.getApplicationMenu()) return;
+  menuLocale = locale;
+  const en = locale === "en";
   const template = [
     {
-      label: "文件",
-      submenu: [{ role: "quit", label: "退出" }],
+      label: en ? "File" : "文件",
+      submenu: [{ role: "quit", label: en ? "Quit" : "退出" }],
     },
     {
-      label: "编辑",
+      label: en ? "Edit" : "编辑",
       submenu: [
-        { role: "undo", label: "撤销" },
-        { role: "redo", label: "重做" },
+        { role: "undo", label: en ? "Undo" : "撤销" },
+        { role: "redo", label: en ? "Redo" : "重做" },
         { type: "separator" },
-        { role: "cut", label: "剪切" },
-        { role: "copy", label: "复制" },
-        { role: "paste", label: "粘贴" },
-        { role: "selectAll", label: "全选" },
+        { role: "cut", label: en ? "Cut" : "剪切" },
+        { role: "copy", label: en ? "Copy" : "复制" },
+        { role: "paste", label: en ? "Paste" : "粘贴" },
+        { role: "selectAll", label: en ? "Select All" : "全选" },
       ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  if (mainWindow) mainWindow.setTitle(en ? "LoRA Long Memory" : "LoRA 长记忆");
 }
 
 async function createWindow(port) {
@@ -86,7 +110,7 @@ async function createWindow(port) {
     height: 900,
     minWidth: 1100,
     minHeight: 700,
-    title: "LoRA 长记忆",
+    title: readLocale() === "en" ? "LoRA Long Memory" : "LoRA 长记忆",
     backgroundColor: "#070910",
     icon: path.join(findUi(), "icon.png"),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
@@ -119,6 +143,7 @@ app.on("window-all-closed", () => {
 
 app.whenReady().then(async () => {
   installMenu();
+  setInterval(installMenu, 1000);
   const python = findPython();
   const appCode = findAppCode();
   const ui = findUi();

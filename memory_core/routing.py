@@ -61,13 +61,28 @@ def _base(sim: float, expert: str | None, reason: str, entity_pass: bool, fact_p
     )
 
 
+def _entity_hit(entity: str, text: str) -> int:
+    """命中时返回用来比长短的长度。拉丁名忽略大小写和称谓。"""
+    if len(entity) >= 2 and entity in text:
+        return len(entity)
+    ensure_scripts_path()
+    from router import entity_key
+
+    key = entity_key(entity)
+    if not key or any("\u4e00" <= char <= "\u9fff" for char in key):
+        return 0
+    if key in text.casefold():
+        return len(key)
+    return 0
+
+
 def _owner(text: str, experts: list[ExpertRecord]) -> ExpertRecord | None:
     best: tuple[int, ExpertRecord] | None = None
     for expert in experts:
         for entity in expert.entities:
-            if len(entity) >= 2 and entity in text:
-                if best is None or len(entity) > best[0]:
-                    best = (len(entity), expert)
+            length = _entity_hit(entity, text)
+            if length >= 2 and (best is None or length > best[0]):
+                best = (length, expert)
     return None if best is None else best[1]
 
 
@@ -159,7 +174,15 @@ def _gate_metas(expert: ExpertRecord) -> list[dict]:
     return metas
 
 
-def _explicit_decision(expert: ExpertRecord, text: str, tau: float, reason: str) -> tuple[RouteDecision, dict]:
+def _explicit_decision(
+    expert: ExpertRecord,
+    text: str,
+    tau: float,
+    reason: str,
+    model=None,
+    tok=None,
+    device=None,
+) -> tuple[RouteDecision, dict]:
     """点名了新专家之后，只有某条已存事实对得上这句问话才挂载。"""
     entity_pass = _guard(expert, text)
     gate_view = {
@@ -192,6 +215,10 @@ def _explicit_decision(expert: ExpertRecord, text: str, tau: float, reason: str)
             for index in range(bank.n_facts)
         ]
     info = bank.explain(text, tau, metas)
+    if not info["matched"] and model is not None:
+        from memory_core.paraphrase import rescue_near_miss
+
+        info = rescue_near_miss(text, bank, tau, info, model, tok, device)
     gate_view["matched"] = bool(info["matched"])
     gate_view["facts"] = info["facts"]
     if info["matched"]:
@@ -240,7 +267,14 @@ def _blank_trace(reason: str) -> dict:
     }
 
 
-def route_with_trace(text: str, experts: list[ExpertRecord], gate: dict[str, float] | None = None) -> tuple[RouteDecision, dict]:
+def route_with_trace(
+    text: str,
+    experts: list[ExpertRecord],
+    gate: dict[str, float] | None = None,
+    model=None,
+    tok=None,
+    device=None,
+) -> tuple[RouteDecision, dict]:
     """和 route_text 同一次计算。trace 是界面点亮星云用的分数，不另做一套判定。"""
     gate = gate or {"tau": 0.6, "fact_tau": 0.622}
     tau = float(gate.get("tau", 0.6))
@@ -274,7 +308,7 @@ def route_with_trace(text: str, experts: list[ExpertRecord], gate: dict[str, flo
     fact_gate = None
     if owner is not None:
         rows[owner.name]["considered"] = True
-        decision, fact_gate = _explicit_decision(owner, text, fact_tau, "entity_first")
+        decision, fact_gate = _explicit_decision(owner, text, fact_tau, "entity_first", model, tok, device)
     elif legacy:
         for expert in legacy:
             rows[expert.name]["considered"] = True
@@ -292,7 +326,7 @@ def route_with_trace(text: str, experts: list[ExpertRecord], gate: dict[str, flo
         for expert in explicit:
             rows[expert.name]["considered"] = True
         best = max(explicit, key=lambda expert: sims[expert.name])
-        decision, fact_gate = _explicit_decision(best, text, fact_tau, "max_sim")
+        decision, fact_gate = _explicit_decision(best, text, fact_tau, "max_sim", model, tok, device)
     else:
         decision = _base(0.0, None, "no_experts", False, False)
     if decision.fired and decision.expert in rows:
@@ -317,8 +351,15 @@ def route_with_trace(text: str, experts: list[ExpertRecord], gate: dict[str, flo
     return decision, trace
 
 
-def route_text(text: str, experts: list[ExpertRecord], gate: dict[str, float] | None = None) -> RouteDecision:
-    decision, _trace = route_with_trace(text, experts, gate)
+def route_text(
+    text: str,
+    experts: list[ExpertRecord],
+    gate: dict[str, float] | None = None,
+    model=None,
+    tok=None,
+    device=None,
+) -> RouteDecision:
+    decision, _trace = route_with_trace(text, experts, gate, model, tok, device)
     return decision
 
 

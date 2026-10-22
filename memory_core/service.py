@@ -44,6 +44,20 @@ class ServiceError(RuntimeError):
     pass
 
 
+def _conversation_title(content: str) -> str:
+    """中文按字数截断。英文在词边界截断，避免标题停在单词中间。"""
+    text = " ".join(content.split())
+    if not text:
+        return text
+    if has_cjk(text) or len(text) <= 24:
+        return text[:24]
+    cut = text[:48]
+    space = cut.rfind(" ")
+    if space >= 8:
+        return cut[:space]
+    return cut
+
+
 def _stage_skeleton() -> list[dict[str, Any]]:
     titles = [
         ("select", "选择对话"),
@@ -187,6 +201,14 @@ class MemoryService:
         ensure_models(self.models_dir)
         bind_bge(self.models_dir)
 
+    def _ui_locale(self) -> str:
+        from memory_core.settings import load_settings
+
+        return load_settings(self.home).get("locale") or "zh-CN"
+
+    def _err(self, zh: str, en: str) -> str:
+        return en if self._ui_locale() == "en" else zh
+
     def health(self) -> dict[str, Any]:
         status = read_status(self.models_dir)
         if models_ready(self.models_dir):
@@ -243,7 +265,15 @@ class MemoryService:
         gate_dirs = [self.experts_dir]
         if self.repo_experts is not None:
             gate_dirs.append(self.repo_experts)
-        return route_text(text, self.expert_records(), load_merged_gate(gate_dirs))
+        self.chat.ensure()
+        return route_text(
+            text,
+            self.expert_records(),
+            load_merged_gate(gate_dirs),
+            model=self.chat.model,
+            tok=self.chat.tok,
+            device=self.chat.device,
+        )
 
     def send_message(self, conv_id: str, content: str) -> dict[str, Any]:
         content = content.strip()
@@ -261,16 +291,33 @@ class MemoryService:
             title = self.convos.get(conv_id)["title"]
             user_msg = self.convos.add_message(conv_id, "user", content)
             if title in {"", "新对话", "New chat"}:
-                self.convos.set_title(conv_id, content[:24])
-            proposal = propose_from_records(content, self.expert_records())
+                self.convos.set_title(conv_id, _conversation_title(content))
+            self.chat.ensure()
+            proposal = propose_from_records(
+                content,
+                self.expert_records(),
+                model=self.chat.model,
+                tok=self.chat.tok,
+                device=self.chat.device,
+            )
             if proposal is not None:
-                note = f"要把「{proposal['old_statement']}」改成「{proposal['new_statement']}」吗？"
+                english = self._ui_locale() == "en"
+                if english:
+                    note = f"Change “{proposal['old_statement']}” to “{proposal['new_statement']}”?"
+                    reason_text = "This turn is confirming a correction, so no expert was mounted"
+                    wording = "The correction is not saved yet. Memory was not used this turn."
+                    expert_label = "Correction"
+                else:
+                    note = f"要把「{proposal['old_statement']}」改成「{proposal['new_statement']}」吗？"
+                    reason_text = "这一轮在确认纠正，没有挂载专家"
+                    wording = "纠正还没有写入。这一轮没有调用记忆。"
+                    expert_label = "纠正"
                 recall = {
                     "fired": False,
                     "abstain": True,
                     "mounted": False,
                     "reason": "correction_proposal",
-                    "reason_text": "这一轮在确认纠正，没有挂载专家",
+                    "reason_text": reason_text,
                     "expert": proposal["expert"],
                     "mounted_expert": None,
                     "mounted_label": "基座",
@@ -279,7 +326,7 @@ class MemoryService:
                     "experts": [],
                     "fact_gate": None,
                     "matched_facts": [],
-                    "wording": "纠正还没有写入。这一轮没有调用记忆。",
+                    "wording": wording,
                 }
                 extra = json.dumps(
                     {"kind": "correction_proposal", "proposal": proposal, "trace": recall},
@@ -290,7 +337,7 @@ class MemoryService:
                     "assistant",
                     note,
                     expert=proposal["expert"],
-                    expert_label="纠正",
+                    expert_label=expert_label,
                     sim=proposal.get("score"),
                     fired=False,
                     reason="correction_proposal",
@@ -300,7 +347,7 @@ class MemoryService:
                     "fired": False,
                     "expert": proposal["expert"],
                     "sim": proposal.get("score") or 0,
-                    "label": "纠正",
+                    "label": expert_label,
                     "reason": "correction_proposal",
                     "entity_pass": True,
                     "fact_pass": False,
@@ -310,7 +357,14 @@ class MemoryService:
             gate_dirs = [self.experts_dir]
             if self.repo_experts is not None:
                 gate_dirs.append(self.repo_experts)
-            decision, recall = route_with_trace(content, experts, load_merged_gate(gate_dirs))
+            decision, recall = route_with_trace(
+                content,
+                experts,
+                load_merged_gate(gate_dirs),
+                model=self.chat.model,
+                tok=self.chat.tok,
+                device=self.chat.device,
+            )
             self.chat.sync_adapters(experts)
             if decision.fired:
                 record = next((item for item in experts if item.name == decision.expert), None)
@@ -728,25 +782,36 @@ class MemoryService:
 
     def propose_correction(self, text: str = "", fact_id: str | None = None, new_value: str | None = None) -> dict | None:
         self.ensure_ready()
-        return propose_from_records(text, self.expert_records(), fact_id=fact_id, new_value=new_value)
+        if fact_id and new_value:
+            return propose_from_records(text, self.expert_records(), fact_id=fact_id, new_value=new_value)
+        self.chat.ensure()
+        return propose_from_records(
+            text,
+            self.expert_records(),
+            fact_id=fact_id,
+            new_value=new_value,
+            model=self.chat.model,
+            tok=self.chat.tok,
+            device=self.chat.device,
+        )
 
     def commit_correction(self, proposal: dict, conversation_id: str | None = None) -> dict[str, Any]:
         if self.job_running() or self._preview_running():
-            raise ServiceError("正在巩固记忆，请等这一轮结束")
+            raise ServiceError(self._err("正在巩固记忆，请等这一轮结束", "Consolidation is running. Wait for it to finish."))
         expert_name = str(proposal.get("expert") or "")
         fact_id = str(proposal.get("fact_id") or "")
         new_value = str(proposal.get("new_value") or "").strip()
         source_text = str(proposal.get("source_text") or "")
         if not expert_name or not fact_id or not new_value:
-            raise ServiceError("纠正缺少事实或新取值")
+            raise ServiceError(self._err("纠正缺少事实或新取值", "The correction is missing a fact or a new value"))
         compact_value = "".join(new_value.split())
         compact_source = "".join(source_text.split())
-        if compact_source and compact_value not in compact_source:
-            raise ServiceError("新取值不在原来的那句话里")
+        if compact_source and compact_value not in compact_source and compact_value.casefold() not in compact_source.casefold():
+            raise ServiceError(self._err("新取值不在原来的那句话里", "The new value is not in the original sentence"))
         records = {record.name: record for record in self.expert_records()}
         record = records.get(expert_name)
         if record is None or not record.writable or not record.fact_memory:
-            raise ServiceError("这条记忆不能改")
+            raise ServiceError(self._err("这条记忆不能改", "This memory cannot be edited"))
         facts = [dict(fact) for fact in record.fact_memory.get("facts") or []]
         target = None
         for index, fact in enumerate(facts):
@@ -757,12 +822,12 @@ class MemoryService:
                     fact["id"] = current_id
                 break
         if target is None:
-            raise ServiceError("找不到要改的事实")
+            raise ServiceError(self._err("找不到要改的事实", "The fact to correct was not found"))
         if target.get("superseded"):
-            raise ServiceError("这条事实已经替换过了")
+            raise ServiceError(self._err("这条事实已经替换过了", "This fact was already replaced"))
         old_value = str(target.get("value") or target.get("answer") or "")
         if new_value == old_value:
-            raise ServiceError("新取值和原来一样")
+            raise ServiceError(self._err("新取值和原来一样", "The new value is the same as the old one"))
         new_id = "c" + uuid.uuid4().hex[:8]
         target["superseded"] = True
         target["superseded_by"] = new_id

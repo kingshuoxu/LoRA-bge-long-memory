@@ -1,4 +1,4 @@
-/* 全屏深空背景。一趟片元着色器，训练时降到大约 12 帧并减弱星云。 */
+/* 全屏深空背景。训练时停掉动画；SwiftShader 只画一帧静态银河。 */
 (function () {
   const canvas = document.getElementById("sky");
   if (!canvas) return;
@@ -146,6 +146,10 @@
   let running = true;
   let last = 0;
   const start = performance.now();
+  const debug = gl.getExtension("WEBGL_debug_renderer_info");
+  const rendererName = debug ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) || "") : "";
+  const software = /swiftshader|llvmpipe|softpipe/i.test(rendererName);
+  const staticSky = reduce || software;
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, mode === "dim" ? 1 : 1.25);
@@ -161,25 +165,30 @@
   function draw(now) {
     resize();
     gl.uniform2f(uRes, canvas.width, canvas.height);
-    gl.uniform1f(uTime, reduce ? 2.4 : (now - start) / 1000);
-    gl.uniform1f(uDim, mode === "dim" ? 1 : 0);
+    const frozen = staticSky || mode === "dim";
+    gl.uniform1f(uTime, frozen ? 2.4 : (now - start) / 1000);
+    gl.uniform1f(uDim, frozen ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   function frame(now) {
     if (!running) return;
+    if (staticSky || mode === "dim") {
+      draw(now);
+      running = false;
+      return;
+    }
     requestAnimationFrame(frame);
     if (document.hidden) return;
-    const gap = mode === "dim" ? 84 : 16;
-    if (!reduce && now - last < gap) return;
+    if (now - last < 16) return;
     last = now;
     draw(now);
-    if (reduce) running = false;
   }
 
   function resume() {
-    if (reduce) {
+    if (staticSky || mode === "dim") {
       draw(performance.now());
+      running = false;
       return;
     }
     if (!running) {
@@ -193,7 +202,6 @@
     setMode(next) {
       mode = next === "dim" ? "dim" : "full";
       resume();
-      draw(performance.now());
     },
   };
   requestAnimationFrame(frame);

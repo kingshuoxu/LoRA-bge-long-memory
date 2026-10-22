@@ -70,10 +70,19 @@ def _peel_entity(entity: str, attr: str) -> tuple[str, str]:
     return entity, attr
 
 
+def _normalize_value(value: str) -> str:
+    """英文取值去掉开头的冠词。中文取值不动。"""
+    value = value.strip("。．. ")
+    if has_cjk(value):
+        return value
+    stripped = re.sub(r"^(?:the|a|an)\s+", "", value, count=1, flags=re.IGNORECASE).strip()
+    return stripped or value
+
+
 def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[str, Any] | None:
     entity = entity.strip()
     attr = attr.strip("的").strip()
-    value = value.strip("。．. ")
+    value = _normalize_value(value)
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
     if _looks_like_question(raw):

@@ -10,13 +10,67 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import re
+
 import torch
 
 from memory_core.paths import ensure_scripts_path
+from memory_core.prompts import has_cjk
 
 CALIBRATED_TAU = 0.622
+# 问句和某条已存问法几乎重合时，属性短词不能再否决。
+# 0.91 卡在英文「狗的名字」改写 0.926 和「别人的狗」0.891 之间。
+NEAR_TAU = 0.91
+# 中文属性阈值卡在误挂的咖啡 0.676、狗 0.632 和真改写「住哪儿」0.698 之间。
+ATTR_TAU_ZH = 0.685
+# 英文属性阈值卡在「别人的猫/狗」0.767–0.784 之上。大小写折成同一句后，
+# 训练问句走 NEAR_TAU，不再靠这条线。
+ATTR_TAU_EN = 0.80
 MASK = "某"
 VALUE_MASK = "某值"
+
+
+def attr_tau(query: str) -> float:
+    """属性短词和问句不是同一个尺度，中英各自校准。"""
+    if has_cjk(query):
+        return ATTR_TAU_ZH
+    return ATTR_TAU_EN
+
+
+def _fold_gate_text(text: str) -> str:
+    """拉丁字母忽略大小写。掩码「某」是汉字，不能靠整句是否含汉字来判断。"""
+    return "".join(char.casefold() if char.isascii() else char for char in text)
+
+
+def _entity_surfaces(name: str) -> list[str]:
+    surfaces = []
+    raw = str(name or "").strip()
+    if raw:
+        surfaces.append(raw)
+    ensure_scripts_path()
+    from router import canonicalize_entity
+
+    canon = canonicalize_entity(raw)
+    if canon and canon not in surfaces:
+        surfaces.append(canon)
+    return surfaces
+
+
+def entity_mentioned(name: str, query: str) -> bool:
+    """问句里是否点了这个实体。拉丁名忽略大小写、称谓和所有格。"""
+    if not name or not query:
+        return False
+    if name in query:
+        return True
+    ensure_scripts_path()
+    from router import entity_key
+
+    key = entity_key(name)
+    if not key:
+        return False
+    if has_cjk(key):
+        return key in query
+    return key in query.casefold()
 
 
 def semantic_tau(gate: dict | None) -> float:
@@ -32,23 +86,34 @@ def semantic_tau(gate: dict | None) -> float:
     return value
 
 
+def _replace_surface(text: str, surface: str, mask: str) -> str:
+    if not surface:
+        return text
+    if has_cjk(surface):
+        return text.replace(surface, mask)
+    pattern = re.compile(r"(?<![A-Za-z])" + re.escape(surface) + r"(?![A-Za-z])", re.IGNORECASE)
+    return pattern.sub(mask, text)
+
+
 def mask_fact(text: str, entity: str, value: str, mask: str = MASK, value_mask: str = VALUE_MASK) -> str:
     value = str(value or "").rstrip("年")
     pieces = []
-    if entity:
-        pieces.append((entity, mask))
+    for surface in _entity_surfaces(entity):
+        pieces.append((surface, mask))
     if value:
         pieces.append((value, value_mask))
     for src, dst in sorted(pieces, key=lambda item: len(item[0]), reverse=True):
-        text = text.replace(src, dst)
-    return text
+        text = _replace_surface(text, src, dst)
+    return _fold_gate_text(text)
 
 
 def mask_query(query: str, entities: list[str], mask: str = MASK) -> str:
-    for name in sorted({entity for entity in entities if entity}, key=len, reverse=True):
-        if name in query:
-            query = query.replace(name, mask)
-    return query
+    surfaces = []
+    for name in {entity for entity in entities if entity}:
+        surfaces.extend(_entity_surfaces(name))
+    for surface in sorted(set(surfaces), key=len, reverse=True):
+        query = _replace_surface(query, surface, mask)
+    return _fold_gate_text(query)
 
 
 def _fact_value(fact: dict) -> str:
@@ -73,6 +138,9 @@ def _masked_fact_texts(fact: dict) -> list[str]:
             raws.append(str(qa["q"]))
     if fact.get("question"):
         raws.append(str(fact["question"]))
+    for question in fact.get("gate_questions") or []:
+        if question:
+            raws.append(str(question))
     seen: set[str] = set()
     texts: list[str] = []
     for raw in raws:
@@ -90,12 +158,13 @@ class FactBank:
     question_owner: torch.Tensor
     attr_vecs: torch.Tensor
     attrs: list[str]
+    fact_entities: list[str] | None = None
 
     @property
     def n_facts(self) -> int:
         return len(self.attrs)
 
-    def explain(self, query: str, tau: float = CALIBRATED_TAU, metas: list[dict] | None = None) -> dict:
+    def explain(self, query: str, tau: float = CALIBRATED_TAU, metas: list[dict] | None = None, attr_floor: float | None = None) -> dict:
         """和 allows 同一次比较，并给出每条事实的问句分、属性分。
 
         metas 与事实银行的下标对齐。passed 只标闸门真正接受的那条，
@@ -113,6 +182,11 @@ class FactBank:
         ensure_scripts_path()
         from router import embed
 
+        names = list(self.fact_entities or [])
+        if len(names) < self.n_facts:
+            names.extend([""] * (self.n_facts - len(names)))
+        mentioned = [index for index, name in enumerate(names) if entity_mentioned(name, query)]
+        eligible = set(mentioned) if mentioned else set(range(self.n_facts))
         query_vec = embed([mask_query(query, self.entities)])[0]
         owns: list[float] = []
         attr_scores: list[float] = []
@@ -120,11 +194,11 @@ class FactBank:
             chosen = self.question_owner == index
             owns.append(float((self.question_vecs[chosen] @ query_vec).max()))
             attr_scores.append(float(self.attr_vecs[index] @ query_vec))
-        best = max(range(self.n_facts), key=lambda index: owns[index])
+        best = max(eligible, key=lambda index: owns[index])
         best_block = self.question_vecs[self.question_owner == best]
         duplicated = (self.question_vecs @ best_block.T).max(dim=1).values >= 0.999
         other = -1.0
-        for index in range(self.n_facts):
+        for index in eligible:
             if index == best:
                 continue
             usable = (self.question_owner == index) & ~duplicated
@@ -132,12 +206,18 @@ class FactBank:
                 continue
             other = max(other, float((self.question_vecs[usable] @ query_vec).max()))
         own = owns[best]
-        ok = own >= tau and own + 1e-6 >= other and attr_scores[best] >= tau
+        floor = attr_tau(query) if attr_floor is None else float(attr_floor)
+        near = own >= NEAR_TAU
+        ok = own + 1e-6 >= other and (near or (own >= tau and attr_scores[best] >= floor))
         facts = []
         for index in range(self.n_facts):
             mask = self.question_owner == index
             near = index != best and bool(mask.any()) and bool(duplicated[mask].all())
-            passed = bool(ok and (index == best or (near and owns[index] >= tau and attr_scores[index] >= tau)))
+            passed = bool(
+                index in eligible
+                and ok
+                and (index == best or (near and owns[index] >= tau and attr_scores[index] >= floor))
+            )
             meta = metas[index] if metas and index < len(metas) else {}
             facts.append({
                 "fact_id": str(meta.get("fact_id") or ""),
@@ -166,7 +246,7 @@ class FactBank:
         """问句是否对得上某一条已存事实。
 
         返回 (对得上, 最像的那条事实的问句相似度, 那条事实的属性名)。
-        对得上要求：问句相似度 ≥ τ，且不低于其他不同事实，属性短语相似度也 ≥ τ。
+        对得上要求：问句不低于其他事实，并且要么几乎重合于已存问句，要么问句和属性都过各自的阈值。
         """
         info = self.explain(query, tau)
         return info["matched"], info["best_question_sim"], info["matched_attr"]
@@ -181,6 +261,7 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
     texts: list[str] = []
     owners: list[int] = []
     attrs: list[str] = []
+    fact_entities: list[str] = []
     attr_sources: list[str] = []
     for fact in facts:
         masked = _masked_fact_texts(fact)
@@ -193,6 +274,7 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
         owners.extend([len(attrs)] * len(masked))
         texts.extend(masked)
         attrs.append(attr)
+        fact_entities.append(entity)
         attr_sources.append(attr if attr else masked[0])
     if not texts:
         return None
@@ -202,6 +284,7 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
         question_owner=torch.tensor(owners, dtype=torch.long),
         attr_vecs=embed(attr_sources).cpu(),
         attrs=attrs,
+        fact_entities=fact_entities,
     )
 
 
@@ -213,6 +296,7 @@ def save_fact_bank(path: Path, bank: FactBank) -> None:
             "question_vecs": bank.question_vecs.cpu().float(),
             "question_owner": bank.question_owner.cpu().long(),
             "attr_vecs": bank.attr_vecs.cpu().float(),
+            "gate_norm": torch.tensor(1),
         },
         path,
     )
@@ -223,10 +307,14 @@ def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
     if not path.is_file():
         return None
     data = torch.load(path, weights_only=True)
+    latin = any(fact.get("entity") and not has_cjk(str(fact.get("entity"))) for fact in facts)
+    if latin and int(data.get("gate_norm") or 0) != 1:
+        return None
     question_vecs = data["question_vecs"].float().cpu()
     question_owner = data["question_owner"].long().cpu()
     attr_vecs = data["attr_vecs"].float().cpu()
     attrs: list[str] = []
+    fact_entities: list[str] = []
     entities: list[str] = []
     expected = 0
     for fact in facts:
@@ -237,6 +325,7 @@ def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
         if entity and entity not in entities:
             entities.append(entity)
         attrs.append(str(fact.get("attr") or "").strip())
+        fact_entities.append(entity)
         expected += len(masked)
     if len(attrs) != int(attr_vecs.shape[0]) or expected != int(question_vecs.shape[0]):
         return None
@@ -248,6 +337,7 @@ def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
         question_owner=question_owner,
         attr_vecs=attr_vecs,
         attrs=attrs,
+        fact_entities=fact_entities,
     )
 
 

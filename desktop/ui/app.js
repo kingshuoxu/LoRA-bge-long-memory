@@ -102,7 +102,8 @@ function renderJobBar() {
     return;
   }
   bar.hidden = false;
-  const loss = job.loss == null ? "" : ` · loss ${fmtLoss(job.loss)}`;
+  const shownLoss = job.best_loss != null ? job.best_loss : job.loss;
+  const loss = shownLoss == null ? "" : ` · loss ${fmtLoss(shownLoss)}`;
   const eta = job.status === "running" && job.eta_seconds != null ? ` · ${formatEta(job.eta_seconds)}` : "";
   let action = "";
   if (job.status === "running") action = `<button id="job-cancel" type="button">${esc(t("action.cancel"))}</button>`;
@@ -439,6 +440,7 @@ function bannerText(trace) {
 function showRecallBanner(trace) {
   const banner = $("recall-banner");
   banner.hidden = false;
+  banner.dataset.live = trace && trace.mounted ? "1" : "";
   banner.classList.toggle("idle", !trace || !trace.mounted);
   banner.textContent = bannerText(trace);
 }
@@ -908,10 +910,13 @@ function bindLanguage() {
     setView(state.view);
     renderJobBar();
     renderConversations();
+    if (state.recall) showRecallBanner(state.recall);
+    else if (!$("recall-banner").hidden) $("recall-banner").textContent = t("banner.idle");
     if (state.view === "chat" && state.currentId) openConversation(state.currentId, false).catch(showError);
     else if (state.view === "memory") loadMemory().catch(showError);
     else if (state.view === "nebula") openNebula().catch(showError);
     else if (state.view === "consolidate") renderStages();
+    if (state.recall && state.nebula && state.nebula.highlight) state.nebula.highlight(state.recall);
     refreshHealth().catch(() => {});
   });
 }

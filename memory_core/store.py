@@ -228,26 +228,43 @@ def next_batch_id(experts_dir: Path) -> int:
 
 
 def guard_entity_aliases(entities: list[str], texts: list[str]) -> list[str]:
-    """登记守卫能认的实体写法。
+    """只登记干净的实体名。
 
-    scripts/router.py 的 extract_query_entity 会把「最喜欢」这类修饰词吞进实体名，
-    例如「沈星河最喜欢的茶是什么？」抽出的是「沈星河最喜欢」。守卫要精确相等。
-    这里把以已登记实体开头的较长写法补进名册，不改 router.py，展示名仍用原实体。
+    「沈星河最喜欢」「沈星河住在哪里」这类把修饰词吞进名字的写法不进名册，
+    否则「喜」会被当成名字的一部分，守卫对不上「沈星河喜欢喝什么茶？」。
+    问句里抽出的名字只有在规范化之后等于已登记实体时才算别名，并且仍只保留干净写法。
     """
-    canonical = [entity for entity in entities if entity]
-    if not canonical or not texts:
-        return list(canonical)
     ensure_scripts_path()
-    from router import extract_query_entity
+    from router import canonicalize_entity, entity_key, extract_query_entity
 
-    merged = list(canonical)
-    for text in texts:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+
+    def accept(name: str) -> None:
+        key = entity_key(name)
+        canon = canonicalize_entity(name)
+        if not key or not canon or len(canon) < 2 or key in seen:
+            return
+        seen.add(key)
+        if re_cjk(canon):
+            cleaned.append(canon)
+        else:
+            cleaned.append(canon)
+
+    def re_cjk(text: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+    for entity in entities:
+        accept(str(entity or ""))
+    for text in texts or []:
         found = extract_query_entity(str(text))
-        if not found or found in merged:
+        if not found:
             continue
-        if any(found.startswith(entity) and len(found) > len(entity) for entity in canonical):
-            merged.append(found)
-    return merged
+        key = entity_key(found)
+        if key and key in seen:
+            continue
+        # 问句里的新名字不是这条事实的实体，不另登记。
+    return cleaned
 
 
 def register_expert(

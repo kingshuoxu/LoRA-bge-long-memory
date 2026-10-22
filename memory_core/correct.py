@@ -1,201 +1,34 @@
-"""把一句用户的话对上已存事实，并抽出要改成的取值。
+"""判断一句用户的话是不是在纠正已存事实。
 
-不看「不是 / 应该 / 不对」这类词表。先用 bge 对上某条事实的陈述或问句，
-再把原句里已经被这条事实覆盖掉的字去掉，剩下的片段才可能是新取值。
-片段若更像这条事实自己的问句里多出来的部分（什么、哪里），就当它是提问，不改。
-新陈述必须比旧陈述更贴近把旧取值遮掉之后的原话。
+不看「不是 / 应该 / did / like」这类词表。本地模型把这一轮收成 JSON：
+是不是纠正、实体、属性、新取值。新取值必须是原话里的一段。
+再交给 bge 事实闸，对不上已存事实就不当成纠正。
+星云里点名 fact_id 和新取值的那条路径不经过模型，陈述照旧替换。
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
-from memory_core.fact_span import CALIBRATED_TAU, mask_fact
-
-MATCH_TAU = 0.70
-MATCH_MARGIN = 0.03
-VALUE_GAIN = 0.04
-WH_TAU = CALIBRATED_TAU
-# 改写后的陈述必须比这条事实已经存下的问句更贴近原话。提问会更靠近那些问句。
-QUESTION_MARGIN = 0.06
-# 原话要靠近这条事实自己的属性。只是提到了同一个人、却在问别的事，不改这条。
-ATTR_SIM = 0.46
-
-
-def _norm_space(text: str) -> str:
-    return re.sub(r"\s+", "", text or "")
-
-
-def _questions(fact: dict) -> list[str]:
-    found: list[str] = []
-    for qa in fact.get("qa") or []:
-        question = str(qa.get("q") or "").strip()
-        if question and question not in found:
-            found.append(question)
-    primary = str(fact.get("question") or "").strip()
-    if primary and primary not in found:
-        found.append(primary)
-    return found
-
-
-def _known_phrases(fact: dict) -> list[str]:
-    phrases = [
-        str(fact.get("statement") or ""),
-        str(fact.get("entity") or ""),
-        str(fact.get("attr") or ""),
-        str(fact.get("value") or ""),
-        str(fact.get("answer") or ""),
-    ]
-    phrases.extend(_questions(fact))
-    return [phrase for phrase in phrases if len(phrase) >= 2]
-
-
-def _leftover(text: str, known: list[str]) -> list[str]:
-    """去掉已知短语之后还剩下的连续片段。"""
-    masked = text
-    for phrase in sorted({item for item in known if len(item) >= 2}, key=len, reverse=True):
-        masked = masked.replace(phrase, "\n")
-    return [piece for piece in re.findall(r"[0-9A-Za-z\u4e00-\u9fff]{2,}", masked)]
-
-
-def _glue(fact: dict) -> str:
-    statement = str(fact.get("statement") or "")
-    value = str(fact.get("value") or fact.get("answer") or "")
-    if value and value in statement:
-        left = statement.split(value, 1)[0]
-        return left[-1:] if left else ""
-    return ""
-
-
-def _echoes_known(tail: str, known: list[str]) -> bool:
-    """和实体、属性几乎重合、只多一个字的片段不是新取值。"""
-    for phrase in known:
-        if len(phrase) < 2:
-            continue
-        common = 0
-        for left, right in zip(tail, phrase):
-            if left != right:
-                break
-            common += 1
-        if common >= 2 and common >= len(tail) - 1:
-            return True
-    return False
-
-
-def _fragment_hits(fragment: str, tail: str) -> bool:
-    """问句残片落在候选取值里。英文长词里碰巧出现的两字母不算。"""
-    if fragment not in tail:
-        return False
-    if tail.isascii() and fragment.isascii() and len(fragment) < len(tail):
-        return False
-    return True
-
-
-def _same_token(tail: str, fragment: str) -> bool:
-    """两个片段是否在说同一个词。单字重合不算，避免英文向量挤在一起时误伤。"""
-    if len(tail) < 2 or len(fragment) < 2:
-        return False
-    return tail in fragment or fragment in tail
-
-
-def _peel(run: str, known_blob: str) -> str:
-    """只剥掉粘在片段开头的非拉丁字符。拉丁词的首字母经常也出现在实体里，剥掉会变成残词。"""
-    peeled = run
-    while len(peeled) > 2 and peeled[0] in known_blob and not peeled[0].isascii():
-        peeled = peeled[1:]
-    return peeled
-
-
-def _candidate_tails(text: str, fact: dict) -> list[tuple[str, str]]:
-    """每个候选取值配上它所在的那一小句，后面用这一小句而不是整段话来打分。"""
-    known = _known_phrases(fact)
-    value = str(fact.get("value") or fact.get("answer") or "")
-    glue = _glue(fact)
-    blob = "".join(known)
-    tails: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    clauses = [piece.strip() for piece in re.split(r"[，,。！？；;\n]+", text) if piece.strip()]
-    for clause in clauses or [text]:
-        for run in _leftover(clause, known):
-            if value and value in run:
-                run = run.replace(value, "")
-            tail = run
-            options: list[str] = []
-            if glue and glue in run:
-                tail = run.rsplit(glue, 1)[-1].strip()
-                if len(tail) >= 2:
-                    options.append(tail)
-                else:
-                    # 「暮雪才是名字」这类说法里，新取值在「是」前面。
-                    head = run.split(glue, 1)[0].strip()
-                    for length in range(2, len(head) + 1):
-                        options.append(head[:length])
-            else:
-                options.append(_peel(run, blob).strip())
-            for tail in options:
-                if len(tail) < 2 or len(tail) > 16:
-                    continue
-                if value and (tail == value or value in tail):
-                    continue
-                if _echoes_known(tail, known):
-                    continue
-                if tail not in clause or tail in seen:
-                    continue
-                seen.add(tail)
-                tails.append((tail, clause))
-    return tails
-
-
-def _wh_fragments(fact: dict) -> list[str]:
-    """问句里比陈述多出来的字。候选取值若还带着这些字，它仍是在提问。"""
-    fragments: list[str] = []
-    for piece in _wh_texts(fact):
-        for length in range(2, len(piece) + 1):
-            for start in range(len(piece) - length + 1):
-                frag = piece[start : start + length]
-                if frag not in fragments:
-                    fragments.append(frag)
-    return fragments
-
-
-def _wh_texts(fact: dict) -> list[str]:
-    known = [
-        str(fact.get("statement") or ""),
-        str(fact.get("entity") or ""),
-        str(fact.get("attr") or ""),
-        str(fact.get("value") or ""),
-        str(fact.get("answer") or ""),
-    ]
-    texts: list[str] = []
-    for question in _questions(fact):
-        for piece in _leftover(question, known):
-            if piece not in texts:
-                texts.append(piece)
-    return texts
-
-
-def _shorter_prefix(passing: list[tuple[float, int, str]]) -> tuple[float, int, str]:
-    """「暮雪才是」和「暮雪」都说得通时，留更短、仍然贴着原句的那一个。"""
-    kept = list(passing)
-    for score, position, tail in passing:
-        for other_score, _other_pos, other in passing:
-            if other != tail and tail.startswith(other) and len(other) < len(tail) and other_score >= score - 0.04:
-                kept = [item for item in kept if item[2] != tail]
-                break
-    return max(kept, key=lambda item: (item[0], item[1]))
+from memory_core.prompts import has_cjk
 
 
 def _rewrite(fact: dict, new_value: str) -> str:
     statement = str(fact.get("statement") or "").strip()
     old = str(fact.get("value") or fact.get("answer") or "")
     if old and old in statement:
-        rewritten = statement.replace(old, new_value)
+        rewritten = statement.replace(old, new_value, 1)
     else:
         entity = str(fact.get("entity") or "")
         attr = str(fact.get("attr") or "")
-        rewritten = f"{entity}的{attr}是{new_value}。" if attr else f"{entity}是{new_value}。"
+        english = not has_cjk(f"{entity}{attr}{statement}{new_value}")
+        if english:
+            rewritten = f"{entity}'s {attr} is {new_value}." if attr else f"{entity} is {new_value}."
+        else:
+            rewritten = f"{entity}的{attr}是{new_value}。" if attr else f"{entity}是{new_value}。"
     if rewritten and rewritten[-1] not in "。！？.!?":
-        rewritten += "。" if re.search(r"[\u4e00-\u9fff]", rewritten) else "."
+        rewritten += "。" if has_cjk(rewritten) else "."
     return rewritten
 
 
@@ -221,11 +54,229 @@ def _fact_key(record: Any, index: int, fact: dict) -> str:
     return f"{record.name}#{index}"
 
 
+def _generate(model, tok, device, prompt: str, system: str) -> str:
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
+    ]
+    rendered = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tok(rendered, return_tensors="pt")
+    inputs = {key: value.to(device) for key, value in inputs.items()}
+    ctx = model.disable_adapter() if hasattr(model, "disable_adapter") else _nullctx()
+    with ctx:
+        import torch
+
+        with torch.no_grad():
+            out = model.generate(
+                **inputs,
+                max_new_tokens=160,
+                do_sample=False,
+                pad_token_id=tok.eos_token_id,
+            )
+    return tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+
+def _parse_json(text: str) -> dict | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    data = json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+                return data if isinstance(data, dict) else None
+    return None
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().casefold()
+    return text in {"true", "yes", "1"}
+
+
+def _surface_value(text: str, value: str) -> str | None:
+    """新取值必须是原话里的一段。英文忽略大小写，但返回原话里的写法。"""
+    compact_src = []
+    index_of = []
+    for index, char in enumerate(text):
+        if char.isspace():
+            continue
+        compact_src.append(char)
+        index_of.append(index)
+    compact = "".join(compact_src)
+    needle = "".join(value.split())
+    if not needle:
+        return None
+    at = compact.find(needle)
+    if at < 0 and not has_cjk(needle):
+        at = compact.casefold().find(needle.casefold())
+    if at < 0:
+        return None
+    start = index_of[at]
+    end = index_of[at + len(needle) - 1] + 1
+    return text[start:end]
+
+
+def classify_correction(text: str, model, tok, device) -> dict | None:
+    """让本地模型判断这一轮是不是纠正，并抽出实体、属性、新取值。"""
+    english = not has_cjk(text)
+    if english:
+        system = "You are a helpful assistant."
+        prompt = (
+            "Reply with one JSON object and nothing else.\n"
+            "correction is true only when the message replaces a stored value.\n"
+            "A question has correction false and an empty new_value.\n"
+            "Copy entity, attribute, and new_value from the message.\n"
+            "Example message: Ada Liu's bicycle color is not blue, it is green.\n"
+            '{"correction": true, "entity": "Ada Liu", "attribute": "bicycle color", "new_value": "green"}\n'
+            "Example message: What is Ada Liu's bicycle color?\n"
+            '{"correction": false, "entity": "Ada Liu", "attribute": "bicycle color", "new_value": ""}\n\n'
+            f"Message:\n{text}\n"
+        )
+    else:
+        system = "你是助手。"
+        prompt = (
+            "只输出一个 JSON，不要其他文字。\n"
+            "只有这句话在替换一条已经记住的取值时，correction 才是 true。\n"
+            "提问时 correction 为 false，new_value 为空。\n"
+            "entity 是被谈论的人，new_value 是要改成的新取值，从原话里抄，不能是人名本身。\n"
+            "例子：林晚舟的早餐不是豆浆，是豆腐脑。\n"
+            '{"correction": true, "entity": "林晚舟", "attribute": "早餐", "new_value": "豆腐脑"}\n'
+            "例子：记错了，林晚舟的猫叫小满。\n"
+            '{"correction": true, "entity": "林晚舟", "attribute": "猫", "new_value": "小满"}\n'
+            "例子：小满才是林晚舟的猫的名字，不是豆沙。\n"
+            '{"correction": true, "entity": "林晚舟", "attribute": "猫的名字", "new_value": "小满"}\n'
+            "例子：林晚舟最喜欢的茶其实是岩茶。\n"
+            '{"correction": true, "entity": "林晚舟", "attribute": "最喜欢的茶", "new_value": "岩茶"}\n'
+            "例子：林晚舟的早餐是什么？\n"
+            '{"correction": false, "entity": "林晚舟", "attribute": "早餐", "new_value": ""}\n\n'
+            f"原话：\n{text}\n"
+        )
+    try:
+        raw = _generate(model, tok, device, prompt, system)
+    except Exception:
+        return None
+    data = _parse_json(raw)
+    if not data:
+        return None
+    entity = str(data.get("entity") or "").strip()
+    attribute = str(data.get("attribute") or data.get("attr") or "").strip()
+    new_value = str(data.get("new_value") or data.get("value") or "").strip()
+    surface = _surface_value(text, new_value)
+    if not surface or not _plausible_value(surface, entity):
+        return None
+    # 小模型有时把 correction 写成 false，但 new_value 已经从原话抄对。
+    # 事实闸负责确认这是不是在改一条已存事实，这里不另看提示词。
+    return {"entity": entity, "attribute": attribute, "new_value": surface}
+
+
+def _plausible_value(value: str, entity: str) -> bool:
+    """标点和空值不是新取值。不靠「不是 / not」这类词来判断。"""
+    if not re.search(r"[0-9A-Za-z\u4e00-\u9fff]", value):
+        return False
+    if entity and value.strip() == entity.strip():
+        return False
+    letters = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", value)
+    if not letters:
+        return False
+    if not has_cjk(letters) and len(letters) < 2:
+        return False
+    return True
+
+
+def _same_entity(left: str, right: str) -> bool:
+    from memory_core.paths import ensure_scripts_path
+
+    ensure_scripts_path()
+    from router import entity_key
+
+    a = entity_key(left)
+    b = entity_key(right)
+    if a and b:
+        return a == b
+    return left.strip() == right.strip()
+
+
+def _gate_match(text: str, rows: list[tuple[Any, int, dict]], entity: str, attribute: str):
+    """事实闸对得上某条已存事实，且实体和模型抽出的是同一个人，才接受。"""
+    from memory_core.fact_span import build_fact_bank
+
+    facts = [dict(fact) for _record, _index, fact in rows]
+    bank = build_fact_bank(facts)
+    if bank is None:
+        return None
+    from memory_core.fact_span import CALIBRATED_TAU
+
+    info = bank.explain(text, attr_floor=CALIBRATED_TAU)
+    if not info.get("matched"):
+        if not (entity and attribute):
+            return None
+        if has_cjk(f"{entity}{attribute}{text}"):
+            info = bank.explain(f"{entity}的{attribute}是什么？", attr_floor=CALIBRATED_TAU)
+        else:
+            info = bank.explain(f"What is {entity}'s {attribute}?", attr_floor=CALIBRATED_TAU)
+        if not info.get("matched"):
+            return None
+    score = float(info.get("best_question_sim") or 0)
+    attr = str(info.get("matched_attr") or "")
+    for record, index, fact in rows:
+        fact_attr = str(fact.get("attr") or "")
+        fact_entity = str(fact.get("entity") or "")
+        if attr and fact_attr != attr:
+            continue
+        if entity and _same_entity(fact_entity, entity):
+            return record, index, fact, score
+        if entity and not _same_entity(fact_entity, entity):
+            # 模型常把属性写成实体。原话已经被事实闸对上时，仍用闸门选中的那条。
+            if bank.explain(text, attr_floor=CALIBRATED_TAU).get("matched") and str(bank.explain(text, attr_floor=CALIBRATED_TAU).get("matched_attr") or "") == fact_attr:
+                return record, index, fact, score
+            continue
+        return record, index, fact, score
+    return None
+
+
+_LLM = None
+
+
+def _default_llm():
+    global _LLM
+    if _LLM is not None:
+        return _LLM
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from memory_core.models_mgr import qwen_path
+    from memory_core.paths import default_models_dir
+
+    path = qwen_path(default_models_dir())
+    tok = AutoTokenizer.from_pretrained(path)
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32)
+    model.eval()
+    _LLM = (model, tok, torch.device("cpu"))
+    return _LLM
+
+
 def propose_from_records(
     text: str,
     records: list[Any],
     fact_id: str | None = None,
     new_value: str | None = None,
+    model=None,
+    tok=None,
+    device=None,
 ) -> dict[str, Any] | None:
     """对上一条可改的事实。对不上、或只是在提问，就返回 None。"""
     text = (text or "").strip()
@@ -235,142 +286,46 @@ def propose_from_records(
     rows = _active_rows(records)
     if not rows:
         return None
-    from memory_core.paths import ensure_scripts_path
 
-    ensure_scripts_path()
-    from router import embed
-
-    chosen: tuple[Any, int, dict] | None = None
-    score = 1.0
     if fact_id:
+        chosen = None
         for record, index, fact in rows:
             if _fact_key(record, index, fact) == fact_id:
                 chosen = (record, index, fact)
                 break
-        if chosen is None:
+        if chosen is None or not supplied:
             return None
-    else:
-        if not text:
-            return None
-        bank_texts: list[str] = []
-        owners: list[int] = []
-        for row_index, (_record, _index, fact) in enumerate(rows):
-            surfaces = [str(fact.get("statement") or "")]
-            surfaces.extend(_questions(fact))
-            surfaces = [item for item in surfaces if item]
-            owners.extend([row_index] * len(surfaces))
-            bank_texts.extend(surfaces)
-        if not bank_texts:
-            return None
-        vectors = embed([text, *bank_texts])
-        user_vec = vectors[0]
-        best_score = -1.0
-        second = -1.0
-        best_row = 0
-        cursor = 1
-        for row_index in range(len(rows)):
-            count = owners.count(row_index)
-            if count == 0:
-                continue
-            block = vectors[cursor : cursor + count]
-            cursor += count
-            row_score = float((block @ user_vec).max())
-            if row_score > best_score:
-                second = best_score
-                best_score = row_score
-                best_row = row_index
-            elif row_score > second:
-                second = row_score
-        if best_score < MATCH_TAU:
-            return None
-        if second >= 0 and best_score < second + MATCH_MARGIN:
-            return None
-        chosen = rows[best_row]
-        score = best_score
-
-    record, index, fact = chosen
-    old_value = str(fact.get("value") or fact.get("answer") or "")
-    if supplied:
+        record, index, fact = chosen
+        old_value = str(fact.get("value") or fact.get("answer") or "")
         if supplied == old_value:
             return None
-        picked = supplied
-        score = score if fact_id is None else 1.0
-    else:
-        attr_name = str(fact.get("attr") or "").strip()
-        # 整句已经很像这条事实的陈述时，属性名本身不一定出现在原话里（lives in / address）。
-        if attr_name and score < 0.85:
-            attr_vecs = embed([text, attr_name])
-            if float(attr_vecs[0] @ attr_vecs[1]) < ATTR_SIM:
-                return None
-        tails = _candidate_tails(text, fact)
-        if not tails:
-            return None
-        # 还在复述旧取值的那一小句是在否定旧事实，新取值在另一小句里。
-        if old_value and any(old_value not in clause for _tail, clause in tails):
-            narrowed = [(tail, clause) for tail, clause in tails if old_value not in clause]
-            if narrowed:
-                tails = narrowed
-        wh = _wh_texts(fact)
-        questions = _questions(fact)
-        entity = str(fact.get("entity") or "")
-        statements = [_rewrite(fact, tail) for tail, _clause in tails]
-        masked_clauses = [mask_fact(clause, entity, old_value) for _tail, clause in tails]
-        tail_texts = [tail for tail, _clause in tails]
-        payload = [text, str(fact.get("statement") or ""), *questions, *masked_clauses, *statements, *tail_texts, *wh]
-        vectors = embed(payload)
-        user_vec = vectors[0]
-        old_statement_vec = vectors[1]
-        q_count = len(questions)
-        question_vecs = vectors[2 : 2 + q_count]
-        base = 2 + q_count
-        clause_vecs = vectors[base : base + len(tails)]
-        statement_vecs = vectors[base + len(tails) : base + 2 * len(tails)]
-        tail_vecs = vectors[base + 2 * len(tails) : base + 3 * len(tails)]
-        wh_vecs = vectors[base + 3 * len(tails) :]
-        best_question = float((question_vecs @ user_vec).max()) if q_count else -1.0
-        statement_text = str(fact.get("statement") or "")
-        # 先看每个候选取值。bge-small-zh 把没见过的英文词嵌成同一个向量时，
-        # 新旧陈述的相似度会一样，增益看不出来。这种小句里留下最长的那个新片段。
-        scored: list[tuple[int, str, str, float, bool]] = []
-        degenerate_clauses: set[str] = set()
-        for tail_index, (tail, clause) in enumerate(tails):
-            if any(_fragment_hits(fragment, tail) for fragment in _wh_fragments(fact)):
-                continue
-            if wh_vecs.numel():
-                scores = wh_vecs @ tail_vecs[tail_index]
-                wh_score = float(scores.max())
-                closest = wh[int(scores.argmax())] if wh else ""
-                if wh_score >= WH_TAU and _same_token(tail, closest):
-                    continue
-            new_score = float(clause_vecs[tail_index] @ statement_vecs[tail_index])
-            old_score = float(clause_vecs[tail_index] @ old_statement_vec)
-            fresh = tail not in statement_text
-            degenerate = fresh and abs(new_score - old_score) < 1e-3
-            if degenerate:
-                degenerate_clauses.add(clause)
-            scored.append((tail_index, tail, clause, new_score, degenerate))
-        longest: dict[str, str] = {}
-        for _index, tail, clause, _score, _degenerate in scored:
-            if clause in degenerate_clauses and tail not in statement_text:
-                if clause not in longest or len(tail) > len(longest[clause]):
-                    longest[clause] = tail
-        margin = QUESTION_MARGIN if re.search(r"[\u4e00-\u9fff]", text) else 0.0
-        passing: list[tuple[float, int, str]] = []
-        for tail_index, tail, clause, new_score, degenerate in scored:
-            if clause in degenerate_clauses and longest.get(clause) != tail:
-                continue
-            if not degenerate and new_score < float(clause_vecs[tail_index] @ old_statement_vec) + VALUE_GAIN:
-                continue
-            if best_question >= 0 and float(user_vec @ statement_vecs[tail_index]) < best_question + margin:
-                continue
-            passing.append((new_score, text.rfind(tail), tail))
-        if not passing:
-            return None
-        _best_score, _position, picked = _shorter_prefix(passing)
-        compact = _norm_space(text)
-        if _norm_space(picked) not in compact:
-            return None
-    if _norm_space(picked) == _norm_space(old_value):
+        surface = _surface_value(text, supplied) or supplied
+        return {
+            "expert": record.name,
+            "expert_label": record.display_name,
+            "fact_id": _fact_key(record, index, fact),
+            "entity": fact.get("entity") or "",
+            "attr": fact.get("attr") or "",
+            "old_value": old_value,
+            "old_statement": fact.get("statement") or "",
+            "new_value": surface,
+            "new_statement": _rewrite(fact, surface),
+            "score": 1.0,
+            "source_text": text or surface,
+        }
+
+    if model is None or tok is None or device is None:
+        model, tok, device = _default_llm()
+    parsed = classify_correction(text, model, tok, device)
+    if not parsed:
+        return None
+    matched = _gate_match(text, rows, parsed["entity"], parsed["attribute"])
+    if matched is None:
+        return None
+    record, index, fact, score = matched
+    old_value = str(fact.get("value") or fact.get("answer") or "")
+    picked = parsed["new_value"]
+    if not picked or "".join(picked.split()) == "".join(old_value.split()):
         return None
     return {
         "expert": record.name,
@@ -385,3 +340,11 @@ def propose_from_records(
         "score": round(float(score), 4),
         "source_text": text,
     }
+
+
+class _nullctx:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *args):
+        return False

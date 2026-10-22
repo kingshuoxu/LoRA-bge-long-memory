@@ -20,6 +20,23 @@ def models_dir() -> Path:
     return candidate
 
 
+class LatinNameTests(unittest.TestCase):
+    def test_latin_names_ignore_case_title_and_possessive(self):
+        ensure_scripts_path()
+        from router import canonicalize_entity, extract_query_entity, verify_entity_guard
+
+        self.assertEqual(canonicalize_entity("Dr. Elena Brooks's"), "Elena Brooks")
+        self.assertEqual(canonicalize_entity("mira chen"), "Mira Chen")
+        self.assertEqual(extract_query_entity("What is Mira Chen's cat's name?"), "Mira Chen")
+        self.assertEqual(extract_query_entity("where does mira chen live?"), "Mira Chen")
+        self.assertEqual(extract_query_entity("What is Dr. Elena Brooks's dog's name?"), "Elena Brooks")
+        self.assertEqual(extract_query_entity("What is the name of the dog Elena Brooks keeps?"), "Elena Brooks")
+        self.assertTrue(verify_entity_guard("What is elena brooks's dog's name?", ["Dr. Elena Brooks"]))
+        self.assertTrue(verify_entity_guard("What is the name of the dog Elena Brooks keeps?", ["Dr. Elena Brooks"]))
+        self.assertTrue(verify_entity_guard("What is Mira Chen's bicycle color?", ["Mira Chen"]))
+        self.assertFalse(verify_entity_guard("What is Elena Brooks's dog's name?", ["Mira Chen"]))
+
+
 class RouteGuardTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,12 +93,13 @@ class RouteGuardTests(unittest.TestCase):
         from memory_core.store import guard_entity_aliases
 
         question = "沈星河最喜欢的茶是什么？"
-        self.assertEqual(extract_query_entity(question), "沈星河最喜欢")
-        self.assertFalse(verify_entity_guard(question, ["沈星河"]))
-        aliases = guard_entity_aliases(["沈星河"], [question, "沈星河的猫的名字是什么？"])
-        self.assertEqual(aliases[0], "沈星河")
-        self.assertIn("沈星河最喜欢", aliases)
-        self.assertTrue(verify_entity_guard(question, aliases))
+        self.assertEqual(extract_query_entity(question), "沈星河")
+        self.assertTrue(verify_entity_guard(question, ["沈星河"]))
+        aliases = guard_entity_aliases(["沈星河"], [question, "沈星河的猫的名字是什么？", "沈星河住在哪里？"])
+        self.assertEqual(aliases, ["沈星河"])
+        self.assertNotIn("沈星河最喜欢", aliases)
+        self.assertNotIn("沈星河住在哪里", aliases)
+        self.assertTrue(verify_entity_guard("沈星河喜欢喝什么茶？", aliases))
         self.assertTrue(verify_entity_guard("沈星河的猫的名字是什么？", aliases))
         self.assertFalse(verify_entity_guard(question, ["周明远"]))
 

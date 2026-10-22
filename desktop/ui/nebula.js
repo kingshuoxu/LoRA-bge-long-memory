@@ -468,7 +468,11 @@ export function createNebula(canvas, hooks) {
   let recall = null;
   let mode = "full";
   let running = true;
+  let looping = false;
   let frameCount = 0;
+  const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+  const rendererName = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || "") : "";
+  const software = /swiftshader|llvmpipe|softpipe/i.test(rendererName);
 
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
@@ -1125,14 +1129,21 @@ export function createNebula(canvas, hooks) {
   }, { passive: false });
 
   const clock = new THREE.Clock();
-  function frame() {
+  let frozenAt = 0;
+  function frame(now) {
     if (!running) return;
+    if (mode === "dim") {
+      looping = false;
+      return;
+    }
     requestAnimationFrame(frame);
+    looping = true;
     if (!canvas.clientWidth || document.hidden) return;
     frameCount += 1;
-    if (mode === "dim" && frameCount % 3 !== 0) return;
+    if (software && now != null && frameCount > 1 && now - frozenAt < 200) return;
+    if (now != null) frozenAt = now;
     const t = reduce ? 0 : clock.getElapsedTime();
-    const dim = mode === "dim" ? 0.45 : 1;
+    const dim = 1;
     const ratio = renderer.getPixelRatio();
     const pulse = 0.86 + 0.14 * Math.sin((recall ? performance.now() - recall.started : 0) / 240);
     gasMats.forEach((material) => {
@@ -1230,8 +1241,12 @@ export function createNebula(canvas, hooks) {
     highlight,
     screenPoint: project,
     setMode(next) {
-      mode = next === "dim" ? "dim" : "full";
-      resize();
+      const paused = next === "dim" || next === "paused";
+      mode = paused ? "dim" : "full";
+      if (!paused && running && !looping) {
+        looping = true;
+        requestAnimationFrame(frame);
+      }
     },
     dispose() {
       running = false;

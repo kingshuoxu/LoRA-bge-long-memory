@@ -358,6 +358,7 @@
     [/^训练进程退出（代码 (\d+)）。详见 train\.log$/, (m) => `Training process exited (code ${m[1]}). See train.log`],
     [/^训练没有收敛（best loss=(.+)）$/, (m) => `Training did not converge (best loss=${m[1]})`],
     [/^基座已经答对（(.+)），写门建议跳过$/, (m) => `The base model already answered (${m[1]}); the write gate suggests skipping`],
+    [/^基座已经知道这条（(.+)），仍会写入并训练$/, (m) => `The base model already knows this (${m[1]}). It will still be saved and trained.`],
     [/^基座答成「(.+)」，和已有记忆也不重复$/, (m) => `Base model answered “${m[1]}”, and it is not a duplicate`],
     [/^要把「(.+)」改成「(.+)」吗？$/, (m) => `Change “${m[1]}” to “${m[2]}”?`],
     [/^已确认。正在重新训练「(.+)」，旧取值 (.+) 会暗下去。$/, (m) => `Confirmed. Retraining “${m[1]}”. The old value ${m[2]} will dim.`],
@@ -408,6 +409,7 @@
   function apply(root) {
     const scope = root || document;
     scope.querySelectorAll("[data-i18n]").forEach((el) => {
+      if (el.id === "recall-banner" && el.dataset.live === "1") return;
       el.textContent = t(el.getAttribute("data-i18n"));
     });
     scope.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
