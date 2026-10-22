@@ -26,7 +26,7 @@ from memory_core.extract import (
 from memory_core.gate import apply_write_gate, keep_for_training
 from memory_core.models_mgr import ensure_models, models_ready, qwen_path, read_status
 from memory_core.paths import bundle_root, default_home, default_models_dir, default_repo_experts
-from memory_core.routing import bind_bge, load_merged_gate, route_text
+from memory_core.routing import bind_bge, load_merged_gate, route_text, route_with_trace
 from memory_core.store import (
     ExpertRecord,
     add_tombstone,
@@ -264,7 +264,26 @@ class MemoryService:
             proposal = propose_from_records(content, self.expert_records())
             if proposal is not None:
                 note = f"要把「{proposal['old_statement']}」改成「{proposal['new_statement']}」吗？"
-                extra = json.dumps({"kind": "correction_proposal", "proposal": proposal}, ensure_ascii=False)
+                recall = {
+                    "fired": False,
+                    "abstain": True,
+                    "mounted": False,
+                    "reason": "correction_proposal",
+                    "reason_text": "这一轮在确认纠正，没有挂载专家",
+                    "expert": proposal["expert"],
+                    "mounted_expert": None,
+                    "mounted_label": "基座",
+                    "sim": proposal.get("score") or 0,
+                    "thresholds": {},
+                    "experts": [],
+                    "fact_gate": None,
+                    "matched_facts": [],
+                    "wording": "纠正还没有写入。这一轮没有调用记忆。",
+                }
+                extra = json.dumps(
+                    {"kind": "correction_proposal", "proposal": proposal, "trace": recall},
+                    ensure_ascii=False,
+                )
                 assistant = self.convos.add_message(
                     conv_id,
                     "assistant",
@@ -285,9 +304,12 @@ class MemoryService:
                     "entity_pass": True,
                     "fact_pass": False,
                 }
-                return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal}
-            decision = self.route_message(content)
+                return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal, "recall": recall}
             experts = self.expert_records()
+            gate_dirs = [self.experts_dir]
+            if self.repo_experts is not None:
+                gate_dirs.append(self.repo_experts)
+            decision, recall = route_with_trace(content, experts, load_merged_gate(gate_dirs))
             self.chat.sync_adapters(experts)
             if decision.fired:
                 record = next((item for item in experts if item.name == decision.expert), None)
@@ -295,9 +317,20 @@ class MemoryService:
                     decision.fired = False
                     decision.label = "基座"
                     decision.reason = "missing_weights"
+                    recall["fired"] = False
+                    recall["abstain"] = True
+                    recall["mounted"] = False
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                    recall["reason"] = "missing_weights"
+                    recall["reason_text"] = "专家权重不在，这一轮没有挂载，回答走基座"
+                    recall["matched_facts"] = []
+                    for row in recall.get("experts") or []:
+                        row["chosen"] = False
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = self.chat.reply(prior, decision)
+            extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
             assistant = self.convos.add_message(
                 conv_id,
                 "assistant",
@@ -307,8 +340,9 @@ class MemoryService:
                 sim=decision.sim,
                 fired=decision.fired,
                 reason=decision.reason,
+                extra=extra,
             )
-        return {"user": user_msg, "assistant": assistant, "route": decision.public_dict()}
+        return {"user": user_msg, "assistant": assistant, "route": decision.public_dict(), "recall": recall}
 
     def preview_consolidation(self, conversation_ids: list[str]) -> dict[str, Any]:
         """同步抽取，给验收脚本用。界面走 start_preview，边抽边能看到。"""

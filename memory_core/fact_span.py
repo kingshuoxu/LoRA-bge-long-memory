@@ -95,22 +95,31 @@ class FactBank:
     def n_facts(self) -> int:
         return len(self.attrs)
 
-    def allows(self, query: str, tau: float = CALIBRATED_TAU) -> tuple[bool, float, str]:
-        """问句是否对得上某一条已存事实。
+    def explain(self, query: str, tau: float = CALIBRATED_TAU, metas: list[dict] | None = None) -> dict:
+        """和 allows 同一次比较，并给出每条事实的问句分、属性分。
 
-        返回 (对得上, 最像的那条事实的问句相似度, 那条事实的属性名)。
-        对得上要求：问句相似度 ≥ τ，且不低于其他不同事实，属性短语相似度也 ≥ τ。
+        metas 与事实银行的下标对齐。passed 只标闸门真正接受的那条，
+        以及问句向量和它几乎重合、属性分也过线的事实。
         """
+        empty = {
+            "matched": False,
+            "best_question_sim": 0.0,
+            "matched_attr": "",
+            "other_question_sim": -1.0,
+            "facts": [],
+        }
         if self.n_facts == 0 or self.question_vecs.numel() == 0:
-            return False, 0.0, ""
+            return empty
         ensure_scripts_path()
         from router import embed
 
         query_vec = embed([mask_query(query, self.entities)])[0]
         owns: list[float] = []
+        attr_scores: list[float] = []
         for index in range(self.n_facts):
             chosen = self.question_owner == index
             owns.append(float((self.question_vecs[chosen] @ query_vec).max()))
+            attr_scores.append(float(self.attr_vecs[index] @ query_vec))
         best = max(range(self.n_facts), key=lambda index: owns[index])
         best_block = self.question_vecs[self.question_owner == best]
         duplicated = (self.question_vecs @ best_block.T).max(dim=1).values >= 0.999
@@ -123,9 +132,44 @@ class FactBank:
                 continue
             other = max(other, float((self.question_vecs[usable] @ query_vec).max()))
         own = owns[best]
-        attr_score = float(self.attr_vecs[best] @ query_vec)
-        ok = own >= tau and own + 1e-6 >= other and attr_score >= tau
-        return ok, own, self.attrs[best] if ok else ""
+        ok = own >= tau and own + 1e-6 >= other and attr_scores[best] >= tau
+        facts = []
+        for index in range(self.n_facts):
+            mask = self.question_owner == index
+            near = index != best and bool(mask.any()) and bool(duplicated[mask].all())
+            passed = bool(ok and (index == best or (near and owns[index] >= tau and attr_scores[index] >= tau)))
+            meta = metas[index] if metas and index < len(metas) else {}
+            facts.append({
+                "fact_id": str(meta.get("fact_id") or ""),
+                "node_id": str(meta.get("node_id") or ""),
+                "statement": str(meta.get("statement") or ""),
+                "entity": str(meta.get("entity") or ""),
+                "attr": str(meta.get("attr") or self.attrs[index]),
+                "value": str(meta.get("value") or ""),
+                "question": str(meta.get("question") or ""),
+                "question_sim": round(owns[index], 4),
+                "attr_sim": round(attr_scores[index], 4),
+                "best": index == best,
+                "near_duplicate": near,
+                "passed": passed,
+            })
+        facts.sort(key=lambda item: item["question_sim"], reverse=True)
+        return {
+            "matched": ok,
+            "best_question_sim": own,
+            "matched_attr": self.attrs[best] if ok else "",
+            "other_question_sim": other,
+            "facts": facts,
+        }
+
+    def allows(self, query: str, tau: float = CALIBRATED_TAU) -> tuple[bool, float, str]:
+        """问句是否对得上某一条已存事实。
+
+        返回 (对得上, 最像的那条事实的问句相似度, 那条事实的属性名)。
+        对得上要求：问句相似度 ≥ τ，且不低于其他不同事实，属性短语相似度也 ≥ τ。
+        """
+        info = self.explain(query, tau)
+        return info["matched"], info["best_question_sim"], info["matched_attr"]
 
 
 def build_fact_bank(facts: list[dict]) -> FactBank | None:

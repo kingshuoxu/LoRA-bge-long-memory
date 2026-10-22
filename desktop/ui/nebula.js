@@ -43,6 +43,10 @@ export function createNebula(canvas, hooks) {
   scene.add(world);
 
   const pickables = [];
+  const factMeshes = new Map();
+  const expertMeshes = new Map();
+  const expertClouds = new Map();
+  let recall = null;
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   let dragging = false;
@@ -63,6 +67,10 @@ export function createNebula(canvas, hooks) {
       });
     }
     pickables.length = 0;
+    factMeshes.clear();
+    expertMeshes.clear();
+    expertClouds.clear();
+    recall = null;
   }
 
   function addGlow(position, color, scale) {
@@ -104,16 +112,20 @@ export function createNebula(canvas, hooks) {
         cloudPos[i * 3 + 2] = pos.z + r * Math.sin(phi) * Math.sin(theta);
       }
       cloudGeo.setAttribute("position", new THREE.BufferAttribute(cloudPos, 3));
-      const cloud = new THREE.Points(cloudGeo, new THREE.PointsMaterial({
+      const cloudMat = new THREE.PointsMaterial({
         color, size: 0.09, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending,
-      }));
+      });
+      const cloud = new THREE.Points(cloudGeo, cloudMat);
+      cloud.userData = { baseOpacity: 0.75, baseSize: 0.09 };
+      expertClouds.set(expert.name, cloud);
       world.add(cloud);
       const core = new THREE.Mesh(
         new THREE.SphereGeometry(0.28, 20, 16),
         new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, roughness: 0.4 }),
       );
       core.position.copy(pos);
-      core.userData = { kind: "expert", expert };
+      core.userData = { kind: "expert", expert, baseEmissive: 0.8 };
+      expertMeshes.set(expert.name, core);
       world.add(core);
       pickables.push(core);
     });
@@ -144,7 +156,13 @@ export function createNebula(canvas, hooks) {
           }),
         );
         star.position.copy(pos);
-        star.userData = { kind: "fact", fact };
+        star.userData = {
+          kind: "fact",
+          fact,
+          baseEmissive: fact.superseded ? 0.15 : 1.15,
+          baseOpacity: fact.superseded ? 0.38 : 1,
+        };
+        factMeshes.set(fact.id, star);
         world.add(star);
         pickables.push(star);
       });
@@ -273,6 +291,45 @@ export function createNebula(canvas, hooks) {
     camTarget.copy(look).add(offset);
   }, { passive: false });
 
+  function restoreRecall() {
+    factMeshes.forEach((mesh) => {
+      mesh.material.emissiveIntensity = mesh.userData.baseEmissive;
+      mesh.material.opacity = mesh.userData.baseOpacity;
+      mesh.scale.setScalar(1);
+    });
+    expertMeshes.forEach((mesh) => {
+      mesh.material.emissiveIntensity = mesh.userData.baseEmissive;
+      mesh.scale.setScalar(1);
+    });
+    expertClouds.forEach((cloud) => {
+      cloud.material.opacity = cloud.userData.baseOpacity;
+      cloud.material.size = cloud.userData.baseSize;
+    });
+  }
+
+  function highlight(trace) {
+    recall = null;
+    restoreRecall();
+    const mounted = Boolean(trace && trace.mounted && trace.mounted_expert);
+    if (!mounted) return { mounted: false, nodeIds: [] };
+    const nodeIds = (trace.matched_facts || []).map((fact) => fact.node_id).filter((id) => factMeshes.has(id));
+    recall = { expertName: trace.mounted_expert, nodeIds: new Set(nodeIds), started: performance.now() };
+    return { mounted: true, nodeIds: nodeIds.length ? nodeIds : [`expert:${trace.mounted_expert}`] };
+  }
+
+  function screenPoint(nodeId) {
+    const mesh = factMeshes.get(nodeId) || expertMeshes.get(String(nodeId).replace(/^expert:/, ""));
+    if (!mesh) return null;
+    const vector = mesh.getWorldPosition(new THREE.Vector3());
+    vector.project(camera);
+    const width = canvas.clientWidth || 1;
+    const height = canvas.clientHeight || 1;
+    return {
+      x: (vector.x * 0.5 + 0.5) * width,
+      y: (-vector.y * 0.5 + 0.5) * height,
+    };
+  }
+
   const clock = new THREE.Clock();
   function frame() {
     if (!running) return;
@@ -280,6 +337,25 @@ export function createNebula(canvas, hooks) {
     const t = clock.getElapsedTime();
     dust.rotation.y = t * 0.012;
     world.rotation.y = Math.sin(t * 0.08) * 0.04;
+    if (recall) {
+      const pulse = 0.55 + 0.45 * Math.sin((performance.now() - recall.started) / 140);
+      factMeshes.forEach((mesh, id) => {
+        const on = recall.nodeIds.has(id);
+        mesh.material.emissiveIntensity = on ? 1.4 + pulse * 2.4 : mesh.userData.baseEmissive * 0.25;
+        mesh.material.opacity = on ? 1 : Math.min(mesh.userData.baseOpacity, 0.28);
+        mesh.scale.setScalar(on ? 1 + pulse * 0.45 : 1);
+      });
+      expertMeshes.forEach((mesh, name) => {
+        const on = name === recall.expertName;
+        mesh.material.emissiveIntensity = on ? 1.2 + pulse * 1.6 : mesh.userData.baseEmissive * 0.3;
+        mesh.scale.setScalar(on ? 1 + pulse * 0.22 : 1);
+      });
+      expertClouds.forEach((cloud, name) => {
+        const on = name === recall.expertName;
+        cloud.material.opacity = on ? 0.95 : 0.22;
+        cloud.material.size = on ? 0.12 + pulse * 0.04 : cloud.userData.baseSize;
+      });
+    }
     camera.position.lerp(camTarget, 0.08);
     camera.lookAt(look);
     renderer.render(scene, camera);
@@ -290,6 +366,8 @@ export function createNebula(canvas, hooks) {
   return {
     setData,
     resize,
+    highlight,
+    screenPoint,
     dispose() {
       running = false;
       clearWorld();

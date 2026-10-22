@@ -56,11 +56,15 @@ function setView(view) {
   $("consolidate-view").hidden = view !== "consolidate";
   $("nebula-view").hidden = view !== "nebula";
   $("memory-view").hidden = view !== "memory";
+  const stage = $("nebula-stage");
+  const host = view === "nebula" ? $("nebula-host") : $("recall-host");
+  if (stage && host && stage.parentElement !== host) host.appendChild(stage);
   document.querySelectorAll(".nav").forEach((button) => button.classList.remove("active"));
   const nav = { chat: "nav-chat", consolidate: "nav-consolidate", nebula: "nav-nebula", memory: "memory-tab" }[view];
   if ($(nav)) $(nav).classList.add("active");
   const labels = { chat: "对话", consolidate: "巩固", nebula: "星云", memory: "记忆库" };
   $("eyebrow").textContent = labels[view] || "";
+  if (state.nebula) state.nebula.resize();
 }
 
 async function refreshHealth() {
@@ -239,7 +243,107 @@ function proposalCard(extra) {
   </div>`;
 }
 
-async function openConversation(id, switchView) {
+function recallTrace(extra) {
+  return extra && extra.trace ? extra.trace : null;
+}
+
+function chipLabel(trace) {
+  if (!trace || !trace.mounted) return "未调用记忆";
+  const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
+  const name = row ? row.display_name : trace.mounted_expert;
+  const facts = (trace.matched_facts || []).map((fact) => fact.value || fact.attr).filter(Boolean);
+  return facts.length ? `回忆自 ${name} · ${facts.join("、")}` : `回忆自 ${name} · 整份专家`;
+}
+
+function chipTitle(trace) {
+  if (!trace) return "";
+  const tau = trace.thresholds && trace.thresholds.router_tau;
+  const scores = (trace.experts || []).map((item) => `${item.display_name || item.name} ${Number(item.sim).toFixed(3)}${item.considered ? "" : "（未参与）"}`).join(" · ");
+  const head = tau == null ? trace.reason_text || "" : `路由键阈值 ${Number(tau).toFixed(3)}`;
+  return [head, scores, trace.reason_text || ""].filter(Boolean).join("\n");
+}
+
+function recallChip(msg, extra) {
+  const trace = recallTrace(extra);
+  if (!trace) return "";
+  const idle = trace.mounted ? "" : " idle";
+  return `<button type="button" class="recall-chip${idle}" data-recall="${esc(msg.id)}" title="${esc(chipTitle(trace))}">${esc(chipLabel(trace))}</button>`;
+}
+
+function bannerText(trace) {
+  if (!trace || !trace.mounted) return "未调用记忆";
+  const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
+  const name = row ? row.display_name : trace.mounted_expert;
+  const tau = trace.thresholds || {};
+  const matched = (trace.matched_facts || []).map((fact) => {
+    const label = fact.attr || fact.value || "这条事实";
+    return `「${label}」问句 ${Number(fact.question_sim).toFixed(3)} · 属性 ${Number(fact.attr_sim).toFixed(3)}`;
+  });
+  const which = matched.length
+    ? `事实闸对上了${matched.join("、")}，阈值 ${Number(tau.fact_tau).toFixed(3)}`
+    : "没有逐条事实闸，只比较了路由键";
+  const sim = row ? `路由键 ${Number(row.sim).toFixed(3)} / ${Number(tau.router_tau).toFixed(3)}` : "";
+  return `整份挂载「${name}」。${which}。${sim}。亮起表示路由对上了这些事实，不是每颗星各有一份权重。`;
+}
+
+function showRecallBanner(trace) {
+  const banner = $("recall-banner");
+  banner.hidden = false;
+  banner.classList.toggle("idle", !trace || !trace.mounted);
+  banner.textContent = bannerText(trace);
+}
+
+function reducedMotion() {
+  return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function flyToStars(fromEl, points) {
+  if (reducedMotion() || !fromEl || !points || !points.length) return;
+  const comet = $("recall-comet");
+  const start = fromEl.getBoundingClientRect();
+  const canvas = $("nebula-canvas").getBoundingClientRect();
+  const point = points[0];
+  const x0 = start.left + start.width / 2;
+  const y0 = start.top + Math.min(24, start.height / 2);
+  const x1 = canvas.left + point.x;
+  const y1 = canvas.top + point.y;
+  comet.hidden = false;
+  const t0 = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - t0) / 720);
+    const ease = 1 - (1 - t) * (1 - t);
+    comet.style.left = `${x0 + (x1 - x0) * ease}px`;
+    comet.style.top = `${y0 + (y1 - y0) * ease}px`;
+    if (t < 1) requestAnimationFrame(step);
+    else comet.hidden = true;
+  }
+  requestAnimationFrame(step);
+}
+
+function revealText(node, full) {
+  if (!node || reducedMotion()) return;
+  node.textContent = "";
+  let index = 0;
+  const timer = window.setInterval(() => {
+    index = Math.min(full.length, index + Math.max(1, Math.ceil(full.length / 26)));
+    node.textContent = full.slice(0, index);
+    if (index >= full.length) window.clearInterval(timer);
+  }, 36);
+}
+
+async function playRecall(trace, fromEl, streamNode, fullText) {
+  state.recall = trace || null;
+  showRecallBanner(trace);
+  if (!state.nebula) return;
+  const lit = state.nebula.highlight(trace);
+  if (streamNode && fullText) revealText(streamNode, fullText);
+  if (!lit.mounted) return;
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const points = lit.nodeIds.map((id) => state.nebula.screenPoint(id)).filter(Boolean);
+  flyToStars(fromEl, points);
+}
+
+async function openConversation(id, switchView, revealId) {
   state.currentId = id;
   if (switchView) {
     setView("chat");
@@ -249,7 +353,7 @@ async function openConversation(id, switchView) {
   if (state.view === "chat") $("title").textContent = conv.title || "新对话";
   const box = $("messages");
   if (!conv.messages.length) {
-    box.innerHTML = `<div class="empty">直接输入即可。回答旁边会标出这次用的是基座还是某条记忆。若某条记忆不对，就在这里说出正确的取值，或到星云里点那颗星。</div>`;
+    box.innerHTML = `<div class="empty">直接输入即可。回答旁边会标出这次用的是基座还是某条记忆。点「回忆自」可以在旁边的星云里再亮一次。若某条记忆不对，就在这里说出正确的取值。</div>`;
   } else {
     box.innerHTML = conv.messages.map((msg) => {
       const extra = parseExtra(msg);
@@ -258,7 +362,8 @@ async function openConversation(id, switchView) {
       const label = msg.expert_label || (msg.fired ? "记忆" : "基座");
       const sim = msg.sim == null ? "" : ` · ${Number(msg.sim).toFixed(2)}`;
       const card = extra && extra.kind === "correction_proposal" ? proposalCard(extra) : "";
-      return `<div class="bubble assistant">${esc(msg.content)}${card}<div class="route ${memory}" title="${esc(msg.reason || "")}">${esc(label)}${esc(sim)}</div></div>`;
+      const chip = recallChip(msg, extra);
+      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><span class="body">${esc(msg.content)}</span>${card}${chip}<div class="route ${memory}" title="${esc(msg.reason || "")}">${esc(label)}${esc(sim)}</div></div>`;
     }).join("");
   }
   box.querySelectorAll("[data-confirm-correction]").forEach((button) => {
@@ -280,8 +385,29 @@ async function openConversation(id, switchView) {
       }
     };
   });
+  box.querySelectorAll("[data-recall]").forEach((button) => {
+    button.onclick = async () => {
+      const message = conv.messages.find((item) => item.id === button.dataset.recall);
+      const trace = recallTrace(parseExtra(message));
+      if (!trace) return;
+      if (state.view !== "chat" && state.view !== "nebula") setView("chat");
+      await ensureNebula();
+      const bubble = button.closest(".bubble");
+      await playRecall(trace, bubble, null, "");
+    };
+  });
   box.scrollTop = box.scrollHeight;
   renderConversations();
+  if (revealId) {
+    const message = conv.messages.find((item) => item.id === revealId);
+    const bubble = box.querySelector(`[data-msg="${revealId}"]`);
+    const trace = recallTrace(parseExtra(message));
+    if (bubble && trace) {
+      await ensureNebula();
+      const body = bubble.querySelector(".body");
+      await playRecall(trace, bubble, body, message.content || "");
+    }
+  }
 }
 
 async function loadMemory() {
@@ -366,9 +492,30 @@ async function openConsolidate() {
   renderStages();
 }
 
-async function openNebula() {
-  setView("nebula");
-  $("title").textContent = "知识星云";
+function factScoreLine(fact) {
+  const trace = state.recall;
+  const gate = trace && trace.fact_gate;
+  if (!gate || !gate.facts) return "";
+  const row = gate.facts.find((item) => item.node_id === fact.id || item.fact_id === fact.fact_id);
+  if (!row) return "";
+  const tau = trace.thresholds && trace.thresholds.fact_tau;
+  const status = row.passed && trace.mounted ? "事实闸对上了这条" : "这一轮没有把它当作命中";
+  const threshold = tau == null ? "" : ` · 阈值 ${Number(tau).toFixed(3)}`;
+  return `<div>${status} · 问句 ${Number(row.question_sim).toFixed(3)} · 属性 ${Number(row.attr_sim).toFixed(3)}${threshold}</div><div class="muted">${esc(trace.wording || "")}</div>`;
+}
+
+function expertScoreLine(expert) {
+  const trace = state.recall;
+  if (!trace || !trace.experts) return "";
+  const row = trace.experts.find((item) => item.name === expert.name);
+  if (!row) return "";
+  const tau = trace.thresholds && trace.thresholds.router_tau;
+  const threshold = tau == null ? "" : ` · 阈值 ${Number(tau).toFixed(3)}`;
+  const role = row.chosen ? "这一轮整份挂载" : row.considered ? "参与了比较" : "这一轮没有参与判定";
+  return `<div>路由键 ${Number(row.sim).toFixed(3)}${threshold} · ${role}</div>`;
+}
+
+async function ensureNebula() {
   const data = await api("/api/nebula");
   state.nebulaData = data;
   $("nebula-empty").hidden = Boolean((data.facts || []).length || (data.experts || []).length);
@@ -385,11 +532,11 @@ async function openNebula() {
         tip.style.left = `${x + 14}px`;
         tip.style.top = `${y + 14}px`;
         if (payload.kind === "fact") {
-          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? "已取代" : "生效"} · ${esc(payload.fact.expert_label || "")}</div>`;
+          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? "已取代" : "生效"} · ${esc(payload.fact.expert_label || "")}</div>${factScoreLine(payload.fact)}`;
         } else if (payload.kind === "conversation") {
           tip.innerHTML = `<strong>${esc(payload.conversation.title)}</strong><div class="muted">${esc(payload.conversation.snippet || "")}</div>`;
         } else if (payload.kind === "expert") {
-          tip.innerHTML = `<strong>${esc(payload.expert.display_name || payload.expert.name)}</strong>`;
+          tip.innerHTML = `<strong>${esc(payload.expert.display_name || payload.expert.name)}</strong>${expertScoreLine(payload.expert)}`;
         }
       },
       onSelect(payload) {
@@ -400,6 +547,13 @@ async function openNebula() {
   }
   state.nebula.setData(data);
   state.nebula.resize();
+  if (state.recall) state.nebula.highlight(state.recall);
+}
+
+async function openNebula() {
+  setView("nebula");
+  $("title").textContent = "知识星云";
+  await ensureNebula();
 }
 
 function openConversationSnippet(conversation) {
@@ -518,12 +672,12 @@ $("composer").onsubmit = async (event) => {
       state.currentId = conv.id;
     }
     $("input").value = "";
-    await api(`/api/conversations/${state.currentId}/messages`, {
+    const sent = await api(`/api/conversations/${state.currentId}/messages`, {
       method: "POST",
       body: JSON.stringify({ content: text }),
     });
     await loadConversations();
-    await openConversation(state.currentId, true);
+    await openConversation(state.currentId, true, sent.assistant && sent.assistant.id);
   } catch (error) {
     showError(error);
   } finally {
@@ -568,6 +722,7 @@ async function boot() {
     if (ready && !opened) {
       opened = true;
       await loadConversations();
+      await ensureNebula();
     }
     await pollWork();
   }

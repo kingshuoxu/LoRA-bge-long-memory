@@ -45,11 +45,23 @@
         <div id="jobbar" class="jobbar" hidden></div>
       </header>
       <section id="chat-view">
-        <div id="messages" class="messages"></div>
-        <form id="composer" class="composer">
-          <textarea id="input" rows="3" placeholder="输入消息。若要改一条已经记住的事实，直接说出新的取值。Enter 发送，Shift+Enter 换行"></textarea>
-          <button id="send" type="submit">发送</button>
-        </form>
+        <div class="chat-split">
+          <div class="chat-column">
+            <div id="messages" class="messages"></div>
+            <form id="composer" class="composer">
+              <textarea id="input" rows="3" placeholder="输入消息。若要改一条已经记住的事实，直接说出新的取值。Enter 发送，Shift+Enter 换行"></textarea>
+              <button id="send" type="submit">发送</button>
+            </form>
+          </div>
+          <div id="recall-host" class="recall-host">
+            <div id="nebula-stage" class="nebula-wrap">
+              <canvas id="nebula-canvas"></canvas>
+              <div id="nebula-tip" class="nebula-tip" hidden></div>
+              <div id="nebula-empty" class="nebula-empty" hidden>还没有巩固过的记忆。先在对话里留下事实，再点「巩固所选」。</div>
+              <div id="recall-banner" class="recall-banner" hidden>未调用记忆</div>
+            </div>
+          </div>
+        </div>
       </section>
       <section id="consolidate-view" hidden>
         <div class="stage-layout">
@@ -67,11 +79,7 @@
         </div>
       </section>
       <section id="nebula-view" hidden>
-        <div class="nebula-wrap">
-          <canvas id="nebula-canvas"></canvas>
-          <div id="nebula-tip" class="nebula-tip" hidden></div>
-          <div id="nebula-empty" class="nebula-empty" hidden>还没有巩固过的记忆。先在对话里留下事实，再点「巩固所选」。</div>
-        </div>
+        <div id="nebula-host" class="nebula-host"></div>
       </section>
       <section id="memory-view" hidden></section>
     </main>
@@ -86,6 +94,7 @@
       </div>
     </div>
   </div>
+  <div id="recall-comet" class="recall-comet" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@ from memory_core.extract import expand_training_fact
 from memory_core.fact_span import build_fact_bank, load_fact_bank, save_fact_bank
 from memory_core.gate import keep_for_training
 from memory_core.paths import ensure_scripts_path
-from memory_core.routing import bind_bge, legacy_top1, route_text
+from memory_core.routing import bind_bge, legacy_top1, route_text, route_with_trace
 from memory_core.store import guard_entity_aliases, load_experts
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,6 +178,56 @@ class FactSpanTests(unittest.TestCase):
         for question in GENERAL:
             decision = route_text(question, records, GATE)
             self.assertFalse(decision.fired, question)
+        shutil.rmtree(root)
+
+    def test_recall_trace_matches_route_and_names_the_fact(self):
+        root = ROOT / ".cache" / "fact_span_trace"
+        if root.exists():
+            shutil.rmtree(root)
+        self._materialize(root, SHEN, [fact["question"] for fact in SHEN])
+        memory_path = root / "expert_1000" / "fact_memory.json"
+        memory = json.loads(memory_path.read_text(encoding="utf-8"))
+        memory["facts"][0]["id"] = "old-cat"
+        memory["facts"][0]["superseded"] = True
+        memory["facts"][0]["superseded_by"] = "new-cat"
+        replacement = expand_training_fact({
+            "entity": "沈星河", "attr": "猫的名字", "value": "暮雪",
+            "statement": "沈星河的猫的名字是暮雪。", "question": "沈星河的猫的名字是什么？", "answer": "暮雪",
+        })
+        replacement["id"] = "new-cat"
+        memory["facts"].append(replacement)
+        memory_path.write_text(json.dumps(memory, ensure_ascii=False), encoding="utf-8")
+        records = load_experts(root, writable=True)
+        samples = [
+            "沈星河的猫的名字是什么？",
+            "沈星河的生日是什么时候？",
+            "水的化学式是什么？",
+        ]
+        for question in samples:
+            decision = route_text(question, records, GATE)
+            traced, trace = route_with_trace(question, records, GATE)
+            self.assertEqual(decision.public_dict(), traced.public_dict(), question)
+            self.assertEqual(trace["mounted"], decision.fired, question)
+            self.assertEqual(trace["thresholds"]["router_tau"], 0.6)
+            self.assertGreaterEqual(trace["thresholds"]["fact_tau"], 0.622)
+            self.assertEqual(len(trace["experts"]), 1)
+            self.assertIsInstance(trace["experts"][0]["sim"], float)
+        _decision, hit = route_with_trace(samples[0], records, GATE)
+        self.assertTrue(hit["mounted"], hit)
+        matched_ids = {item["fact_id"] for item in hit["matched_facts"]}
+        self.assertIn("new-cat", matched_ids)
+        self.assertNotIn("old-cat", matched_ids)
+        self.assertTrue(all(item["value"] != "云朵" for item in hit["fact_gate"]["facts"]))
+        self.assertTrue(any(item["fact_id"] == "new-cat" and item["passed"] for item in hit["fact_gate"]["facts"]))
+        _decision, miss = route_with_trace(samples[1], records, GATE)
+        self.assertFalse(miss["mounted"])
+        self.assertEqual(miss["matched_facts"], [])
+        self.assertEqual(miss["reason"], "fact_gate")
+        self.assertGreater(len(miss["fact_gate"]["facts"]), 1)
+        self.assertTrue(all(not item["passed"] for item in miss["fact_gate"]["facts"]))
+        _decision, base = route_with_trace(samples[2], records, GATE)
+        self.assertFalse(base["mounted"])
+        self.assertEqual(base["matched_facts"], [])
         shutil.rmtree(root)
 
     def test_existing_experts_stay_250_with_new_expert(self):

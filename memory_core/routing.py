@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,56 +117,209 @@ def _legacy_decision(text: str, pool: list[ExpertRecord], sims: dict[str, float]
     return _base(sim, best.name, why, entity_pass, True)
 
 
-def _explicit_decision(expert: ExpertRecord, text: str, tau: float, reason: str) -> RouteDecision:
+RECALL_WORDING = "亮起的星表示这次路由和事实闸对上了这些事实。LoRA 是整份专家一起挂上的，不是每颗星各有一份权重。"
+
+_REASON_TEXT = {
+    "entity_first": "问句点名了这个专家登记过的实体",
+    "max_sim": "在参与比较的专家里，路由键相似度最高",
+    "fact_gate": "事实闸没有对上任何已存事实，回答走基座",
+    "below_tau": "路由键相似度低于阈值，回答走基座",
+    "boundary_guard": "边界守卫没有通过，回答走基座",
+    "no_experts": "没有可挂载的专家，回答走基座",
+    "missing_weights": "专家权重不在，这一轮没有挂载，回答走基座",
+    "correction_proposal": "这一轮在确认纠正，没有挂载专家",
+}
+
+
+def _round(value: float) -> float:
+    return round(float(value), 4)
+
+
+def _gate_metas(expert: ExpertRecord) -> list[dict]:
+    from memory_core.fact_span import _masked_fact_texts
+
+    facts = list((expert.fact_memory or {}).get("facts") or [])
+    metas = []
+    for index, fact in enumerate(facts):
+        if fact.get("superseded"):
+            continue
+        if not _masked_fact_texts(fact):
+            continue
+        fact_id = str(fact.get("id") or f"{expert.name}#{index}")
+        qa = fact.get("qa") or []
+        metas.append({
+            "fact_id": fact_id,
+            "node_id": f"fact:{fact_id}",
+            "statement": fact.get("statement") or "",
+            "entity": fact.get("entity") or "",
+            "attr": fact.get("attr") or "",
+            "value": fact.get("value") or fact.get("answer") or "",
+            "question": qa[0]["q"] if qa else fact.get("question") or "",
+        })
+    return metas
+
+
+def _explicit_decision(expert: ExpertRecord, text: str, tau: float, reason: str) -> tuple[RouteDecision, dict]:
     """点名了新专家之后，只有某条已存事实对得上这句问话才挂载。"""
     entity_pass = _guard(expert, text)
+    gate_view = {
+        "applied": True,
+        "expert": expert.name,
+        "tau": _round(tau),
+        "entity_pass": entity_pass,
+        "matched": False,
+        "facts": [],
+    }
     if not entity_pass:
-        return _base(0.0, expert.name, "boundary_guard", False, False)
+        return _base(0.0, expert.name, "boundary_guard", False, False), gate_view
     bank = ensure_fact_bank(expert)
     if bank is None:
-        return _base(0.0, expert.name, "fact_gate", True, False)
-    matched, score, _attr = bank.allows(text, tau)
-    if matched:
+        gate_view["applied"] = False
+        gate_view["why"] = "没有事实向量，不能逐条比较"
+        return _base(0.0, expert.name, "fact_gate", True, False), gate_view
+    metas = _gate_metas(expert)
+    if len(metas) != bank.n_facts:
+        metas = [
+            {
+                "fact_id": "",
+                "node_id": "",
+                "statement": "",
+                "entity": "",
+                "attr": bank.attrs[index] if index < len(bank.attrs) else "",
+                "value": "",
+                "question": "",
+            }
+            for index in range(bank.n_facts)
+        ]
+    info = bank.explain(text, tau, metas)
+    gate_view["matched"] = bool(info["matched"])
+    gate_view["facts"] = info["facts"]
+    if info["matched"]:
         return RouteDecision(
             fired=True,
             expert=expert.name,
-            sim=score,
+            sim=info["best_question_sim"],
             label=f"记忆 · {expert.display_name}",
             reason=reason,
             entity_pass=True,
             fact_pass=True,
-        )
-    return _base(score, expert.name, "fact_gate", True, False)
+        ), gate_view
+    return _base(info["best_question_sim"], expert.name, "fact_gate", True, False), gate_view
 
 
-def route_text(text: str, experts: list[ExpertRecord], gate: dict[str, float] | None = None) -> RouteDecision:
+def _key_row_text(expert: ExpertRecord, index: int) -> str:
+    path = Path(expert.directory) / "key_texts.json"
+    if not path.is_file():
+        return ""
+    try:
+        texts = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(texts, list) or index >= len(texts) or index >= int(expert.key.shape[0]):
+        return ""
+    text = texts[index]
+    return text if isinstance(text, str) else ""
+
+
+def _blank_trace(reason: str) -> dict:
+    return {
+        "fired": False,
+        "abstain": True,
+        "mounted": False,
+        "reason": reason,
+        "reason_text": _REASON_TEXT.get(reason, reason),
+        "expert": None,
+        "mounted_expert": None,
+        "mounted_label": "基座",
+        "sim": 0.0,
+        "thresholds": {},
+        "experts": [],
+        "fact_gate": None,
+        "matched_facts": [],
+        "wording": RECALL_WORDING,
+    }
+
+
+def route_with_trace(text: str, experts: list[ExpertRecord], gate: dict[str, float] | None = None) -> tuple[RouteDecision, dict]:
+    """和 route_text 同一次计算。trace 是界面点亮星云用的分数，不另做一套判定。"""
     gate = gate or {"tau": 0.6, "fact_tau": 0.622}
+    tau = float(gate.get("tau", 0.6))
+    fact_tau = semantic_tau(gate)
     if not experts:
-        return _base(0.0, None, "no_experts", False, False)
+        return _base(0.0, None, "no_experts", False, False), _blank_trace("no_experts")
     ensure_scripts_path()
     from router import embed
 
     query = embed([text])[0]
-    sims = {expert.name: float((expert.key @ query).max().item()) for expert in experts}
+    sims: dict[str, float] = {}
+    rows: dict[str, dict] = {}
+    for expert in experts:
+        scores = expert.key @ query
+        sim = float(scores.max().item())
+        best_row = int(scores.argmax().item())
+        sims[expert.name] = sim
+        rows[expert.name] = {
+            "name": expert.name,
+            "display_name": expert.display_name,
+            "sim": _round(sim),
+            "explicit": bool(expert.explicit),
+            "considered": False,
+            "chosen": False,
+            "best_key_index": best_row,
+            "best_key_text": _key_row_text(expert, best_row),
+        }
     explicit = [expert for expert in experts if expert.explicit]
     legacy = [expert for expert in experts if not expert.explicit]
-    # 只有带 fact_memory 的新专家走实体优先。旧研究专家仍是「最大相似度 + 边界守卫」，
-    # 这样 scripts/eval_memory.py 的判定不会被桌面路由改写。
     owner = _owner(text, explicit)
-    tau = float(gate.get("tau", 0.6))
-    fact_tau = semantic_tau(gate)
-
-    # 问句点名了某个已登记实体，就只考虑那个专家。事实对不上则回基座，
-    # 不再改挂相似度更高的其他专家（避免删除后的交叉误射）。
+    fact_gate = None
     if owner is not None:
-        return _explicit_decision(owner, text, fact_tau, "entity_first")
-    # 没点名新专家时，不让新专家的路由键参与 top-1，免得盖过原来的五个专家。
-    if legacy:
-        return _legacy_decision(text, legacy, sims, tau)
-    if explicit:
+        rows[owner.name]["considered"] = True
+        decision, fact_gate = _explicit_decision(owner, text, fact_tau, "entity_first")
+    elif legacy:
+        for expert in legacy:
+            rows[expert.name]["considered"] = True
+        decision = _legacy_decision(text, legacy, sims, tau)
+        if decision.expert and decision.expert in rows:
+            fact_gate = {
+                "applied": False,
+                "expert": decision.expert,
+                "tau": _round(fact_tau),
+                "matched": False,
+                "facts": [],
+                "why": "这位专家没有逐条事实向量，只比较了路由键",
+            }
+    elif explicit:
+        for expert in explicit:
+            rows[expert.name]["considered"] = True
         best = max(explicit, key=lambda expert: sims[expert.name])
-        return _explicit_decision(best, text, fact_tau, "max_sim")
-    return _base(0.0, None, "no_experts", False, False)
+        decision, fact_gate = _explicit_decision(best, text, fact_tau, "max_sim")
+    else:
+        decision = _base(0.0, None, "no_experts", False, False)
+    if decision.fired and decision.expert in rows:
+        rows[decision.expert]["chosen"] = True
+    matched = [fact for fact in (fact_gate or {}).get("facts") or [] if fact.get("passed")]
+    trace = {
+        "fired": decision.fired,
+        "abstain": not decision.fired,
+        "mounted": decision.fired,
+        "reason": decision.reason,
+        "reason_text": _REASON_TEXT.get(decision.reason, decision.reason),
+        "expert": decision.expert,
+        "mounted_expert": decision.expert if decision.fired else None,
+        "mounted_label": decision.label,
+        "sim": _round(decision.sim),
+        "thresholds": {"router_tau": _round(tau), "fact_tau": _round(fact_tau)},
+        "experts": sorted(rows.values(), key=lambda item: item["sim"], reverse=True),
+        "fact_gate": fact_gate,
+        "matched_facts": matched if decision.fired else [],
+        "wording": RECALL_WORDING,
+    }
+    return decision, trace
+
+
+def route_text(text: str, experts: list[ExpertRecord], gate: dict[str, float] | None = None) -> RouteDecision:
+    decision, _trace = route_with_trace(text, experts, gate)
+    return decision
 
 
 def legacy_top1(text: str, experts: list[ExpertRecord], tau: float = 0.6) -> tuple[str, float, bool, bool]:
