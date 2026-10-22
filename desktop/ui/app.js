@@ -56,9 +56,9 @@ function setView(view) {
   $("consolidate-view").hidden = view !== "consolidate";
   $("nebula-view").hidden = view !== "nebula";
   $("memory-view").hidden = view !== "memory";
-  const stage = $("nebula-stage");
+  const column = $("nebula-column");
   const host = view === "nebula" ? $("nebula-host") : $("recall-host");
-  if (stage && host && stage.parentElement !== host) host.appendChild(stage);
+  if (column && host && column.parentElement !== host) host.appendChild(column);
   document.querySelectorAll(".nav").forEach((button) => button.classList.remove("active"));
   const nav = { chat: "nav-chat", consolidate: "nav-consolidate", nebula: "nav-nebula", memory: "memory-tab" }[view];
   if ($(nav)) $(nav).classList.add("active");
@@ -105,6 +105,14 @@ function renderJobBar() {
   const resume = $("job-resume");
   if (cancel) cancel.onclick = () => api(`/api/jobs/${job.id}/cancel`, { method: "POST", body: "{}" }).then(refreshHealth).catch(showError);
   if (resume) resume.onclick = () => api(`/api/jobs/${job.id}/resume`, { method: "POST", body: "{}" }).then(() => openConsolidate()).catch(showError);
+  syncSky();
+}
+
+function syncSky() {
+  const training = Boolean(state.job && state.job.status === "running") || Boolean(state.preview && state.preview.status === "running");
+  const mode = training ? "dim" : "full";
+  if (window.sky) window.sky.setMode(mode);
+  if (state.nebula && state.nebula.setMode) state.nebula.setMode(mode);
 }
 
 function activeTrace() {
@@ -126,17 +134,39 @@ function renderStages() {
     { id: "register", title: "登记专家", state: "pending" },
     { id: "done", title: "完成", state: "pending" },
   ];
-  $("stage-list").innerHTML = stages.map((stage) => `
-    <li class="stage ${esc(stage.state || "pending")}">
-      <span class="dot"></span>
-      <div><strong>${esc(stage.title || stage.id)}</strong><div class="muted">${esc(stage.detail || "")}</div></div>
-    </li>
-  `).join("");
+  const width = 320;
+  const height = 210;
+  const points = stages.map((stage, index) => {
+    const t = stages.length <= 1 ? 0.5 : index / (stages.length - 1);
+    return {
+      stage,
+      x: 28 + t * (width - 56),
+      y: 108 + Math.sin(t * Math.PI) * -62 + (index % 2 === 0 ? 16 : -10),
+    };
+  });
+  const lines = points.slice(1).map((point, index) => {
+    const prev = points[index];
+    const lit = point.stage.state === "done" || point.stage.state === "active" || prev.stage.state === "done";
+    return `<line x1="${prev.x.toFixed(1)}" y1="${prev.y.toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="${lit ? "rgba(242,210,145,0.85)" : "rgba(180,198,220,0.28)"}" stroke-width="${lit ? 1.4 : 1}" />`;
+  }).join("");
+  const stars = points.map((point) => {
+    const stateName = point.stage.state || "pending";
+    const on = stateName === "done" || stateName === "active";
+    const r = stateName === "active" ? 6.5 : on ? 4.6 : 3.2;
+    const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.35)";
+    return `<g>
+      <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 7}" fill="${fill}" opacity="${on ? 0.16 : 0.04}" />
+      <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
+      <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 18).toFixed(1)}" text-anchor="middle">${esc(point.stage.title || point.stage.id)}</text>
+    </g>`;
+  }).join("");
+  $("stage-list").innerHTML = `<svg class="constellation" viewBox="0 0 ${width} ${height}" role="img" aria-label="巩固星座">${lines}${stars}</svg>`;
   renderFeed(trace);
   renderLoss(trace);
   const reviewing = state.preview && state.preview.status === "done" && !(state.job && state.job.status === "running");
   $("fact-editor").hidden = !reviewing;
   if (reviewing) renderFacts();
+  syncSky();
 }
 
 function renderFeed(trace) {
@@ -198,7 +228,14 @@ function renderLoss(trace) {
   const eta = trace && trace.eta_seconds != null ? formatEta(trace.eta_seconds) : "";
   card.innerHTML = `<strong>训练损失</strong><div class="muted">第 ${esc(last.epoch)} 轮 · loss ${esc(last.loss)} · 这一轮 ${esc(last.seconds)}s ${esc(eta)}</div>
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="损失曲线">
-      <polyline fill="none" stroke="#f0c36a" stroke-width="2.4" points="${poly}" />
+      <defs>
+        <filter id="loss-glow" x="-20%" y="-40%" width="140%" height="180%">
+          <feGaussianBlur stdDeviation="3.2" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+      <polyline fill="none" stroke="rgba(242,210,145,0.35)" stroke-width="6" points="${poly}" />
+      <polyline fill="none" stroke="#f2d291" stroke-width="2.2" filter="url(#loss-glow)" points="${poly}" />
     </svg>`;
 }
 

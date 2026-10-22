@@ -7,8 +7,10 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <canvas id="sky" aria-hidden="true"></canvas>
   <div id="boot" class="boot">
     <div class="boot-card">
+      <img class="boot-mark" src="icon.png" alt="" />
       <div class="orb" aria-hidden="true"></div>
       <h1>LoRA 长记忆</h1>
       <p id="boot-text">正在准备本地模型…</p>
@@ -54,18 +56,20 @@
             </form>
           </div>
           <div id="recall-host" class="recall-host">
-            <div id="nebula-stage" class="nebula-wrap">
-              <canvas id="nebula-canvas"></canvas>
-              <div id="nebula-tip" class="nebula-tip" hidden></div>
-              <div id="nebula-empty" class="nebula-empty" hidden>还没有巩固过的记忆。先在对话里留下事实，再点「巩固所选」。</div>
-              <div id="recall-banner" class="recall-banner" hidden>未调用记忆</div>
+            <div id="nebula-column" class="nebula-column">
+              <p id="recall-banner" class="recall-banner" hidden>未调用记忆</p>
+              <div id="nebula-stage" class="nebula-wrap">
+                <canvas id="nebula-canvas"></canvas>
+                <div id="nebula-tip" class="nebula-tip" hidden></div>
+                <div id="nebula-empty" class="nebula-empty" hidden>星图还是空的。先在对话里留下事实，再点「巩固所选」。</div>
+              </div>
             </div>
           </div>
         </div>
       </section>
       <section id="consolidate-view" hidden>
         <div class="stage-layout">
-          <ol id="stage-list" class="stage-list"></ol>
+          <div id="stage-list" class="stage-list"></div>
           <div class="stage-panel">
             <div id="loss-card" class="loss-card" hidden></div>
             <div id="stage-feed" class="stage-feed"></div>
@@ -95,6 +99,7 @@
     </div>
   </div>
   <div id="recall-comet" class="recall-comet" hidden></div>
+  <script src="sky.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
