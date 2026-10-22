@@ -55,7 +55,7 @@ sh android/phone/push_adb.sh
 
 专家页的「切换 CPU / GPU」管对话。默认 CPU(`-ngl 0`)。小米 15 的 Adreno 830 可以改成 Vulkan(`-ngl 99`)。Vulkan 起不来就拨回 CPU。训练始终在 CPU 上。
 
-训练用 APK 里的 `libtrain-mft.so`(MobileFineTuner,FFN LoRA,学习率 5e-4,12 epoch)。对话和向量仍是 QVAC 的 `llama-cli` / `llama-embedding`。`llama-finetune-lora` 不再被调用:它的梯度和 PyTorch 对不上。
+训练用 APK 里的 `libtrain-mft.so`(MobileFineTuner,FFN LoRA,学习率 5e-4,4 个 epoch)。桌面上同一份程序把 batch_0 训到第 4 个 epoch 是 48/50;第 12 个 epoch 掉到 22/50。对话和向量仍是 QVAC 的 `llama-cli` / `llama-embedding`。`llama-finetune-lora` 不再被调用:它的梯度和 PyTorch 对不上。
 
 ## 不装 APK,只用 Termux
 

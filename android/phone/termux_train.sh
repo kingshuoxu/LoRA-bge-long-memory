@@ -14,7 +14,7 @@ mkdir -p "$OUTDIR"
   --facts_jsonl "$FACTS" \
   --output_dir "$OUTDIR" \
   --output_gguf "$OUTDIR/adapter.gguf" \
-  --epochs "${EPOCHS:-12}" \
+  --epochs "${EPOCHS:-4}" \
   --batch_size "${BATCH:-1}" \
   --lr "${LR:-5e-4}" \
   --max_grad_norm 1.0 \

@@ -106,7 +106,7 @@ class TrainService : Service() {
                 "--facts_jsonl", jsonl.absolutePath,
                 "--output_dir", outDir.absolutePath,
                 "--output_gguf", adapter.absolutePath,
-                "--epochs", job.optInt("epochs", 12).toString(),
+                "--epochs", job.optInt("epochs", 4).toString(),
                 "--batch_size", "1",
                 "--lr", job.optString("lr", "5e-4"),
                 "--max_grad_norm", "1.0",
@@ -265,7 +265,7 @@ class TrainService : Service() {
                     .put("expert", expert)
                     .put("rank", 32)
                     .put("lr", "5e-4")
-                    .put("epochs", 12)
+                    .put("epochs", 4)
                     .put("facts", arr)
                     .toString(),
             )

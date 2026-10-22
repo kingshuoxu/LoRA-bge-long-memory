@@ -17,7 +17,7 @@ exec "$BIN" \
   --output_gguf "$OUT/adapter.gguf" \
   --seq_len "${SEQ_LEN:-40}" \
   --batch_size "${BATCH:-8}" \
-  --epochs "${EPOCHS:-12}" \
+  --epochs "${EPOCHS:-4}" \
   --lr "${LR:-5e-4}" \
   --max_grad_norm 1.0 \
   --lora_r 32 --lora_alpha 64 --lora_dropout 0 \
