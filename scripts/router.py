@@ -8,6 +8,7 @@
    没有在册实体时,才退回 bge top-1 ≥ τ 且守卫通过。
    两字名左右必须是问句套话里的字,避免从「埃菲尔」里切出「菲尔」。
    事实闸不看属性类别:把实体名换成同一个占位符,用 bge 比较问句和这条事实的原文。
+   写入时的改写问句和窄带交叉编码器可以打开,fact_gate.json 里默认都是关的。
 
 train_expert 用它生成路由键,eval_memory 用它决定挂哪家专家。
 """
@@ -312,22 +313,37 @@ def write_fact_memory(facts: list[dict], path: str | Path) -> None:
             "statement": fact["statement"],
             "questions": [qa["q"] for qa in fact.get("qa", [])],
         })
+        paraphrases = [str(q) for q in fact.get("paraphrases") or [] if str(q).strip()]
+        if paraphrases:
+            records[-1]["paraphrases"] = paraphrases
     Path(path).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class FactMemory:
     """一条事实是否答得了这句问话。
 
-    写入时只存陈述句和当时的问句。比较前把在册实体换成同一个占位符,
-    陈述句里的答案也换成占位符,避免专名把相似度撑高或压低。
+    写入时存陈述句和当时的问句,也可以带上基座模型改写的问句。
+    比较前把在册实体换成同一个占位符,陈述句里的答案也换成占位符。
     问句至少要达到校准过的 τ,并且不能更像另一条已存事实。
+    窄带里被拒绝的问句,再用交叉编码器看陈述句答不答得了。
     """
 
-    def __init__(self, records: list[dict], tau: float, mask: str = "某", value_mask: str = "某值"):
+    def __init__(
+        self,
+        records: list[dict],
+        tau: float,
+        mask: str = "某",
+        value_mask: str = "某值",
+        use_paraphrases: bool = False,
+    ):
         self.tau = float(tau)
         self.mask = mask
         self.value_mask = value_mask
+        self.use_paraphrases = use_paraphrases
+        self.reranker = None
+        self.rerank_calls = 0
         grouped: dict[str, list[str]] = {}
+        statements: dict[str, str] = {}
         order: list[str] = []
         for record in records:
             name = str(record["entity"])
@@ -335,15 +351,23 @@ class FactMemory:
                 grouped[name] = []
                 order.append(name)
             grouped[name].extend(self._masked_texts(record))
+            if name not in statements and record.get("statement"):
+                value = str(record.get("value", "")).rstrip("年")
+                statements[name] = self._mask_fact(str(record["statement"]), name, value)
         self.entities = order
         self._names_by_len = sorted(order, key=len, reverse=True)
+        self._statement = statements
         texts: list[str] = []
         spans: dict[str, tuple[int, int]] = {}
+        owners: list[str] = []
         for name in order:
             start = len(texts)
             texts.extend(grouped[name])
             spans[name] = (start, len(texts))
+            owners.extend([name] * (len(texts) - start))
         self._spans = spans
+        self._texts = texts
+        self._owners = owners
         self._vec = embed(texts) if texts else torch.empty(0, 0)
 
     def _masked_texts(self, record: dict) -> list[str]:
@@ -353,6 +377,8 @@ class FactMemory:
         if record.get("statement"):
             raws.append(str(record["statement"]))
         raws.extend(str(q) for q in record.get("questions") or [])
+        if self.use_paraphrases:
+            raws.extend(str(q) for q in record.get("paraphrases") or [])
         raws.extend(str(q) for q in record.get("texts") or [])
         return [self._mask_fact(text, entity, value) for text in raws if text]
 
@@ -400,30 +426,123 @@ class FactMemory:
         query_vec = embed([self.mask_query(query)])[0]
         return self._split_scores(self._vec @ query_vec, entity)
 
-    def allows(self, query: str, entity: str) -> bool:
-        if entity not in self._spans:
+    def boundary_distance(self, own: float, other: float) -> float:
+        """到「own≥τ 且 own≥other」这条边界的距离。正数是安全接受,负数是被拒绝的幅度。"""
+        gap_tau = own - self.tau
+        gap_other = own - other
+        if gap_tau >= 0 and gap_other >= 0:
+            return min(gap_tau, gap_other)
+        short = 0.0
+        if gap_tau < 0:
+            short = max(short, -gap_tau)
+        if gap_other < 0:
+            short = max(short, -gap_other)
+        return -short
+
+    def in_band(self, own: float, other: float) -> bool:
+        if self.reranker is None:
             return False
-        own, other = self.scores(query, entity)
+        return abs(self.boundary_distance(own, other)) <= self.reranker.delta
+
+    def _bi_accept(self, own: float, other: float) -> bool:
         return own >= self.tau and own + 1e-6 >= other
 
+    def allows(self, query: str, entity: str) -> bool:
+        ok, _own, _other = self.decide_many([(query, entity)])[0]
+        return ok
+
+    def _passage(self, entity: str, text_index: int) -> str:
+        if self.reranker is not None and self.reranker.passage == "best" and 0 <= text_index < len(self._texts):
+            return self._texts[text_index]
+        return self._statement.get(entity, "")
+
     def decide_many(self, pairs: list[tuple[str, str]]) -> list[tuple[bool, float, float]]:
-        """批量判断 (问句, 实体)。实体不在库里视为答不了。"""
+        """批量判断 (问句, 实体)。实体不在库里视为答不了。
+
+        双编码器先做决定。窄带里只复议被拒绝的问句:交叉编码器觉得
+        这条事实的陈述句答得了,并且胜过另一条事实,才改成接受。
+        已经接受的不翻案。调参集上,翻案会把「老大」那句从 CEO 事实上拿掉。
+        """
         if not pairs or self._vec.numel() == 0:
             return [(False, -1.0, -1.0) for _ in pairs]
         masked = [self.mask_query(query) for query, _entity in pairs]
         query_vecs = embed(masked)
         sims = query_vecs @ self._vec.T
-        masks = {entity: self._different_mask(entity) for entity in {entity for _query, entity in pairs} if entity in self._spans}
-        out = []
+        masks = {
+            entity: self._different_mask(entity)
+            for entity in {entity for _query, entity in pairs}
+            if entity in self._spans
+        }
+        drafted = []
+        band_pairs: list[tuple[str, str]] = []
+        band_at: list[int] = []
         for index, (_query, entity) in enumerate(pairs):
             if entity not in self._spans:
-                out.append((False, -1.0, -1.0))
+                drafted.append((False, -1.0, -1.0, False))
                 continue
             start, end = self._spans[entity]
-            own = float(sims[index, start:end].max())
+            if end <= start:
+                drafted.append((False, -1.0, -1.0, False))
+                continue
+            own_local = int(torch.argmax(sims[index, start:end]))
+            own = float(sims[index, start + own_local])
             keep = masks[entity]
-            other = float(sims[index, keep].max()) if bool(keep.any()) else -1.0
-            out.append((own >= self.tau and own + 1e-6 >= other, own, other))
+            if bool(keep.any()):
+                other_idx = int(torch.argmax(sims[index].masked_fill(~keep, -1e9)))
+                other = float(sims[index, other_idx])
+                other_entity = self._owners[other_idx]
+            else:
+                other_idx = -1
+                other = -1.0
+                other_entity = ""
+            accept = self._bi_accept(own, other)
+            # 只把双编码器拒绝、又落在窄带里的问句交给交叉编码器。
+            # 调参边界上的「老大」陈述句得分是负的,交叉编码器会把它翻成弃权;
+            # 所以已经接受的不再翻案。
+            ambiguous = (not accept) and self.in_band(own, other)
+            drafted.append((accept, own, other, ambiguous))
+            if ambiguous:
+                own_passage = self._passage(entity, start + own_local)
+                other_passage = self._passage(other_entity, other_idx) if other_entity else ""
+                band_pairs.append((masked[index], own_passage))
+                band_pairs.append((masked[index], other_passage or self.mask))
+                band_at.append(index)
+        if band_pairs and self.reranker is not None:
+            scores = self.reranker.score(band_pairs)
+            self.rerank_calls += len(band_at)
+            for slot, index in enumerate(band_at):
+                own_r = scores[slot * 2]
+                other_r = scores[slot * 2 + 1]
+                _accept, own, other, _ambiguous = drafted[index]
+                drafted[index] = (own_r >= self.reranker.cut and own_r + 1e-6 >= other_r, own, other, True)
+        return [(ok, own, other) for ok, own, other, _ambiguous in drafted]
+
+
+class FactReranker:
+    """窄带里用的交叉编码器。分数是 logit,切分在调参集上取。"""
+
+    def __init__(self, model_path: str | Path, cut: float, delta: float, passage: str = "statement"):
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        self.cut = float(cut)
+        self.delta = float(delta)
+        self.passage = passage
+        self.tok = AutoTokenizer.from_pretrained(model_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        self.model.eval()
+
+    @torch.no_grad()
+    def score(self, pairs: list[tuple[str, str]], batch_size: int = 16) -> list[float]:
+        if not pairs:
+            return []
+        out: list[float] = []
+        for start in range(0, len(pairs), batch_size):
+            chunk = [[query, passage] for query, passage in pairs[start:start + batch_size]]
+            inputs = self.tok(
+                chunk, padding=True, truncation=True, max_length=128, return_tensors="pt",
+            )
+            logits = self.model(**inputs).logits.view(-1)
+            out.extend(float(value) for value in logits)
         return out
 
 
@@ -446,20 +565,44 @@ def load_fact_records(experts_dir: str | Path) -> list[dict]:
     return records
 
 
-def load_fact_memory(experts_dir: str | Path, extra_records: list[dict] | None = None) -> FactMemory | None:
-    """读各专家的 fact_memory.json 并编码。没有文件就返回 None,调用方不额外拦截。"""
+def load_fact_memory(
+    experts_dir: str | Path,
+    extra_records: list[dict] | None = None,
+    use_paraphrases: bool | None = None,
+    use_reranker: bool | None = None,
+) -> FactMemory | None:
+    """读各专家的 fact_memory.json 并编码。没有文件就返回 None,调用方不额外拦截。
+
+    改写问句和交叉编码器默认跟 fact_gate.json 走。评测要对比几种做法时,显式传 False。
+    """
     records = load_fact_records(experts_dir)
     if extra_records:
         records = records + list(extra_records)
     if not records:
         return None
     gate = load_fact_gate(experts_dir)
-    return FactMemory(
+    if use_paraphrases is None:
+        use_paraphrases = bool(gate.get("use_paraphrases", False))
+    if use_reranker is None:
+        use_reranker = bool(gate.get("use_reranker", False))
+    memory = FactMemory(
         records,
         tau=float(gate["tau"]),
         mask=str(gate.get("mask", "某")),
         value_mask=str(gate.get("value_mask", "某值")),
+        use_paraphrases=use_paraphrases,
     )
+    if use_reranker:
+        model_path = Path(gate.get("reranker", "models/bge-reranker-base"))
+        if not model_path.is_absolute():
+            model_path = Path(__file__).resolve().parents[1] / model_path
+        memory.reranker = FactReranker(
+            model_path,
+            cut=float(gate["reranker_cut"]),
+            delta=float(gate["reranker_delta"]),
+            passage=str(gate.get("reranker_passage", "statement")),
+        )
+    return memory
 
 
 def _fact_allows(query: str, name: str, fact_memory: FactMemory | None) -> bool:
