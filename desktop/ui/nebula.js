@@ -1,12 +1,12 @@
 import * as THREE from "./vendor/three.module.js";
 
 const PALETTES = [
-  { core: [2.05, 0.28, 0.22], edge: [0.72, 0.10, 0.08], dust: [0.28, 0.05, 0.04] },
-  { core: [0.16, 1.95, 1.72], edge: [0.05, 0.62, 0.56], dust: [0.03, 0.16, 0.14] },
-  { core: [2.15, 1.15, 0.22], edge: [0.78, 0.40, 0.08], dust: [0.24, 0.10, 0.03] },
-  { core: [0.62, 0.20, 2.05], edge: [0.26, 0.07, 0.72], dust: [0.10, 0.03, 0.22] },
-  { core: [1.85, 0.36, 0.48], edge: [0.70, 0.12, 0.18], dust: [0.22, 0.05, 0.08] },
-  { core: [0.24, 0.55, 2.05], edge: [0.08, 0.20, 0.72], dust: [0.04, 0.08, 0.22] },
+  { core: [0.90, 0.20, 0.14], mid: [0.58, 0.09, 0.08], edge: [0.30, 0.05, 0.05] },
+  { core: [0.10, 0.74, 0.66], mid: [0.05, 0.44, 0.42], edge: [0.03, 0.20, 0.22] },
+  { core: [0.92, 0.58, 0.14], mid: [0.58, 0.32, 0.06], edge: [0.26, 0.12, 0.03] },
+  { core: [0.46, 0.16, 0.90], mid: [0.26, 0.07, 0.55], edge: [0.11, 0.04, 0.26] },
+  { core: [0.84, 0.26, 0.36], mid: [0.52, 0.11, 0.18], edge: [0.24, 0.05, 0.09] },
+  { core: [0.20, 0.38, 0.90], mid: [0.09, 0.18, 0.55], edge: [0.04, 0.07, 0.24] },
 ];
 
 const GAS_VERT = `
@@ -17,84 +17,35 @@ const GAS_VERT = `
   }
 `;
 
-const GAS_FRAG = `
-  precision mediump float;
-  varying vec2 vUv;
-  uniform vec3 uCore;
-  uniform vec3 uEdge;
-  uniform vec3 uDust;
-  uniform float uTime;
-  uniform float uSeed;
-  uniform float uAlpha;
-
-  float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-  }
-  float fbm(vec2 p) {
-    float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 5; i++) {
-      v += a * noise(p);
-      p = p * 2.03 + vec2(1.7, 9.2);
-      a *= 0.5;
-    }
-    return v;
-  }
-
-  float aces1(float x) {
-    x = max(x, 0.0);
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-  }
-
+const POINT_VERT = `
+  attribute float aSize;
+  attribute float aAlpha;
+  attribute vec3 aColor;
+  varying vec3 vColor;
+  varying float vAlpha;
+  uniform float uPixelRatio;
+  uniform float uDim;
   void main() {
-    vec2 p = vUv * 2.0 - 1.0;
-    p.x *= 0.72 + 0.55 * abs(sin(uSeed * 1.7));
-    p.y *= 0.68 + 0.5 * abs(cos(uSeed * 1.3));
+    vColor = aColor;
+    vAlpha = aAlpha * uDim;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = clamp(aSize * uPixelRatio, 2.0, 60.0);
+  }
+`;
+
+const POINT_FRAG = `
+  precision mediump float;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
     float r = length(p);
-    float ang = uSeed * 0.9;
-    float cs = cos(ang);
-    float sn = sin(ang);
-    vec2 q = vec2(cs * p.x - sn * p.y, sn * p.x + cs * p.y);
-    q.x += 0.28 * sin(q.y * 2.4 + uSeed);
-    q += vec2(uTime * 0.008, -uTime * 0.004);
-    float n1 = fbm(q * 1.35 + uSeed);
-    float n2 = fbm(q * 1.35 + vec2(6.2, 2.4) + uSeed);
-    vec2 warp = q * 1.7 + vec2(n1, n2) * 1.25;
-    float mid = fbm(warp);
-    float fine = fbm(warp * 2.9 + uSeed * 1.3);
-    float ridge = pow(clamp(1.0 - abs(fine - 0.5) * 2.0, 0.0, 1.0), 1.55);
-    float dust = smoothstep(0.5, 0.76, fbm(q * 3.8 + 9.0));
-    float bite = fbm(warp * 4.6 + 2.2);
-    float window = smoothstep(1.7, 1.15, r);
-    float body = smoothstep(0.46, 0.7, mid * 0.65 + n1 * 0.35);
-    float wisps = pow(ridge, 1.25) * smoothstep(0.28, 0.5, mid);
-    float density = max(body * 0.72, wisps * 0.95);
-    density *= smoothstep(0.16, 0.55, bite);
-    density *= mix(1.0, 0.05, dust);
-    density *= window;
-    density = clamp(density, 0.0, 0.8);
-    float paint = smoothstep(0.2, 0.75, mid);
-    vec3 col = mix(uEdge, uCore, paint);
-    col = mix(col, uCore, wisps * 0.35);
-    col = mix(col, uDust, dust * 0.55);
-    float exposure = 0.6;
-    float peak = max(col.r, max(col.g, col.b));
-    if (peak > 0.001) {
-      float mapped = aces1(peak * exposure);
-      col *= mapped / peak;
-    }
-    float alpha = clamp(density * uAlpha, 0.0, 0.8);
-    gl_FragColor = vec4(col * alpha, alpha);
+    if (r > 1.0) discard;
+    float mask = pow(smoothstep(1.0, 0.0, r), 1.5);
+    float gaussian = exp(-r * r * 3.6) * mask;
+    float alpha = gaussian * vAlpha;
+    gl_FragColor = vec4(vColor * alpha, alpha);
   }
 `;
 
@@ -131,22 +82,24 @@ const BLOOM_FRAG = `
     taps[3] = vec2(0.0, -step.y);
     for (int i = 0; i < 4; i++) {
       vec4 s = texture2D(tScene, vUv + taps[i]);
-      float p = max(s.r, max(s.g, s.b));
-      float w = smoothstep(uThreshold, uThreshold + 0.2, p);
+      float sa = max(s.a, 0.03);
+      vec3 sampleStraight = s.rgb / sa;
+      float p = max(sampleStraight.r, max(sampleStraight.g, sampleStraight.b));
+      float w = smoothstep(uThreshold, uThreshold + 0.25, p) * smoothstep(0.1, 0.35, s.a);
       glow += s.rgb * w;
     }
     rgb += glow * uBloom;
-    float peak = max(rgb.r, max(rgb.g, rgb.b));
-    float knee = 0.8;
-    if (peak > knee) {
-      float x = (peak - knee) / max(1.0 - knee, 0.001);
-      float y = aces1(x / max(uExposure, 0.2));
-      float outp = knee + (0.94 - knee) * y;
-      rgb *= min(outp, peak) / peak;
+    float a = center.a;
+    vec3 straight = rgb;
+    if (a > 0.025) straight /= a;
+    float peak = max(straight.r, max(straight.g, straight.b));
+    if (peak > 0.001) {
+      float mapped = aces1(peak * uExposure);
+      straight *= mapped / peak;
     }
-    float alpha = clamp(center.a, 0.0, 0.92);
-    rgb = min(rgb, vec3(alpha));
-    gl_FragColor = vec4(rgb, alpha);
+    float cover = clamp(1.0 - exp(-a * 1.65), 0.0, 0.86);
+    straight = min(straight, vec3(0.97));
+    gl_FragColor = vec4(straight * cover, cover);
   }
 `;
 
@@ -221,8 +174,109 @@ function bezier(a, b, lift) {
 
 function paletteColor(index, slot) {
   const row = PALETTES[index % PALETTES.length];
-  const rgb = slot === 0 ? row.core : slot === 1 ? row.edge : row.dust;
-  return (Math.round(rgb[0] * 255) << 16) | (Math.round(rgb[1] * 255) << 8) | Math.round(rgb[2] * 255);
+  const rgb = slot === 0 ? row.core : slot === 1 ? row.mid : row.edge;
+  return (Math.round(Math.min(1, rgb[0]) * 255) << 16) | (Math.round(Math.min(1, rgb[1]) * 255) << 8) | Math.round(Math.min(1, rgb[2]) * 255);
+}
+
+function hash31(ix, iy, iz) {
+  const n = Math.sin(ix * 127.1 + iy * 311.7 + iz * 74.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
+
+function noise3(x, y, z) {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fy = y - iy;
+  const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const uz = fz * fz * (3 - 2 * fz);
+  let acc = 0;
+  for (let dz = 0; dz <= 1; dz += 1) {
+    for (let dy = 0; dy <= 1; dy += 1) {
+      for (let dx = 0; dx <= 1; dx += 1) {
+        const w = (dx ? ux : 1 - ux) * (dy ? uy : 1 - uy) * (dz ? uz : 1 - uz);
+        acc += w * hash31(ix + dx, iy + dy, iz + dz);
+      }
+    }
+  }
+  return acc;
+}
+
+function fbm3(x, y, z) {
+  let value = 0;
+  let amplitude = 0.5;
+  let frequency = 1;
+  for (let octave = 0; octave < 4; octave += 1) {
+    value += amplitude * noise3(x * frequency, y * frequency, z * frequency);
+    frequency *= 2.03;
+    amplitude *= 0.5;
+  }
+  return value;
+}
+
+function mix3(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
+function randn() {
+  let u = 0;
+  let v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(Math.PI * 2 * v);
+}
+
+function sampleCloud(index) {
+  const palette = PALETTES[index % PALETTES.length];
+  const seed = index * 2.7 + 1.3;
+  const target = 2400;
+  const positions = [];
+  const colors = [];
+  const sizes = [];
+  const alphas = [];
+  let tries = 0;
+  while (positions.length / 3 < target && tries < target * 36) {
+    tries += 1;
+    const x = randn() * 2.55;
+    const y = randn() * 1.85;
+    const z = randn() * 1.25;
+    const r = Math.hypot(x / 2.55, y / 1.85, z / 1.25);
+    if (r > 2.15) continue;
+    const n = fbm3(x * 0.46 + seed, y * 0.46 + seed * 1.6, z * 0.46 + 2.0);
+    const ridge = 1 - Math.abs(fbm3(x * 0.95 + 4.2, y * 0.95 + seed, z * 0.95) * 2 - 1);
+    const field = n * 0.5 + ridge * ridge * 0.72;
+    const gate = Math.exp(-r * r * 0.48);
+    if (Math.random() > Math.min(1, field * gate * 1.45)) continue;
+    positions.push(x, y, z);
+    const paint = Math.min(1, Math.max(0, (n - 0.32) / 0.4));
+    const dist = Math.min(1, r / 1.7);
+    const col = mix3(mix3(palette.edge, palette.mid, paint), palette.core, (1 - dist) * 0.7);
+    colors.push(col[0], col[1], col[2]);
+    sizes.push(14 + Math.random() * 34);
+    alphas.push(0.03 + Math.random() * 0.04);
+  }
+  for (let i = 0; i < 180; i += 1) {
+    const x = randn() * 0.42;
+    const y = randn() * 0.32;
+    const z = randn() * 0.24;
+    positions.push(x, y, z);
+    const hot = mix3(palette.core, [
+      Math.min(1.35, palette.core[0] * 1.45),
+      Math.min(1.15, palette.core[1] * 1.35),
+      Math.min(1.15, palette.core[2] * 1.35),
+    ], 0.55);
+    colors.push(hot[0], hot[1], hot[2]);
+    sizes.push(8 + Math.random() * 14);
+    alphas.push(0.05 + Math.random() * 0.03);
+  }
+  return { positions, colors, sizes, alphas };
 }
 
 export function createNebula(canvas, hooks) {
@@ -252,9 +306,11 @@ export function createNebula(canvas, hooks) {
   const camTarget = new THREE.Vector3(0, 0, 32);
   camera.position.copy(camTarget);
 
+  const gl = renderer.getContext();
+  const floatTarget = Boolean(gl.getExtension("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_half_float"));
   const sceneTarget = new THREE.WebGLRenderTarget(8, 8, {
     format: THREE.RGBAFormat,
-    type: THREE.UnsignedByteType,
+    type: floatTarget ? THREE.HalfFloatType : THREE.UnsignedByteType,
     depthBuffer: false,
     stencilBuffer: false,
   });
@@ -262,9 +318,9 @@ export function createNebula(canvas, hooks) {
   const bloomUniforms = {
     tScene: { value: sceneTarget.texture },
     uTexel: { value: new THREE.Vector2(1 / 8, 1 / 8) },
-    uExposure: { value: 0.5 },
-    uBloom: { value: 0.028 },
-    uThreshold: { value: 0.84 },
+    uExposure: { value: 0.78 },
+    uBloom: { value: 0.06 },
+    uThreshold: { value: 0.86 },
   };
   const bloomMaterial = new THREE.ShaderMaterial({
     uniforms: bloomUniforms,
@@ -331,54 +387,43 @@ export function createNebula(canvas, hooks) {
     userMoved = false;
   }
 
-  function gasMaterial(index, seed, alpha) {
-    const palette = PALETTES[index % PALETTES.length];
-    const material = new THREE.ShaderMaterial({
-      uniforms: {
-        uCore: { value: new THREE.Vector3(...palette.core) },
-        uEdge: { value: new THREE.Vector3(...palette.edge) },
-        uDust: { value: new THREE.Vector3(...palette.dust) },
-        uTime: { value: 0 },
-        uSeed: { value: seed },
-        uAlpha: { value: alpha },
-      },
-      vertexShader: GAS_VERT,
-      fragmentShader: GAS_FRAG,
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      side: THREE.DoubleSide,
-      premultipliedAlpha: true,
-      blending: THREE.NormalBlending,
-    });
-    gasMats.push(material);
-    return material;
-  }
-
   function makeCloud(position, index, name, expert) {
     const group = new THREE.Group();
     group.position.copy(position);
-    const layers = [
-      { w: 16.4, h: 9.2, x: -1.4, y: 0.2, z: 0, rot: 0.35 + index * 0.22, seed: index * 2.7, alpha: 0.76 },
-      { w: 7.6, h: 12.4, x: 3.4, y: -1.5, z: 0.3, rot: -0.85, seed: index * 2.7 + 2.2, alpha: 0.22 },
-      { w: 11.2, h: 5.4, x: -3.6, y: 2.1, z: -0.2, rot: 1.15, seed: index * 2.7 + 4.1, alpha: 0.12 },
-    ];
-    layers.forEach((layer, layerIndex) => {
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(layer.w, layer.h), gasMaterial(index, layer.seed, layer.alpha));
-      mesh.position.set(layer.x, layer.y, layer.z);
-      mesh.rotation.z = layer.rot;
-      mesh.userData = {
-        kind: "expert",
-        expertName: name,
-        expert,
-        baseOpacity: layer.alpha,
-        phase: index + layerIndex,
-      };
-      mesh.renderOrder = 1;
-      group.add(mesh);
-      if (layerIndex === 0) pickables.push(mesh);
+    group.rotation.x = 0.35 + index * 0.22;
+    group.rotation.z = index * 0.47;
+    const cloud = sampleCloud(index);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(cloud.positions, 3));
+    geometry.setAttribute("aColor", new THREE.Float32BufferAttribute(cloud.colors, 3));
+    geometry.setAttribute("aSize", new THREE.Float32BufferAttribute(cloud.sizes, 1));
+    geometry.setAttribute("aAlpha", new THREE.Float32BufferAttribute(cloud.alphas, 1));
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uPixelRatio: { value: renderer.getPixelRatio() },
+        uDim: { value: 1 },
+      },
+      vertexShader: POINT_VERT,
+      fragmentShader: POINT_FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      premultipliedAlpha: true,
     });
-    group.userData = { kind: "expert", expertName: name, expert, baseScale: 1 };
+    gasMats.push(material);
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    points.renderOrder = 1;
+    group.add(points);
+    const pick = new THREE.Mesh(
+      new THREE.SphereGeometry(4.4, 10, 8),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, color: 0x000000 }),
+    );
+    pick.userData = { kind: "expert", expertName: name, expert };
+    group.add(pick);
+    pickables.push(pick);
+    group.userData = { kind: "expert", expertName: name, expert, baseScale: 1, spin: index * 0.9 };
     world.add(group);
     expertClouds.set(name, group);
     expertMeshes.set(name, group);
@@ -734,14 +779,14 @@ export function createNebula(canvas, hooks) {
     if (mode === "dim" && frameCount % 3 !== 0) return;
     const t = reduce ? 0 : clock.getElapsedTime();
     const dim = mode === "dim" ? 0.45 : 1;
+    const ratio = renderer.getPixelRatio();
     gasMats.forEach((material) => {
-      material.uniforms.uTime.value = t;
+      material.uniforms.uDim.value = dim;
+      material.uniforms.uPixelRatio.value = ratio;
     });
     expertClouds.forEach((group) => {
-      group.children.forEach((blob) => {
-        if (!blob.userData || blob.userData.phase == null || !blob.material.uniforms) return;
-        blob.material.uniforms.uAlpha.value = blob.userData.baseOpacity * dim;
-      });
+      if (reduce) return;
+      group.rotation.y = (group.userData.spin || 0) + t * 0.05;
     });
     if (recall && !reduce) {
       const pulse = 0.55 + 0.45 * Math.sin((performance.now() - recall.started) / 160);
