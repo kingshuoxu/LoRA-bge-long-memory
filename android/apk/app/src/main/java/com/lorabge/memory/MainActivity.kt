@@ -167,7 +167,7 @@ private fun ColumnScope.ReviewTab(
     var force by remember { mutableStateOf(false) }
     val status = File(store.trainDir, "status.json").takeIf { it.exists() }?.readText() ?: ""
     Column(Modifier.weight(1f).fillMaxWidth()) {
-        Text("勾选要整理的对话,改成一条事实后再训练。训练默认等充电;学习率 2e-5,因为 1e-4 在 Q8 全词表 loss 上会发散。")
+        Text("勾选要整理的对话,改成一条事实后再训练。训练默认等充电。学习率 5e-4,rank 32,只训 FFN,和桌面记忆配方一样。")
         LazyColumn(Modifier.weight(1f, fill = false)) {
             items(conversations) { item ->
                 Row {

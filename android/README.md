@@ -38,7 +38,7 @@ sh android/phone/push_adb.sh
 | 手机上的文件 | 来源 | 用途 |
 |---|---|---|
 | `models/base.gguf` | f16 基座 | 对话。Q8_0 在 batch_0 上是 45/50,f16 是 50/50 |
-| `models/train_base.gguf` | 官方 Q8_0 | 只给训练。没有这份时训练退回 `base.gguf` |
+| `models/Qwen2.5-0.5B-Instruct/` | safetensors + 词表 | 只给训练。进内存后按 fp32 做反向 |
 | `models/bge.gguf` | bge f16 | 路由 |
 | `import/router.jsonl` 和 `import/expert_*/` | `export_phone_bundle.py` | 已有五个专家 |
 
@@ -49,21 +49,20 @@ sh android/phone/push_adb.sh
 1. 对话页新建对话,问「塔佐巴洛公司是哪一年成立的?」。挂上 `expert_0`、理由是实体,回答里有 1978。这五条在 Q8 上会错、在 f16 上桌面已经对过:b0-022、b0-026、b0-030、b0-031、b0-049,都是产品编号。
 2. 再问一句和库无关的话,不应挂专家。
 3. 整理页勾选刚才的对话,填实体、陈述句、答案、问句。想马上训就勾「立即训练」。不勾的话要插着电,并且把屏幕关掉,训练才会开始。
-4. 通知栏能看到进度。`train/status.json` 是状态,`train/telemetry.tsv` 是耗时、RSS、热区、电量,`train/checkpoints/` 是 QVAC 检查点,中断后下次会 `--resume-from` 最新的一个。点「取消训练」会停掉进程并留下检查点。
+4. 通知栏能看到进度。`train/status.json` 是状态,`train/telemetry.tsv` 是耗时、RSS、热区、电量,`train/mft/` 是检查点。点「取消训练」会停掉进程。训练读的是 `models/Qwen2.5-0.5B-Instruct/`(safetensors、config、词表),不是 GGUF。
 5. 训完专家页出现新的 `expert_`,再开一个新对话,问刚才写入的那句,应挂到这个新专家。
 6. 点删除,索引会重写,再问这句不应再挂它。
 
-专家页的「切换 CPU / GPU」同时管对话和训练。默认 CPU(`-ngl 0`)。小米 15 的 Adreno 830 可以改成 Vulkan(`-ngl 99`)。Vulkan 起不来就拨回 CPU。
+专家页的「切换 CPU / GPU」管对话。默认 CPU(`-ngl 0`)。小米 15 的 Adreno 830 可以改成 Vulkan(`-ngl 99`)。Vulkan 起不来就拨回 CPU。训练始终在 CPU 上。
 
-桌面探针里 Qwen2 架构能反向传播,但仓库的学习率 5e-4 和 1e-4 会把全词表 loss 打爆。应用和 Termux 脚本默认 `2e-5`。12 个 epoch 的记忆准确率还没有数字,要在真机上跑完才知道。
+训练用 APK 里的 `libtrain-mft.so`(MobileFineTuner,FFN LoRA,学习率 5e-4,12 epoch)。对话和向量仍是 QVAC 的 `llama-cli` / `llama-embedding`。`llama-finetune-lora` 不再被调用:它的梯度和 PyTorch 对不上。
 
 ## 不装 APK,只用 Termux
 
-把同一份 Adreno zip 解开,`export LD_LIBRARY_PATH=$PWD/build/bin`,训练数据用 `android/scripts/prepare_train_jsonl.py` 生成的 messages JSONL。
+训练程序用 `android/trainer/build_android.sh` 编出来的 `train_wikitext`。第一个参数是 Hugging Face 模型目录,第二个是 `facts.jsonl`(每行 `statement` 和 `qa`),第三个是输出目录。
 
 ```bash
-sh android/phone/termux_train.sh /path/to/base.gguf /path/to/train.jsonl /path/to/out
-# 续训: RESUME=/path/to/out/checkpoints/<file> sh android/phone/termux_train.sh ...
+sh android/phone/termux_train.sh /path/to/Qwen2.5-0.5B-Instruct /path/to/facts.jsonl /path/to/out
 ```
 
-遥测写到 `out/telemetry.log`,采样的是训练进程的 VmRSS / VmHWM,加上 `/sys/class/thermal/thermal_zone*` 和电池电量,10 秒一次。二进制是 bionic,解释器 `/system/bin/linker64`,短提交号 `29fe08c`(2025-11-06 的包)。桌面对照用的是另一份源码:tetherto/qvac-fabric-llm.cpp 标签 b7349,提交 `b73e75af5f2ab69c0e8984637c743c6a50ebc98d`。不要把 b7349 的 `llama-b7349-bin-android.zip` 当成 Termux 命令行,那个包里是给应用嵌入的 `libllama-android.so`。
+遥测写到 `out/telemetry.log`,采样的是训练进程的 VmRSS / VmHWM,加上 `/sys/class/thermal/thermal_zone*` 和电池电量,10 秒一次。

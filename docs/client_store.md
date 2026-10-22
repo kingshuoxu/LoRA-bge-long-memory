@@ -63,6 +63,6 @@
 
 ## 训练任务
 
-整理页确认之后写 `train/job.json`:`expert`、`rank` 32、`lr` `2e-5`、`epochs` 12、`facts`。每条事实有 `entity`、`statement`、`value`、`qa`(`q`/`a`)。真正送给 QVAC 的是 `train/train.jsonl`,每行一条 ChatML `messages`(system「你是助手。」)。陈述句包成用户「请记下这句话。」、助手复述原句,这样和 QA 都能走 `--assistant-loss-only`。
+整理页确认之后写 `train/job.json`:`expert`、`rank` 32、`lr` `5e-4`、`epochs` 12、`facts`。每条事实有 `entity`、`statement`、`value`、`qa`(`q`/`a`)。送给训练程序的是 `train/facts.jsonl`,每行一条 `statement` 加 `qa`。陈述句整句算 loss,QA 只在答案上算 loss,和 `scripts/train_expert.py` 的 `FactDataset` 一致。适配器写到 `train/<expert>.gguf`,检查点在 `train/mft/`。
 
 QVAC b7349 固定把末尾约 5% 当验证,没有开关。`MemoryStore.tailCount` 会把开头若干行再接到末尾,让每一条原始样本都落在训练切分里。

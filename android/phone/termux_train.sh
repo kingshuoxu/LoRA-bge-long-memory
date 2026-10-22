@@ -1,38 +1,26 @@
 #!/bin/sh
-# 不装 APK、只在 Termux 里训练时用。二进制来自同一份 Adreno zip,解压后:
-#   export LD_LIBRARY_PATH=$PWD/build/bin
-#   sh termux_train.sh /path/to/base.gguf /path/to/train.jsonl /path/to/out
-# 聊天模板默认用仓库里的 android/templates/qwen25_chat_template.jinja。
-# 断点续训: RESUME=/path/to/checkpoint.gguf sh termux_train.sh ...
+# 不装 APK、只在 Termux 里训练时用。
+#   sh termux_train.sh /path/to/Qwen2.5-0.5B-Instruct /path/to/facts.jsonl /path/to/out
+# facts.jsonl 每行 {"statement":"...","qa":[{"q":"...","a":"..."}]}。
+# 训练程序是 android/trainer/build_android.sh 编出的 train_wikitext,或 APK 里的 libtrain-mft.so。
 set -eu
-BIN_DIR=${BIN_DIR:-$PWD/build/bin}
-BASE=$1
-JSONL=$2
+BIN=${BIN:-$PWD/train_wikitext}
+MODEL=$1
+FACTS=$2
 OUTDIR=$3
-mkdir -p "$OUTDIR/checkpoints"
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-TEMPLATE=${TEMPLATE:-$OUTDIR/qwen25_chat_template.jinja}
-if [ ! -f "$TEMPLATE" ] && [ -f "$SCRIPT_DIR/../templates/qwen25_chat_template.jinja" ]; then
-  cp "$SCRIPT_DIR/../templates/qwen25_chat_template.jinja" "$OUTDIR/qwen25_chat_template.jinja"
-  TEMPLATE=$OUTDIR/qwen25_chat_template.jinja
-fi
-if [ ! -f "$TEMPLATE" ]; then
-  echo "缺少聊天模板。把 qwen25_chat_template.jinja 放到 $OUTDIR,或设置 TEMPLATE。" >&2
-  exit 1
-fi
-export LD_LIBRARY_PATH=$BIN_DIR
-"$BIN_DIR/llama-finetune-lora" -m "$BASE" -f "$JSONL" \
-  --assistant-loss-only \
-  --chat-template "$TEMPLATE" \
-  --lora-rank 32 --lora-alpha 64 \
-  --lora-modules ffn_gate,ffn_up,ffn_down \
-  --learning-rate "${LR:-2e-5}" --weight-decay 0 \
-  --num-epochs "${EPOCHS:-12}" \
-  -c 96 -b 96 -ngl 99 -fa off --no-warmup \
-  --checkpoint-save-steps 200 \
-  --checkpoint-save-dir "$OUTDIR/checkpoints" \
-  --output-adapter "$OUTDIR/adapter.gguf" \
-  ${RESUME:+--resume-from "$RESUME"} \
+mkdir -p "$OUTDIR"
+"$BIN" \
+  --model_dir "$MODEL" \
+  --facts_jsonl "$FACTS" \
+  --output_dir "$OUTDIR" \
+  --output_gguf "$OUTDIR/adapter.gguf" \
+  --epochs "${EPOCHS:-12}" \
+  --batch_size "${BATCH:-1}" \
+  --lr "${LR:-5e-4}" \
+  --max_grad_norm 1.0 \
+  --lora_r 32 --lora_alpha 64 --lora_dropout 0 \
+  --mlp --base_weight_storage fp32 --seed 42 \
+  --save_every 20 \
   > "$OUTDIR/train.log" 2>&1 &
 TRAIN=$!
 (

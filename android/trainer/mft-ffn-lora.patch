@@ -1,0 +1,694 @@
+diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_lora_finetune/src/wikitext_main.cpp
+index 30cd862..6156689 100644
+--- a/examples/qwen_lora_finetune/src/wikitext_main.cpp
++++ b/examples/qwen_lora_finetune/src/wikitext_main.cpp
+@@ -3,9 +3,12 @@
+ #include <vector>
+ #include <filesystem>
+ #include <fstream>
++#include <sstream>
++#include <cstring>
+ #include <chrono>
+ #include <iomanip>
+ #include <cstdint>
++#include <algorithm>
+ #include <thread>
+ 
+ #include "finetune_ops/core/tokenizer_bpe.h"
+@@ -27,16 +30,21 @@ struct Args {
+     std::string jsonl_train;
+     std::string jsonl_valid;
+     std::string jsonl_test;
++    std::string facts_jsonl; // raw fact records; tokenized with the Qwen tokenizer before training
++    std::string output_gguf; // llama.cpp LoRA adapter written next to the bin
++    std::string check_text;  // encode this string and exit, for tokenizer parity checks
+     int seq_len = 1024;
+     int batch_size = 1;
+     int grad_accum_steps = 1; // gradient accumulation steps
+     int max_steps = -1; // -1 means auto-run one epoch
++    int epochs = 0;     // >0 overrides max_steps to steps_per_epoch * epochs
+     float lr = 2e-4f;
+     float max_grad_norm = 1.0f;
+     int lora_r = 8;
+     float lora_alpha = 16.0f;
+     float lora_dropout = 0.05f;
+     bool qv_only = false; // default q/k/v/o, matching QwenModel and formal QNLI experiments
++    bool mlp = false;     // FFN gate/up/down LoRA, the memory-expert recipe
+     bool shuffle_train = true;
+     uint64_t seed = 42;
+     std::string loss_impl = "auto"; // auto: selected for masked JSONL, dense otherwise; full_dense/full_streaming: full-token JSONL labels
+@@ -44,6 +52,12 @@ struct Args {
+     bool synthetic_smoke = false;
+     int smoke_steps = 2;
+     std::string output_dir = "outputs/qwen_wikitext";
++    std::string gen_ids; // comma-separated prefix token ids; greedy-decode after training
++    std::string gen_jsonl; // lines of {"ids":[...]} ; greedy-decode each prefix
++    int gen_new = 16;
++    std::string lora_in; // load lora_weights.bin before training or eval
++    bool eval_only = false;
++    int save_every = 0; // optimizer steps; 0 saves only at the end
+     std::string dump_first_batch_json;
+     bool dump_only = false;
+     std::string base_weight_storage = "auto"; // auto/native: preserve F16/BF16 frozen base weights; fp32: promote all
+@@ -63,10 +77,14 @@ static void parse_args(int argc, char** argv, Args& args) {
+         else if (k == "--jsonl_train") args.jsonl_train = get("--jsonl_train");
+         else if (k == "--jsonl_valid") args.jsonl_valid = get("--jsonl_valid");
+         else if (k == "--jsonl_test") args.jsonl_test = get("--jsonl_test");
++        else if (k == "--facts_jsonl") args.facts_jsonl = get("--facts_jsonl");
++        else if (k == "--output_gguf") args.output_gguf = get("--output_gguf");
++        else if (k == "--check_text") args.check_text = get("--check_text");
+         else if (k == "--seq_len") args.seq_len = std::stoi(get("--seq_len"));
+         else if (k == "--batch_size") args.batch_size = std::stoi(get("--batch_size"));
+         else if (k == "--grad_accum_steps") args.grad_accum_steps = std::stoi(get("--grad_accum_steps"));
+         else if (k == "--max_steps") args.max_steps = std::stoi(get("--max_steps"));
++        else if (k == "--epochs") args.epochs = std::stoi(get("--epochs"));
+         else if (k == "--lr") args.lr = std::stof(get("--lr"));
+         else if (k == "--max_grad_norm") args.max_grad_norm = std::stof(get("--max_grad_norm"));
+         else if (k == "--lora_r") args.lora_r = std::stoi(get("--lora_r"));
+@@ -74,6 +92,13 @@ static void parse_args(int argc, char** argv, Args& args) {
+         else if (k == "--lora_dropout") args.lora_dropout = std::stof(get("--lora_dropout"));
+         else if (k == "--qv_only") args.qv_only = true;
+         else if (k == "--qkvo") args.qv_only = false;
++        else if (k == "--mlp") args.mlp = true;
++        else if (k == "--gen_ids") args.gen_ids = get("--gen_ids");
++        else if (k == "--gen_jsonl") args.gen_jsonl = get("--gen_jsonl");
++        else if (k == "--gen_new") args.gen_new = std::stoi(get("--gen_new"));
++        else if (k == "--lora_in") args.lora_in = get("--lora_in");
++        else if (k == "--eval_only") args.eval_only = true;
++        else if (k == "--save_every") args.save_every = std::stoi(get("--save_every"));
+         else if (k == "--seed") args.seed = static_cast<uint64_t>(std::stoull(get("--seed")));
+         else if (k == "--no_shuffle") args.shuffle_train = false;
+         else if (k == "--loss_impl") args.loss_impl = get("--loss_impl");
+@@ -136,7 +161,8 @@ static void configure_qwen_base_weight_storage(SafeTensorsLoadOptions& opts,
+     };
+ }
+ 
+-static void save_lora_weights_bin(const std::string& output_dir, const std::vector<TensorPtr>& params) {
++static void save_lora_weights_bin(const std::string& output_dir, const std::vector<TensorPtr>& params,
++                                  int num_layers, int rank, float alpha, bool mlp) {
+     std::filesystem::create_directories(output_dir);
+     const std::string path = output_dir + "/lora_weights.bin";
+     std::ofstream out(path, std::ios::binary);
+@@ -155,6 +181,99 @@ static void save_lora_weights_bin(const std::string& output_dir, const std::vect
+         const int64_t numel = param->numel();
+         out.write(reinterpret_cast<const char*>(param->data<float>()), numel * sizeof(float));
+     }
++
++    // FFN recipe writes A then B for gate, up, down on each layer.
++    // A is [in, rank], B is [rank, out], both row-major. Scale is alpha/rank at forward time.
++    std::ofstream manifest(output_dir + "/lora_manifest.json");
++    manifest << "{\n  \"rank\": " << rank << ",\n  \"alpha\": " << alpha
++             << ",\n  \"mlp\": " << (mlp ? "true" : "false")
++             << ",\n  \"num_layers\": " << num_layers
++             << ",\n  \"tensors\": [\n";
++    const char* mlp_names[] = {"ffn_gate", "ffn_up", "ffn_down"};
++    size_t idx = 0;
++    auto emit = [&](const std::string& name, const TensorPtr& p) {
++        manifest << "    {\"name\": \"" << name << "\", \"shape\": [";
++        for (size_t d = 0; d < p->shape().size(); ++d) {
++            if (d) manifest << ", ";
++            manifest << p->shape()[d];
++        }
++        manifest << "]}";
++        if (idx + 1 < params.size()) manifest << ",";
++        manifest << "\n";
++        ++idx;
++    };
++    if (mlp && params.size() == static_cast<size_t>(num_layers) * 6) {
++        for (int layer = 0; layer < num_layers; ++layer) {
++            for (const char* tgt : mlp_names) {
++                emit("blk." + std::to_string(layer) + "." + tgt + ".weight.lora_A", params[idx]);
++                emit("blk." + std::to_string(layer) + "." + tgt + ".weight.lora_B", params[idx]);
++            }
++        }
++    } else {
++        for (size_t i = 0; i < params.size(); ++i) {
++            emit("param." + std::to_string(i), params[i]);
++        }
++    }
++    manifest << "  ]\n}\n";
++}
++
++static void load_lora_weights_bin(const std::string& path, const std::vector<TensorPtr>& params) {
++    std::ifstream in(path, std::ios::binary);
++    if (!in.is_open()) throw std::runtime_error("failed to open LoRA file: " + path);
++    int32_t num_params = 0;
++    in.read(reinterpret_cast<char*>(&num_params), sizeof(num_params));
++    if (num_params != static_cast<int32_t>(params.size())) {
++        throw std::runtime_error("LoRA param count mismatch");
++    }
++    for (const auto& param : params) {
++        int32_t ndim = 0;
++        in.read(reinterpret_cast<char*>(&ndim), sizeof(ndim));
++        if (ndim != static_cast<int32_t>(param->shape().size())) {
++            throw std::runtime_error("LoRA rank mismatch");
++        }
++        for (int64_t dim : param->shape()) {
++            int64_t got = 0;
++            in.read(reinterpret_cast<char*>(&got), sizeof(got));
++            if (got != dim) throw std::runtime_error("LoRA shape mismatch");
++        }
++        in.read(reinterpret_cast<char*>(param->data<float>()), param->numel() * sizeof(float));
++    }
++}
++
++static std::vector<int32_t> greedy_continue(QwenModel& model, std::vector<int32_t> ids, int gen_new, int eos_id) {
++    for (int t = 0; t < gen_new; ++t) {
++        const int64_t S = static_cast<int64_t>(ids.size());
++        auto input = zeros({1, S}, kInt32, kCPU);
++        std::memcpy(input->data<int32_t>(), ids.data(), static_cast<size_t>(S) * sizeof(int32_t));
++        auto attn = zeros({1, S}, kFloat32, kCPU);
++        std::fill(attn->data<float>(), attn->data<float>() + S, 1.0f);
++        auto logits = model.forward(input, attn);
++        const int64_t V = logits->shape()[2];
++        const float* row = logits->data<float>() + (S - 1) * V;
++        int32_t best = 0;
++        float best_v = -1e30f;
++        for (int64_t v = 0; v < V; ++v) {
++            if (row[v] > best_v) { best_v = row[v]; best = static_cast<int32_t>(v); }
++        }
++        ids.push_back(best);
++        if (best == eos_id || best == 151645) break;
++        MemoryManager::instance().force_cleanup();
++    }
++    return ids;
++}
++
++static std::vector<int32_t> parse_ids_array(const std::string& line) {
++    auto lb = line.find('[');
++    auto rb = line.find(']', lb == std::string::npos ? 0 : lb);
++    if (lb == std::string::npos || rb == std::string::npos) return {};
++    std::vector<int32_t> ids;
++    std::stringstream ss(line.substr(lb + 1, rb - lb - 1));
++    std::string item;
++    while (std::getline(ss, item, ',')) {
++        if (item.find_first_not_of(" \t") == std::string::npos) continue;
++        ids.push_back(std::stoi(item));
++    }
++    return ids;
+ }
+ 
+ static void dump_batch_json(const Batch& batch, const std::string& path) {
+@@ -209,6 +328,230 @@ static void dump_batch_json(const Batch& batch, const std::string& path) {
+     out << "\n}\n";
+ }
+ 
++static uint16_t f32_to_f16(float value) {
++    uint32_t bits = 0;
++    std::memcpy(&bits, &value, sizeof(bits));
++    const uint16_t sign = static_cast<uint16_t>((bits >> 16) & 0x8000u);
++    int32_t exp = static_cast<int32_t>((bits >> 23) & 0xff) - 127 + 15;
++    const uint32_t mant = bits & 0x7fffffu;
++    if ((bits & 0x7fffffffu) == 0) return sign;
++    if (exp <= 0) return sign;
++    if (exp >= 31) return static_cast<uint16_t>(sign | 0x7c00u);
++    return static_cast<uint16_t>(sign | (static_cast<uint16_t>(exp) << 10) | (mant >> 13));
++}
++
++static void gguf_string(std::ostream& out, const std::string& s) {
++    const uint64_t n = s.size();
++    out.write(reinterpret_cast<const char*>(&n), sizeof(n));
++    out.write(s.data(), static_cast<std::streamsize>(n));
++}
++
++static void save_lora_gguf(const std::string& path, const std::vector<TensorPtr>& params,
++                           int num_layers, float alpha, bool mlp) {
++    if (!mlp || params.size() != static_cast<size_t>(num_layers) * 6) {
++        throw std::runtime_error("GGUF export only supports the FFN gate/up/down recipe");
++    }
++    std::ofstream out(path, std::ios::binary);
++    if (!out.is_open()) throw std::runtime_error("failed to open " + path);
++    const uint32_t magic = 0x46554747u;
++    const uint32_t version = 3;
++    const uint64_t tensor_count = params.size();
++    out.write(reinterpret_cast<const char*>(&magic), 4);
++    out.write(reinterpret_cast<const char*>(&version), 4);
++    out.write(reinterpret_cast<const char*>(&tensor_count), 8);
++
++    struct Kv {
++        std::string key;
++        uint32_t type;
++        std::string str;
++        uint32_t u32 = 0;
++        float f32 = 0;
++    };
++    std::vector<Kv> kvs = {
++        {"general.architecture", 8, "qwen2"},
++        {"general.type", 8, "adapter"},
++        {"adapter.type", 8, "lora"},
++        {"general.name", 8, "mft-expert"},
++        {"adapter.lora.alpha", 6, "", 0, alpha},
++        {"general.quantization_version", 4, "", 2, 0},
++    };
++    const uint64_t kv_count = kvs.size();
++    out.write(reinterpret_cast<const char*>(&kv_count), 8);
++    for (const auto& kv : kvs) {
++        gguf_string(out, kv.key);
++        out.write(reinterpret_cast<const char*>(&kv.type), 4);
++        if (kv.type == 8) gguf_string(out, kv.str);
++        else if (kv.type == 4) out.write(reinterpret_cast<const char*>(&kv.u32), 4);
++        else if (kv.type == 6) out.write(reinterpret_cast<const char*>(&kv.f32), 4);
++    }
++
++    const char* names[] = {"ffn_gate", "ffn_up", "ffn_down"};
++    const uint64_t alignment = 32;
++    std::vector<std::string> tensor_names;
++    std::vector<std::pair<int64_t, int64_t>> ggml_dims;
++    tensor_names.reserve(params.size());
++    size_t cursor = 0;
++    for (int layer = 0; layer < num_layers; ++layer) {
++        for (const char* tgt : names) {
++            for (const char* side : {"lora_a", "lora_b"}) {
++                tensor_names.push_back("blk." + std::to_string(layer) + "." + tgt + ".weight." + side);
++                const auto& shape = params[cursor]->shape();
++                // File stores ggml ne[0], ne[1]. A [in, rank] -> ne [in, rank]; B [rank, out] -> ne [rank, out].
++                ggml_dims.push_back({shape[0], shape[1]});
++                ++cursor;
++            }
++        }
++    }
++    uint64_t data_off = 0;
++    for (size_t i = 0; i < params.size(); ++i) {
++        gguf_string(out, tensor_names[i]);
++        const uint32_t n_dims = 2;
++        const uint32_t dtype = 1; // F16
++        out.write(reinterpret_cast<const char*>(&n_dims), 4);
++        uint64_t d0 = static_cast<uint64_t>(ggml_dims[i].first);
++        uint64_t d1 = static_cast<uint64_t>(ggml_dims[i].second);
++        out.write(reinterpret_cast<const char*>(&d0), 8);
++        out.write(reinterpret_cast<const char*>(&d1), 8);
++        out.write(reinterpret_cast<const char*>(&dtype), 4);
++        out.write(reinterpret_cast<const char*>(&data_off), 8);
++        const uint64_t nbytes = static_cast<uint64_t>(params[i]->numel()) * 2;
++        data_off += (nbytes + alignment - 1) & ~(alignment - 1);
++    }
++    const auto header_end = static_cast<uint64_t>(out.tellp());
++    const uint64_t padded = (header_end + alignment - 1) & ~(alignment - 1);
++    for (uint64_t i = header_end; i < padded; ++i) {
++        const char z = 0;
++        out.write(&z, 1);
++    }
++    for (const auto& param : params) {
++        const float* src = param->data<float>();
++        const int64_t rows = param->shape()[0];
++        const int64_t cols = param->shape()[1];
++        // ggml ne[0]=rows, ne[1]=cols is laid out as cols rows of `rows` values: the transpose.
++        std::vector<uint16_t> packed(static_cast<size_t>(rows * cols));
++        for (int64_t c = 0; c < cols; ++c) {
++            for (int64_t r = 0; r < rows; ++r) {
++                packed[static_cast<size_t>(c * rows + r)] = f32_to_f16(src[r * cols + c]);
++            }
++        }
++        out.write(reinterpret_cast<const char*>(packed.data()), static_cast<std::streamsize>(packed.size() * 2));
++        const uint64_t nbytes = packed.size() * 2;
++        const uint64_t pad = ((nbytes + alignment - 1) & ~(alignment - 1)) - nbytes;
++        for (uint64_t i = 0; i < pad; ++i) {
++            const char z = 0;
++            out.write(&z, 1);
++        }
++    }
++}
++
++static std::string json_unescape(const std::string& raw) {
++    std::string out;
++    out.reserve(raw.size());
++    for (size_t i = 0; i < raw.size(); ++i) {
++        if (raw[i] != '\\' || i + 1 >= raw.size()) {
++            out.push_back(raw[i]);
++            continue;
++        }
++        const char c = raw[++i];
++        if (c == 'n') out.push_back('\n');
++        else if (c == 't') out.push_back('\t');
++        else if (c == 'r') out.push_back('\r');
++        else if (c == 'u' && i + 4 < raw.size()) {
++            int cp = std::stoi(raw.substr(i + 1, 4), nullptr, 16);
++            i += 4;
++            if (cp < 0x80) out.push_back(static_cast<char>(cp));
++            else if (cp < 0x800) {
++                out.push_back(static_cast<char>(0xc0 | (cp >> 6)));
++                out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
++            } else {
++                out.push_back(static_cast<char>(0xe0 | (cp >> 12)));
++                out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
++                out.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
++            }
++        } else out.push_back(c);
++    }
++    return out;
++}
++
++static std::string json_string_after(const std::string& line, size_t key_pos) {
++    auto colon = line.find(':', key_pos);
++    if (colon == std::string::npos) return {};
++    auto quote = line.find('"', colon + 1);
++    if (quote == std::string::npos) return {};
++    std::string raw;
++    for (size_t i = quote + 1; i < line.size(); ++i) {
++        if (line[i] == '\\') {
++            raw.push_back('\\');
++            if (i + 1 < line.size()) raw.push_back(line[++i]);
++            continue;
++        }
++        if (line[i] == '"') break;
++        raw.push_back(line[i]);
++    }
++    return json_unescape(raw);
++}
++
++static int write_fact_ids_jsonl(QwenBPETokenizer& tokenizer, const std::string& facts_path,
++                                const std::string& out_path) {
++    std::ifstream in(facts_path);
++    if (!in.is_open()) throw std::runtime_error("failed to open facts jsonl: " + facts_path);
++    std::ofstream out(out_path);
++    if (!out.is_open()) throw std::runtime_error("failed to write " + out_path);
++    const std::string system = "你是助手。";
++    int longest = 0;
++    int rows = 0;
++    std::string line;
++    auto dump = [&](const std::vector<int>& ids, const std::vector<int>& mask) {
++        out << "{\"ids\":[";
++        for (size_t i = 0; i < ids.size(); ++i) {
++            if (i) out << ",";
++            out << ids[i];
++        }
++        out << "],\"mask\":[";
++        for (size_t i = 0; i < mask.size(); ++i) {
++            if (i) out << ",";
++            out << mask[i];
++        }
++        out << "]}\n";
++        longest = std::max(longest, static_cast<int>(ids.size()));
++        ++rows;
++    };
++    while (std::getline(in, line)) {
++        if (line.empty()) continue;
++        auto statement_key = line.find("\"statement\"");
++        if (statement_key == std::string::npos) continue;
++        const std::string statement = json_string_after(line, statement_key);
++        auto s_ids_i = tokenizer.encode(statement, false, 128, true);
++        dump(s_ids_i, std::vector<int>(s_ids_i.size(), 1));
++        auto qa_pos = line.find("\"qa\"");
++        if (qa_pos == std::string::npos) continue;
++        auto bracket = line.find('[', qa_pos);
++        if (bracket == std::string::npos) continue;
++        size_t cursor = bracket;
++        while (true) {
++            auto qk = line.find("\"q\"", cursor);
++            auto ak = line.find("\"a\"", cursor);
++            if (qk == std::string::npos || ak == std::string::npos) break;
++            if (qk > ak) { cursor = ak + 3; continue; }
++            const std::string q = json_string_after(line, qk);
++            const std::string a = json_string_after(line, ak);
++            const std::string prompt =
++                "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" +
++                q + "<|im_end|>\n<|im_start|>assistant\n";
++            auto p_ids = tokenizer.encode(prompt, false, 0, false);
++            auto a_ids = tokenizer.encode(a + "<|im_end|>\n", false, 0, false);
++            std::vector<int> ids = p_ids;
++            ids.insert(ids.end(), a_ids.begin(), a_ids.end());
++            std::vector<int> mask(p_ids.size(), 0);
++            mask.insert(mask.end(), a_ids.size(), 1);
++            dump(ids, mask);
++            cursor = ak + 3;
++        }
++    }
++    std::cout << "[facts] rows=" << rows << " max_len=" << longest << std::endl;
++    return longest;
++}
++
+ static int run_synthetic_smoke(const Args& args, energy::PowerMonitor& power_monitor) {
+     std::cout << "\n========== Qwen LoRA Synthetic Smoke ==========\n";
+ 
+@@ -276,7 +619,7 @@ static int run_synthetic_smoke(const Args& args, energy::PowerMonitor& power_mon
+     }
+ 
+     double param_delta = smoke::max_param_delta(before, lora_params);
+-    save_lora_weights_bin(args.output_dir, lora_params);
++    save_lora_weights_bin(args.output_dir, lora_params, qcfg.num_hidden_layers, args.lora_r, args.lora_alpha, false);
+     std::cout << "[SyntheticSmoke] param_delta=" << param_delta << std::endl;
+     const bool ok = std::isfinite(param_delta) && param_delta > 0.0;
+     std::cout << (ok ? "[PASS]" : "[FAIL]") << std::endl;
+@@ -292,6 +635,30 @@ int main(int argc, char** argv) {
+         if (args.synthetic_smoke) {
+             return run_synthetic_smoke(args, power_monitor);
+         }
++        if (!args.check_text.empty()) {
++            auto tok_cfg = QwenTokenizerConfig::from_pretrained(args.model_dir);
++            QwenBPETokenizer tokenizer(tok_cfg);
++            tokenizer.load();
++            auto ids = tokenizer.encode(args.check_text, false, 0, false);
++            std::cout << "[encode]";
++            for (int id : ids) std::cout << " " << id;
++            std::cout << std::endl;
++            return 0;
++        }
++        if (!args.facts_jsonl.empty()) {
++            std::filesystem::create_directories(args.output_dir);
++            auto tok_cfg = QwenTokenizerConfig::from_pretrained(args.model_dir);
++            QwenBPETokenizer tokenizer(tok_cfg);
++            tokenizer.load();
++            const std::string tokenized = args.output_dir + "/train_ids.jsonl";
++            const int longest = write_fact_ids_jsonl(tokenizer, args.facts_jsonl, tokenized);
++            if (longest <= 0 || longest > 256) {
++                throw std::runtime_error("fact sequences must be 1..256 tokens, got " + std::to_string(longest));
++            }
++            // Pad only to the longest fact. A larger --seq_len would bill the MLP for padding.
++            args.seq_len = longest;
++            args.jsonl_train = tokenized;
++        }
+ 
+         const bool use_jsonl =
+             !args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty();
+@@ -358,9 +725,13 @@ int main(int argc, char** argv) {
+         MemoryManager::instance().clear_unused_memory();
+ 
+         // 4) LoRA init
+-        model.init_lora(args.lora_r, args.lora_alpha, args.lora_dropout, args.qv_only, args.seed);
++        model.init_lora(args.lora_r, args.lora_alpha, args.lora_dropout, args.qv_only, args.seed, args.mlp);
+         model.freeze_base();
+         auto lora_params = model.get_lora_parameters();
++        if (!args.lora_in.empty()) {
++            load_lora_weights_bin(args.lora_in, lora_params);
++            std::cout << "[LoRA] loaded " << args.lora_in << std::endl;
++        }
+ 
+         // 5) dataset
+         WT2Config dcfg;
+@@ -402,7 +773,7 @@ int main(int argc, char** argv) {
+         std::cout << "[Config] Grad accum steps: " << args.grad_accum_steps << std::endl;
+         std::cout << "[Config] Effective batch size: " << args.batch_size * args.grad_accum_steps << std::endl;
+         std::cout << "[Config] Max grad norm: " << args.max_grad_norm << std::endl;
+-        std::cout << "[Config] LoRA targets: " << (args.qv_only ? "q,v" : "q,k,v,o") << std::endl;
++        std::cout << "[Config] LoRA targets: " << (args.mlp ? "ffn_gate,ffn_up,ffn_down" : (args.qv_only ? "q,v" : "q,k,v,o")) << std::endl;
+         std::cout << "[Config] Base weight storage: " << args.base_weight_storage << std::endl;
+         std::cout << "[Config] Shuffle train: " << (args.shuffle_train ? "true" : "false") << std::endl;
+         std::cout << "[Config] Seed: " << args.seed << std::endl;
+@@ -426,9 +797,12 @@ int main(int argc, char** argv) {
+             }
+         }
+         
+-        // If max_steps <= 0, fall back to one epoch
+-        if (args.max_steps <= 0) {
+-            args.max_steps = steps_per_epoch;
++        if (args.max_steps <= 0 && args.epochs > 0) {
++            args.max_steps = static_cast<int>(steps_per_epoch) * args.epochs;
++            std::cout << "[Dataset] epochs=" << args.epochs
++                      << " max_steps=" << args.max_steps << std::endl;
++        } else if (args.max_steps <= 0) {
++            args.max_steps = static_cast<int>(steps_per_epoch);
+             std::cout << "[Dataset] Auto-set max_steps to " << args.max_steps << " (1 epoch)" << std::endl;
+         }
+ 
+@@ -444,9 +818,10 @@ int main(int argc, char** argv) {
+         auto train_start = std::chrono::steady_clock::now();
+         auto step_start = train_start;
+         
+-        auto batch = ds.next_batch(args.batch_size, false);
++        auto batch = args.eval_only ? Batch{nullptr, nullptr, nullptr}
++                                     : ds.next_batch(args.batch_size, false);
+         
+-        while (step < args.max_steps && batch.input_ids) {
++        while (!args.eval_only && step < args.max_steps && batch.input_ids) {
+             if (accum_counter == 0) {
+                 step_start = std::chrono::steady_clock::now();
+             }
+@@ -538,6 +913,15 @@ int main(int argc, char** argv) {
+                 MemoryManager::instance().force_cleanup();
+                 if (((step + 1) % 20) == 0) MemoryManager::instance().clear_unused_memory();
+                 if ((step + 1) % 10 == 0)   MemoryManager::instance().print_memory_stats();
++                if (args.save_every > 0 && ((step + 1) % args.save_every) == 0) {
++                    save_lora_weights_bin(args.output_dir, lora_params, qcfg.num_hidden_layers,
++                                          args.lora_r, args.lora_alpha, args.mlp);
++                    if (!args.output_gguf.empty()) {
++                        save_lora_gguf(args.output_gguf, lora_params, qcfg.num_hidden_layers,
++                                       args.lora_alpha, args.mlp);
++                    }
++                    std::cout << "[ckpt] saved step " << (step + 1) << std::endl;
++                }
+                 
+                 accum_loss = 0.0f;
+                 accum_counter = 0;
+@@ -548,10 +932,44 @@ int main(int argc, char** argv) {
+                 MemoryManager::instance().force_cleanup();
+             }
+             
+-            // Next batch
+-            batch = ds.next_batch(args.batch_size, false);
++            // Next batch. Loop so --epochs can walk the set more than once.
++            batch = ds.next_batch(args.batch_size, true);
++        }
++        if (!args.eval_only) {
++            save_lora_weights_bin(args.output_dir, lora_params, qcfg.num_hidden_layers,
++                                  args.lora_r, args.lora_alpha, args.mlp);
++        }
++        if (!args.output_gguf.empty()) {
++            save_lora_gguf(args.output_gguf, lora_params, qcfg.num_hidden_layers,
++                           args.lora_alpha, args.mlp);
++            std::cout << "[gguf] wrote " << args.output_gguf << std::endl;
++        }
++        if (!args.gen_ids.empty()) {
++            auto ids = parse_ids_array("[" + args.gen_ids + "]");
++            auto out_ids = greedy_continue(model, ids, args.gen_new, tok_cfg.eos_token_id);
++            std::cout << "[gen] prefix_len=" << ids.size() << std::endl;
++            for (size_t t = ids.size(); t < out_ids.size(); ++t) {
++                std::cout << "[gen] t=" << (t - ids.size()) << " id=" << out_ids[t] << std::endl;
++            }
++        }
++        if (!args.gen_jsonl.empty()) {
++            std::ifstream gin(args.gen_jsonl);
++            if (!gin.is_open()) throw std::runtime_error("failed to open gen jsonl");
++            std::string line;
++            int n = 0;
++            while (std::getline(gin, line)) {
++                if (line.empty()) continue;
++                auto ids = parse_ids_array(line);
++                auto out_ids = greedy_continue(model, ids, args.gen_new, tok_cfg.eos_token_id);
++                std::cout << "[gen_line] " << n << " new=";
++                for (size_t t = ids.size(); t < out_ids.size(); ++t) {
++                    if (t > ids.size()) std::cout << ",";
++                    std::cout << out_ids[t];
++                }
++                std::cout << std::endl;
++                ++n;
++            }
+         }
+-        save_lora_weights_bin(args.output_dir, lora_params);
+         std::cout << "[Metrics] Step metrics written to "
+                   << args.output_dir + "/step_metrics.csv" << std::endl;
+         std::cout << "✅ Finetune finished." << std::endl;
+diff --git a/operator/finetune_ops/core/memory_manager.h b/operator/finetune_ops/core/memory_manager.h
+index 55e2ab9..e45e7b2 100644
+--- a/operator/finetune_ops/core/memory_manager.h
++++ b/operator/finetune_ops/core/memory_manager.h
+@@ -8,6 +8,7 @@
+ 
+ #pragma once
+ 
++#include <string>
+ #include <unordered_map>
+ #include <vector>
+ #include <memory>
+diff --git a/operator/finetune_ops/graph/qwen_model.cpp b/operator/finetune_ops/graph/qwen_model.cpp
+index 7300287..834ef24 100644
+--- a/operator/finetune_ops/graph/qwen_model.cpp
++++ b/operator/finetune_ops/graph/qwen_model.cpp
+@@ -130,13 +130,36 @@ void QwenModel::assign_weight(const std::string& key, const TensorPtr& tensor) {
+ }
+ 
+ // -------------- LoRA --------------
+-void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]], bool qv_only, uint64_t seed) {
++void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]], bool qv_only, uint64_t seed, bool mlp) {
+     float scale = alpha / rank;
+     std::mt19937 rng(static_cast<uint32_t>(seed));
+     std::uniform_real_distribution<float> init_dist(-0.01f, 0.01f);
+     for (auto& b : layers_) {
+         if (b.lora_initialized) continue;
+-        
++
++        if (mlp) {
++            b.gate_lin = std::make_unique<LoRALinear>(b.gate_proj_weight, nullptr);
++            b.up_lin = std::make_unique<LoRALinear>(b.up_proj_weight, nullptr);
++            b.down_lin = std::make_unique<LoRALinear>(b.down_proj_weight, nullptr);
++            auto make_AB = [&](int in_dim, int out_dim) -> std::pair<TensorPtr, TensorPtr> {
++                auto A = std::make_shared<Tensor>(std::vector<int64_t>{in_dim, rank}, kFloat32, kCPU);
++                auto B = std::make_shared<Tensor>(std::vector<int64_t>{rank, out_dim}, kFloat32, kCPU);
++                A->set_requires_grad(true); B->set_requires_grad(true);
++                float* a_data = A->data<float>();
++                for (int64_t i = 0; i < in_dim * rank; ++i) a_data[i] = init_dist(rng);
++                std::memset(B->data<void>(), 0, sizeof(float) * static_cast<size_t>(rank) * static_cast<size_t>(out_dim));
++                return {A, B};
++            };
++            auto [Ag, Bg] = make_AB(config_.hidden_size, config_.intermediate_size);
++            auto [Au, Bu] = make_AB(config_.hidden_size, config_.intermediate_size);
++            auto [Ad, Bd] = make_AB(config_.intermediate_size, config_.hidden_size);
++            b.gate_lin->attach_lora(Ag, Bg, scale);
++            b.up_lin->attach_lora(Au, Bu, scale);
++            b.down_lin->attach_lora(Ad, Bd, scale);
++            b.lora_initialized = true;
++            continue;
++        }
++
+         // Create LoRALinear wrappers
+         b.q_lin = std::make_unique<LoRALinear>(b.q_proj_weight, b.q_proj_bias);
+         b.v_lin = std::make_unique<LoRALinear>(b.v_proj_weight, b.v_proj_bias);
+@@ -180,7 +203,8 @@ void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]],
+     }
+     
+     std::cout << "[LoRA] Initialized with rank=" << rank << ", alpha=" << alpha 
+-              << ", qv_only=" << (qv_only ? "true" : "false") << std::endl;
++              << ", qv_only=" << (qv_only ? "true" : "false")
++              << ", mlp=" << (mlp ? "true" : "false") << std::endl;
+ }
+ 
+ std::vector<TensorPtr> QwenModel::get_lora_parameters() const {
+@@ -200,6 +224,9 @@ std::vector<TensorPtr> QwenModel::get_lora_parameters() const {
+         // K and O may be absent when qv_only mode is enabled
+         if (b.k_lin) add(b.k_lin); 
+         if (b.o_lin) add(b.o_lin);
++        if (b.gate_lin) add(b.gate_lin);
++        if (b.up_lin) add(b.up_lin);
++        if (b.down_lin) add(b.down_lin);
+     }
+     return params;
+ }
+@@ -324,10 +351,10 @@ TensorPtr QwenModel::attention(const TensorPtr& x, QwenBlock& blk,
+ }
+ 
+ TensorPtr QwenModel::mlp(const TensorPtr& x, QwenBlock& blk) {
+-    auto gate = matmul(x, blk.gate_proj_weight);
+-    auto up = matmul(x, blk.up_proj_weight);
++    auto gate = blk.gate_lin ? blk.gate_lin->forward(x) : matmul(x, blk.gate_proj_weight);
++    auto up = blk.up_lin ? blk.up_lin->forward(x) : matmul(x, blk.up_proj_weight);
+     auto act = swiglu(gate, up);
+-    auto down = matmul(act, blk.down_proj_weight);
++    auto down = blk.down_lin ? blk.down_lin->forward(act) : matmul(act, blk.down_proj_weight);
+     return down;
+ }
+ 
+diff --git a/operator/finetune_ops/graph/qwen_model.h b/operator/finetune_ops/graph/qwen_model.h
+index fd2ce00..e0e889a 100644
+--- a/operator/finetune_ops/graph/qwen_model.h
++++ b/operator/finetune_ops/graph/qwen_model.h
+@@ -51,6 +51,9 @@ struct QwenBlock {
+     std::unique_ptr<LoRALinear> k_lin;
+     std::unique_ptr<LoRALinear> v_lin;
+     std::unique_ptr<LoRALinear> o_lin;
++    std::unique_ptr<LoRALinear> gate_lin;
++    std::unique_ptr<LoRALinear> up_lin;
++    std::unique_ptr<LoRALinear> down_lin;
+ 
+     bool lora_initialized = false;
+ };
+@@ -71,9 +74,10 @@ public:
+      * @param alpha LoRA alpha (scaling factor = alpha / rank)
+      * @param dropout LoRA dropout
+      * @param qv_only If true, attach only q_proj and v_proj (default false = q/k/v/o)
++     * @param mlp If true, attach FFN gate/up/down instead of attention projections
+      */
+     void init_lora(int rank = 8, float alpha = 16.0f, float dropout = 0.05f,
+-                   bool qv_only = false, uint64_t seed = 42);
++                   bool qv_only = false, uint64_t seed = 42, bool mlp = false);
+     std::vector<TensorPtr> get_lora_parameters() const;
+     std::vector<TensorPtr> parameters() const;
+     void freeze_base();

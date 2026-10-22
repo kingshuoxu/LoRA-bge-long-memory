@@ -84,47 +84,40 @@ class TrainService : Service() {
                     ),
                 )
             }
-            val jsonl = File(store.trainDir, "train.jsonl")
-            jsonl.writeText(MemoryStore.trainingJsonl(reviewed))
-            val bin = File(applicationInfo.nativeLibraryDir, "libllama-finetune-lora.so")
+            val jsonl = File(store.trainDir, "facts.jsonl")
+            jsonl.writeText(factsJsonl(reviewed))
+            val bin = File(applicationInfo.nativeLibraryDir, "libtrain-mft.so")
             val models = File(getExternalFilesDir(null), "models")
-            // 对话用 f16 基座才能对上 50/50。训练可以另放一份 Q8_0,QVAC 探针是在 Q8 上做的。
-            val base = File(models, "train_base.gguf").takeIf { it.exists() } ?: File(models, "base.gguf")
-            if (!bin.exists() || !base.exists()) {
-                writeStatus(status, "error", "缺少训练程序或基座 GGUF")
+            // 对话仍用 f16 GGUF。训练读的是同一份 Qwen2.5-0.5B-Instruct 的 safetensors,进内存后按 fp32 做反向。
+            val base = File(models, "Qwen2.5-0.5B-Instruct")
+            if (!bin.exists() || !File(base, "model.safetensors").exists() || !File(base, "config.json").exists()) {
+                writeStatus(status, "error", "缺少训练程序,或 models/Qwen2.5-0.5B-Instruct 里没有 safetensors")
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
             }
-            val template = File(store.root, "qwen25_chat_template.jinja")
-            if (!template.exists()) {
-                assets.open("qwen25_chat_template.jinja").use { template.writeBytes(it.readBytes()) }
-            }
             val expert = job.getString("expert")
-            val ckpt = File(store.trainDir, "checkpoints").apply { mkdirs() }
+            val outDir = File(store.trainDir, "mft").apply { mkdirs() }
             val adapter = File(store.trainDir, "$expert.gguf")
+            val rank = job.optInt("rank", 32)
             val cmd = mutableListOf(
-                bin.absolutePath, "-m", base.absolutePath, "-f", jsonl.absolutePath,
-                "--assistant-loss-only", "--chat-template", template.absolutePath,
-                "--lora-rank", job.optInt("rank", 32).toString(),
-                "--lora-alpha", (job.optInt("rank", 32) * 2).toString(),
-                "--lora-modules", "ffn_gate,ffn_up,ffn_down",
-                "--learning-rate", job.optString("lr", "2e-5"),
-                "--weight-decay", "0",
-                "--num-epochs", job.optInt("epochs", 12).toString(),
-                "-c", "96", "-b", "96",
-                "-ngl", if (File(store.root, "use_gpu").exists()) "99" else "0",
-                "-fa", "off",
-                "--no-warmup",
-                "--checkpoint-save-steps", "200",
-                "--checkpoint-save-dir", ckpt.absolutePath,
-                "--output-adapter", adapter.absolutePath,
+                bin.absolutePath,
+                "--model_dir", base.absolutePath,
+                "--facts_jsonl", jsonl.absolutePath,
+                "--output_dir", outDir.absolutePath,
+                "--output_gguf", adapter.absolutePath,
+                "--epochs", job.optInt("epochs", 12).toString(),
+                "--batch_size", "1",
+                "--lr", job.optString("lr", "5e-4"),
+                "--max_grad_norm", "1.0",
+                "--lora_r", rank.toString(),
+                "--lora_alpha", (rank * 2).toString(),
+                "--lora_dropout", "0",
+                "--mlp",
+                "--base_weight_storage", "fp32",
+                "--seed", "42",
+                "--save_every", "20",
             )
-            val latest = ckpt.listFiles()?.filter { it.isFile }?.maxByOrNull { it.lastModified() }
-            if (latest != null) {
-                cmd.add("--resume-from")
-                cmd.add(latest.absolutePath)
-            }
             writeStatus(status, "running", "开始训练 ${reviewed.size} 条")
             val log = File(store.trainDir, "train.log")
             val telemetry = File(store.trainDir, "telemetry.tsv")
@@ -139,7 +132,7 @@ class TrainService : Service() {
                     log.appendText(line + "\n")
                     if (cancel.exists()) {
                         proc.destroy()
-                        writeStatus(status, "cancelled", "已取消,检查点留在 ${ckpt.name}")
+                        writeStatus(status, "cancelled", "已取消,检查点留在 ${outDir.name}")
                         break
                     }
                     val compact = line.replace('\r', '\n').lineSequence().lastOrNull { it.contains("loss=") } ?: continue
@@ -234,6 +227,22 @@ class TrainService : Service() {
         -1
     }
 
+    private fun factsJsonl(facts: List<ReviewedFact>): String {
+        val rows = ArrayList<String>()
+        for (fact in facts) {
+            val qa = JSONArray()
+            val pairs = if (fact.qa.isEmpty()) listOf(fact.statement to fact.value) else fact.qa
+            for ((q, a) in pairs) qa.put(JSONObject().put("q", q).put("a", a))
+            rows.add(
+                JSONObject()
+                    .put("statement", fact.statement)
+                    .put("qa", qa)
+                    .toString(),
+            )
+        }
+        return rows.joinToString("\n") + "\n"
+    }
+
     companion object {
         const val ACTION_CANCEL = "com.lorabge.memory.CANCEL_TRAIN"
 
@@ -255,7 +264,7 @@ class TrainService : Service() {
                 JSONObject()
                     .put("expert", expert)
                     .put("rank", 32)
-                    .put("lr", "2e-5")
+                    .put("lr", "5e-4")
                     .put("epochs", 12)
                     .put("facts", arr)
                     .toString(),

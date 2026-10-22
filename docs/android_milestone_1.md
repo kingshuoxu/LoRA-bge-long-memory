@@ -34,7 +34,9 @@ QVAC 这一版一次一步、没有微批,`--assistant-loss-only` 吃 ChatML JSO
 | 1e-4,batch_0,rank 32,Q8 基座 | 到第 99 步 loss 约 12.1,准确率掉到约 9%。第 50 步写出过检查点 `checkpoint_step_00000050/model.gguf`,说明存盘是通的 |
 | 2e-5,同一批,rank 32 | 前 30 步 loss 停在 6.8 附近,没有爆。第 30 步时进程被停掉(退出码 147),没有适配器,也没有记忆准确率 |
 
-所以 Qwen2 不是「架构不支持」。对不上的是学习率:仓库的 5e-4 靠的是选择性 loss,QVAC 的全词表 loss 吃不住。应用和手机脚本默认 2e-5、rank 32、alpha 64、模块 `ffn_gate,ffn_up,ffn_down`、12 epoch、AdamW、weight decay 0。**没有** QVAC 训出来的专家达到 48/50。这一步要在小米 15 上把 12 个 epoch 跑完,再用 f16 基座按 `verify_memory_gguf.py` 的规则去对。没有因此去改 Qwen3-0.6B 或 ONNX Runtime:前向和反向已经在 Qwen2 上跑通,剩下的是学习率和时长,不是换架构。
+QVAC 的反向和 PyTorch 对不上。同一条序列上,24 层 LoRA 梯度的余弦大约是 -0.03,前面几层的梯度范数比 PyTorch 大几十倍。Adam 和 SGD 都会停在初始 loss,或者把 loss 越训越高。这不是学习率能修的。
+
+训练改走 MobileFineTuner 的 Qwen2.5-0.5B 原生自动微分,提交 `086b1a027fe708d5eaca89b1ec2bf1a876fb80de`,补丁在 `android/trainer/mft-ffn-lora.patch`。补丁加了 FFN 的 gate/up/down LoRA,loss 只算 JSONL 掩码标出来的 token,和仓库 `selective_loss` 一样是移位后的交叉熵。单条事实可以在几步里从 4.7 收到 0.0001。配方是 rank 32、alpha 64、Adam、学习率 5e-4、weight decay 0、梯度裁剪 1.0、12 epoch。基座在内存里用 fp32,这样 GEMM 走 BLAS;对话仍用 f16 GGUF。陈述句整句监督,QA 只监督答案。手机上的 `libtrain-mft.so` 和桌面这个二进制是同一份源码。
 
 陈述句在仓库里是整句 loss,QA 只在答案上。QVAC 一次运行只能开一种 assistant-only,`prepare_train_jsonl.py` 把陈述句包成「请记下这句话。」,让两类样本进同一次训练。这和 `FactDataset` 不是同一条 loss,差在这里。
 
@@ -77,7 +79,7 @@ System image must match the host architecture.
 
 ## 阻塞
 
-1. **QVAC 全词表 loss 吃不住仓库的学习率。** Qwen2 能训,5e-4 和 1e-4 发散,2e-5 只看了 30 步。没有 12 epoch、没有 ≥48/50 的 QVAC 适配器。
+1. **QVAC 的梯度是错的。** 和 PyTorch 比,余弦大约 -0.03。训练已经改到 MobileFineTuner 的 FFN LoRA。batch_0 的 12 epoch 在桌面用的就是将要放进 APK 的那份 C++。准确率用 `verify_memory_gguf.py` 对 f16 基座,目标 ≥48/50,常识题另对 20 条。
 2. **bge 的大写拉丁字母。** 纯中文余弦是 1.0;带 CEO 这类大写时 llama.cpp 会小写化。用 PyTorch 键、llama 问句时,11687 条路由没有因此改判。事实闸是否改判见文末。没有改走 ONNX。
 3. **手机命令行和桌面 b7349 不是同一次构建。** 手机包短提交 `29fe08c`,完整哈希在 ggml-org/llama.cpp、tetherto/qvac-fabric-llm.cpp、qvac-fabric-llm-finetune 上都没有对上。桌面能用的旗标不要假设手机二进制全都认;`--val-split` 在桌面 b7349 上会被拒绝。
 4. **桌面客户端还没有提交目录格式。** 应用按本文和 `docs/client_store.md` 实现。JSON 字段跟仓库的 `router.jsonl` / `fact_memory.json` 对齐,GGUF 和 float32 是附加文件。
