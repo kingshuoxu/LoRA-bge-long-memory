@@ -4,9 +4,10 @@
 2. 实体守卫:拿在册实体做最长匹配,两侧不能是名字音节。
 3. 实体优先:问句里只有一个在册实体,且名字旁边有公司类线索,就直接去那家专家。
    点了好几家时,能确定主语才去那家;比较句或主语已不在册就弃权。
-   问句在问的属性和该实体写入的属性不一致,也弃权。
+   问句和该实体写过的事实对不上,也弃权。
    没有在册实体时,才退回 bge top-1 ≥ τ 且守卫通过。
    两字名左右必须是问句套话里的字,避免从「埃菲尔」里切出「菲尔」。
+   事实闸不看属性类别:把实体名换成同一个占位符,用 bge 比较问句和这条事实的原文。
 
 train_expert 用它生成路由键,eval_memory 用它决定挂哪家专家。
 """
@@ -301,51 +302,171 @@ def _short_name_neighbors_ok(compact: str, start: int, end: int) -> bool:
     return True
 
 
-# 问句在问哪种事实。命中不止一种就返回 None,调用方不要猜。
-_ATTR_CUES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("CEO", (
-        "首席执行官", "董事长", "总经理", "创始人", "负责人", "一把手",
-        "掌门人", "掌门", "CEO", "总裁", "老板", "老大", "谁在管",
-    )),
-    ("成立年份", ("成立年份", "创办时间", "成立时间", "成立", "创办", "建厂", "起步", "哪年", "何年")),
-    ("总部城市", ("总部", "根据地", "所在地", "哪座城市", "哪个城市", "飞往")),
-    ("旗舰产品", ("旗舰产品", "拳头产品", "招牌产品", "明星产品", "核心产品", "旗舰", "畅销", "型号", "招牌", "产品")),
-)
+def write_fact_memory(facts: list[dict], path: str | Path) -> None:
+    """把事实原文落盘。不写属性类别,推理时只拿这些句子做语义比较。"""
+    records = []
+    for fact in facts:
+        records.append({
+            "entity": fact["entity"],
+            "value": fact.get("value", ""),
+            "statement": fact["statement"],
+            "questions": [qa["q"] for qa in fact.get("qa", [])],
+        })
+    Path(path).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def classify_attribute(query: str) -> str | None:
-    """用关键词判断问句在问 CEO / 成立年份 / 总部城市 / 旗舰产品。判断不了就返回 None。"""
-    compact = _compact_query(query)
-    found = {
-        attr for attr, cues in _ATTR_CUES
-        if any(cue in compact for cue in cues)
-    }
-    if len(found) == 1:
-        return next(iter(found))
-    # 「干啥的」没有对应的已存属性,单独出现时弃权,不要把专家挂上去。
-    if not found and "干啥" in compact:
-        return "未知"
-    return None
+class FactMemory:
+    """一条事实是否答得了这句问话。
+
+    写入时只存陈述句和当时的问句。比较前把在册实体换成同一个占位符,
+    陈述句里的答案也换成占位符,避免专名把相似度撑高或压低。
+    问句至少要达到校准过的 τ,并且不能更像另一条已存事实。
+    """
+
+    def __init__(self, records: list[dict], tau: float, mask: str = "某", value_mask: str = "某值"):
+        self.tau = float(tau)
+        self.mask = mask
+        self.value_mask = value_mask
+        grouped: dict[str, list[str]] = {}
+        order: list[str] = []
+        for record in records:
+            name = str(record["entity"])
+            if name not in grouped:
+                grouped[name] = []
+                order.append(name)
+            grouped[name].extend(self._masked_texts(record))
+        self.entities = order
+        self._names_by_len = sorted(order, key=len, reverse=True)
+        texts: list[str] = []
+        spans: dict[str, tuple[int, int]] = {}
+        for name in order:
+            start = len(texts)
+            texts.extend(grouped[name])
+            spans[name] = (start, len(texts))
+        self._spans = spans
+        self._vec = embed(texts) if texts else torch.empty(0, 0)
+
+    def _masked_texts(self, record: dict) -> list[str]:
+        entity = str(record["entity"])
+        value = str(record.get("value", "")).rstrip("年")
+        raws: list[str] = []
+        if record.get("statement"):
+            raws.append(str(record["statement"]))
+        raws.extend(str(q) for q in record.get("questions") or [])
+        raws.extend(str(q) for q in record.get("texts") or [])
+        return [self._mask_fact(text, entity, value) for text in raws if text]
+
+    def _mask_fact(self, text: str, entity: str, value: str) -> str:
+        pieces = [(entity, self.mask)]
+        if value:
+            pieces.append((value, self.value_mask))
+        for src, dst in sorted(pieces, key=lambda item: len(item[0]), reverse=True):
+            text = text.replace(src, dst)
+        return text
+
+    def mask_query(self, query: str) -> str:
+        """问句里每个在册实体都换成同一个占位符,剩下的词才拿去比。"""
+        for name in self._names_by_len:
+            if name and name in query:
+                query = query.replace(name, self.mask)
+        return query
+
+    def _different_mask(self, entity: str) -> torch.Tensor:
+        """同一条事实的拷贝(别的实体、同样的掩码原文)不拿来当反例。"""
+        cache = getattr(self, "_diff_cache", None)
+        if cache is None:
+            cache = {}
+            self._diff_cache = cache
+        if entity not in cache:
+            start, end = self._spans[entity]
+            own_block = self._vec[start:end]
+            duplicated = (self._vec @ own_block.T).max(dim=1).values >= 0.999
+            duplicated[start:end] = True
+            cache[entity] = ~duplicated
+        return cache[entity]
+
+    def _split_scores(self, sims: torch.Tensor, entity: str) -> tuple[float, float]:
+        start, end = self._spans[entity]
+        own = float(sims[start:end].max())
+        keep = self._different_mask(entity)
+        if not bool(keep.any()):
+            return own, -1.0
+        return own, float(sims[keep].max())
+
+    def scores(self, query: str, entity: str) -> tuple[float, float]:
+        """返回 (这条事实的最高相似度, 其他不同事实的最高相似度)。"""
+        if entity not in self._spans or self._vec.numel() == 0:
+            return -1.0, -1.0
+        query_vec = embed([self.mask_query(query)])[0]
+        return self._split_scores(self._vec @ query_vec, entity)
+
+    def allows(self, query: str, entity: str) -> bool:
+        if entity not in self._spans:
+            return False
+        own, other = self.scores(query, entity)
+        return own >= self.tau and own + 1e-6 >= other
+
+    def decide_many(self, pairs: list[tuple[str, str]]) -> list[tuple[bool, float, float]]:
+        """批量判断 (问句, 实体)。实体不在库里视为答不了。"""
+        if not pairs or self._vec.numel() == 0:
+            return [(False, -1.0, -1.0) for _ in pairs]
+        masked = [self.mask_query(query) for query, _entity in pairs]
+        query_vecs = embed(masked)
+        sims = query_vecs @ self._vec.T
+        masks = {entity: self._different_mask(entity) for entity in {entity for _query, entity in pairs} if entity in self._spans}
+        out = []
+        for index, (_query, entity) in enumerate(pairs):
+            if entity not in self._spans:
+                out.append((False, -1.0, -1.0))
+                continue
+            start, end = self._spans[entity]
+            own = float(sims[index, start:end].max())
+            keep = masks[entity]
+            other = float(sims[index, keep].max()) if bool(keep.any()) else -1.0
+            out.append((own >= self.tau and own + 1e-6 >= other, own, other))
+        return out
 
 
-def load_entity_attrs(experts_dir: str | Path) -> dict[str, str]:
-    """读各专家目录里的 entity_attrs.json,得到实体名 → 训练时写入的属性。"""
-    attrs: dict[str, str] = {}
-    for path in sorted(Path(experts_dir).glob("expert_*/entity_attrs.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for name, attr in data.items():
-            attrs[str(name)] = str(attr)
-    return attrs
+def load_fact_gate(experts_dir: str | Path) -> dict:
+    """阈值跟着这套已校准的专家走。新训出来的目录没另存文件时,沿用同一份。"""
+    candidates = [
+        Path(experts_dir) / "fact_gate.json",
+        Path(__file__).resolve().parents[1] / "experts" / "fact_gate.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"缺少事实闸阈值,已查找: {', '.join(str(p) for p in candidates)}")
 
 
-def _attr_allows(query: str, name: str, entity_attrs: dict[str, str] | None) -> bool:
-    """没有属性表,或问句看不出在问什么,就放行。看得出、且和这条事实不一致,就拒绝。"""
-    if not entity_attrs or name not in entity_attrs:
+def load_fact_records(experts_dir: str | Path) -> list[dict]:
+    records: list[dict] = []
+    for path in sorted(Path(experts_dir).glob("expert_*/fact_memory.json")):
+        records.extend(json.loads(path.read_text(encoding="utf-8")))
+    return records
+
+
+def load_fact_memory(experts_dir: str | Path, extra_records: list[dict] | None = None) -> FactMemory | None:
+    """读各专家的 fact_memory.json 并编码。没有文件就返回 None,调用方不额外拦截。"""
+    records = load_fact_records(experts_dir)
+    if extra_records:
+        records = records + list(extra_records)
+    if not records:
+        return None
+    gate = load_fact_gate(experts_dir)
+    return FactMemory(
+        records,
+        tau=float(gate["tau"]),
+        mask=str(gate.get("mask", "某")),
+        value_mask=str(gate.get("value_mask", "某值")),
+    )
+
+
+def _fact_allows(query: str, name: str, fact_memory: FactMemory | None) -> bool:
+    """没有事实库就不拦截。有事实库时,这条事实答不了这句问话就拒绝。"""
+    if fact_memory is None:
         return True
-    asked = classify_attribute(query)
-    if asked is None:
-        return True
-    return entity_attrs[name] == asked
+    return fact_memory.allows(query, name)
 
 
 # 线索必须挨着名字。问句别处出现「公司 / 产品」不能把一个两字音节直接送进专家。
@@ -406,7 +527,7 @@ def route_decision(
     expert_entities: dict[str, list[str] | set[str]],
     sims: dict[str, float] | None = None,
     tau: float = 0.6,
-    entity_attrs: dict[str, str] | None = None,
+    fact_memory: FactMemory | None = None,
 ) -> dict:
     """实体优先路由。
 
@@ -414,7 +535,7 @@ def route_decision(
     没有在册实体:退回 bge top-1,相似度 ≥ τ 且守卫通过才挂载。
     有好几个名字(在册或已删除的音节串):能确定主语、主语仍在册、且主语旁有线索才去那家;
     主语不在册、比较句说不清在问谁、或没有线索,就弃权回基座,不去另一家。
-    问句看得出在问某种属性,而该实体没存过这种属性:同样弃权,不把专家挂上去。
+    已经选中实体之后,再用事实库判断这条事实答不答得了这句问话;答不了就弃权。
     """
     sims = sims or {}
     owners = _entity_owners(expert_entities)
@@ -439,8 +560,8 @@ def route_decision(
         guard = bool(names) if expert_entities.get(best_expert) else verify_entity_guard(query, [])
         if best_sim < tau or not guard:
             return blocked("bge_block")
-        if names and not any(_attr_allows(query, name, entity_attrs) for name in names):
-            return blocked("abstain_attr")
+        if names and not any(_fact_allows(query, name, fact_memory) for name in names):
+            return blocked("abstain_fact")
         return {
             "expert": best_expert,
             "candidate": best_expert,
@@ -457,8 +578,8 @@ def route_decision(
         span = next((item for item in spans if item[0] == subject), None)
         neighbor_ok = bool(span) and _short_name_neighbors_ok(compact, span[1], span[2])
         if expert and span and neighbor_ok and _cue_near(compact, span[1], span[2]):
-            if not _attr_allows(query, subject, entity_attrs):
-                return blocked("abstain_attr")
+            if not _fact_allows(query, subject, fact_memory):
+                return blocked("abstain_fact")
             return {
                 "expert": expert,
                 "candidate": expert,
@@ -479,8 +600,8 @@ def route_decision(
         name, start, end = spans[0]
         expert = owners.get(name)
         if expert and _short_name_neighbors_ok(compact, start, end) and _cue_near(compact, start, end):
-            if not _attr_allows(query, name, entity_attrs):
-                return blocked("abstain_attr")
+            if not _fact_allows(query, name, fact_memory):
+                return blocked("abstain_fact")
             return {
                 "expert": expert,
                 "candidate": expert,
@@ -496,10 +617,10 @@ def route_from_scores(
     expert_entities: dict[str, list[str] | set[str]],
     sims: dict[str, float],
     tau: float,
-    entity_attrs: dict[str, str] | None = None,
+    fact_memory: FactMemory | None = None,
 ) -> tuple[str | None, float, bool]:
     """给 eval / 测试用的三元组:(专家或 None, 相似度, 是否挂载)。"""
-    decision = route_decision(query, expert_entities, sims, tau, entity_attrs)
+    decision = route_decision(query, expert_entities, sims, tau, fact_memory)
     if decision["fired"]:
         return decision["expert"], decision["sim"], True
     candidate = decision.get("candidate")

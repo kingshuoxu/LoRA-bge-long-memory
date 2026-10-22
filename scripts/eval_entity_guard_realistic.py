@@ -22,10 +22,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from gen_data import PARA_QUESTIONS, SYL  # noqa: E402
 from router import (  # noqa: E402
-    classify_attribute,
     extract_entities_from_key_texts,
     find_name_spans,
-    load_entity_attrs,
+    load_fact_memory,
+    load_fact_records,
     mentioned_entities,
     route_decision,
     verify_entity_guard,
@@ -346,24 +346,25 @@ def _asked_attr(row: dict) -> str | None:
 
 
 def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict], facts: list[dict]) -> None:
-    """不看向量:存过的属性直达专家;没存过的属性弃权;删掉之后和比较句也弃权。"""
+    """不看向量:在册实体直达专家;删掉之后和比较句弃权。事实对不对得上另用 bge 测。"""
     experts = list(entities)
     zero = {name: 0.0 for name in experts}
-    by_entity = {fact["entity"]: fact for fact in facts}
-    attrs = {fact["entity"]: fact["attr"] for fact in facts}
-    on_disk = load_entity_attrs(ROOT / "experts")
-    if on_disk != attrs:
-        missing = set(attrs) - set(on_disk)
-        raise SystemExit(f"entity_attrs.json 与数据不一致,缺 {len(missing)} 个实体")
+    records = load_fact_records(ROOT / "experts")
+    covered = {str(rec["entity"]) for rec in records}
+    missing = {fact["entity"] for fact in facts} - covered
+    if missing:
+        raise SystemExit(f"fact_memory.json 与数据不一致,缺 {len(missing)} 个实体")
+    if any("attr" in rec for rec in records):
+        raise SystemExit("fact_memory.json 不应写入属性类别")
+    if any(not rec.get("statement") or not rec.get("questions") for rec in records):
+        raise SystemExit("fact_memory.json 缺少事实原文")
 
     def spans_of(q: str) -> list[str]:
         return [text for text, _s, _e in find_name_spans(q)]
 
     bad_span = []
     miss = []
-    leaked_attr = []
     deleted_fire = []
-    stored_n = unstored_n = 0
     for row in rows:
         if row["expect"] != "admit" or row["category"] == "two_entity":
             continue
@@ -371,30 +372,11 @@ def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict], facts
         if names != [row["entity"]]:
             bad_span.append((names, row["q"]))
             continue
-        fact = by_entity[row["entity"]]
-        asked = fact["attr"] if row["category"] in ("canonical", "para") else _asked_attr(row)
-        classified = classify_attribute(row["q"])
-        if asked is not None and classified not in (asked, None):
-            raise SystemExit(f"属性分类错了: 期望 {asked} 得到 {classified} | {row['q']}")
-        if asked is not None and row["category"] not in ("canonical", "para") and classified != asked:
-            raise SystemExit(f"真实问法没分出属性 {asked}: {row['q']}")
-        if row["category"] in ("canonical", "para"):
-            stored = classified is None or classified == fact["attr"]
-        else:
-            stored = classified == fact["attr"]
-        got = route_decision(row["q"], entities, zero, 0.6, attrs)
-        if stored:
-            stored_n += 1
-            if not (got["fired"] and got["expert"] == row["expert"]):
-                miss.append((got["reason"], row["q"]))
-        else:
-            unstored_n += 1
-            if got["fired"]:
-                leaked_attr.append((got["reason"], row["q"]))
+        got = route_decision(row["q"], entities, zero, 0.6)
+        if not (got["fired"] and got["expert"] == row["expert"]):
+            miss.append((got["reason"], row["q"]))
         kept = {n: ents for n, ents in entities.items() if n != row["expert"]}
-        removed = {item["entity"] for item in facts if item["expert"] == row["expert"]}
-        kept_attrs = {name: attr for name, attr in attrs.items() if name not in removed}
-        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6, kept_attrs)
+        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6)
         if after["fired"]:
             deleted_fire.append((after["expert"], after["reason"], row["q"]))
     if bad_span:
@@ -402,65 +384,51 @@ def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict], facts
         raise SystemExit(f"单实体问法音节段不是该实体 {len(bad_span)} 例: {names} | {q}")
     if miss:
         reason, q = miss[0]
-        raise SystemExit(f"已存属性未直达 {len(miss)} 例 reason={reason}: {q}")
-    if leaked_attr:
-        reason, q = leaked_attr[0]
-        raise SystemExit(f"未存属性仍挂载 {len(leaked_attr)} 例 reason={reason}: {q}")
+        raise SystemExit(f"单实体未直达 {len(miss)} 例 reason={reason}: {q}")
     if deleted_fire:
         expert, reason, q = deleted_fire[0]
         raise SystemExit(f"删掉被问专家后仍挂载 {len(deleted_fire)} 例 {expert}/{reason}: {q}")
-    print(
-        f"逻辑检查: 已存属性直达 {stored_n}/{stored_n},未存属性弃权 {unstored_n}/{unstored_n},删除后挂载 0",
-        flush=True,
-    )
+    single_n = len([
+        row for row in rows
+        if row["expect"] == "admit" and row["category"] != "two_entity"
+    ])
+    print(f"逻辑检查: 单实体直达 {single_n - len(bad_span)}/{single_n},删除后挂载 0", flush=True)
 
-    subject_ok = subject_miss = compare_fire = deleted_two = unstored_two = unstored_two_fire = 0
+    subject_ok = subject_miss = compare_fire = deleted_two = noncompare = 0
     for row in rows:
         if row["category"] != "two_entity":
             continue
-        fact = by_entity[row["entity"]]
-        asked = _asked_attr(row)
-        classified = classify_attribute(row["q"])
-        if asked is not None and classified != asked:
-            raise SystemExit(f"双实体属性分类错了: 期望 {asked} 得到 {classified} | {row['q']}")
-        got = route_decision(row["q"], entities, zero, 0.6, attrs)
+        got = route_decision(row["q"], entities, zero, 0.6)
         comparing = "相比" in row["q"] or "比较" in row["q"]
         if comparing:
             if got["fired"]:
                 compare_fire += 1
             continue
-        stored = asked is not None and asked == fact["attr"]
-        if not stored:
-            unstored_two += 1
-            if got["fired"]:
-                unstored_two_fire += 1
-            continue
+        noncompare += 1
         if got["fired"] and got["expert"] == row["expert"]:
             subject_ok += 1
         else:
             subject_miss += 1
             if subject_miss <= 3:
                 print(f"  双实体未直达 reason={got['reason']} spans={spans_of(row['q'])} | {row['q']}", flush=True)
-        removed = {item["entity"] for item in facts if item["expert"] == row["expert"]}
         kept = {n: ents for n, ents in entities.items() if n != row["expert"]}
-        kept_attrs = {name: attr for name, attr in attrs.items() if name not in removed}
-        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6, kept_attrs)
+        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6)
         if after["fired"]:
             deleted_two += 1
-    if compare_fire or subject_miss or deleted_two or unstored_two_fire:
+    if compare_fire or subject_miss or deleted_two:
         raise SystemExit(
             f"双实体路由不符合预期: 比较句误挂载 {compare_fire}, "
-            f"已存主语未直达 {subject_miss}, 未存属性仍挂载 {unstored_two_fire}, 删除后仍挂载 {deleted_two}"
+            f"主语未直达 {subject_miss}, 删除后仍挂载 {deleted_two}"
         )
     print(
-        f"逻辑检查: 双实体已存主语直达 {subject_ok},未存属性弃权 {unstored_two},比较句弃权,删除后挂载 0",
+        f"逻辑检查: 双实体主语直达 {subject_ok}/{noncompare},比较句弃权,删除后挂载 0",
         flush=True,
     )
 
     for probe in ("著名的埃菲尔铁塔位于", "福克纳写过《喧哗与骚动》", "下列著名建筑物哪个不属于法国埃菲尔铁塔"):
         if any(mentioned_entities(probe, ents) for ents in entities.values()):
             raise SystemExit(f"两字名从真实词里切了出来: {probe}")
-        got = route_decision(probe, entities, {name: 0.99 for name in experts}, 0.6, attrs)
+        got = route_decision(probe, entities, {name: 0.99 for name in experts}, 0.6)
         if got["fired"]:
             raise SystemExit(f"两字名真实词仍挂载 {got['expert']}/{got['reason']}: {probe}")
     print("逻辑检查: 「埃菲尔 / 福克纳」不挂载", flush=True)
@@ -469,7 +437,7 @@ def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict], facts
     for row in rows:
         if row["expect"] != "reject":
             continue
-        got = route_decision(row["q"], entities, {name: 0.99 for name in experts}, 0.6, attrs)
+        got = route_decision(row["q"], entities, {name: 0.99 for name in experts}, 0.6)
         if got["fired"]:
             reject_fire.append((got["expert"], got["reason"], row["q"]))
     if reject_fire:
@@ -544,7 +512,7 @@ def load_dirty_entities(entries: list[dict]) -> dict[str, list[str]]:
     return dirty
 
 
-def run_routing(entries, entities, rows, tau: float, entity_attrs: dict[str, str] | None = None) -> list[dict]:
+def run_routing(entries, entities, rows, tau: float, fact_memory=None) -> list[dict]:
     import torch
     from router import embed
 
@@ -561,7 +529,7 @@ def run_routing(entries, entities, rows, tau: float, entity_attrs: dict[str, str
         best, best_s = max(sims.items(), key=lambda kv: kv[1])
         guard_best = verify_entity_guard(row["q"], entities.get(best, []))
         legacy_best = legacy_verify(row["q"], dirty.get(best, []))
-        decision = route_decision(row["q"], entities, sims, tau, entity_attrs)
+        decision = route_decision(row["q"], entities, sims, tau, fact_memory)
         rec = {
             "id": row["id"],
             "category": row["category"],
@@ -592,7 +560,7 @@ def run_routing(entries, entities, rows, tau: float, entity_attrs: dict[str, str
             rec["cross_expert"] = b2
             pruned_entities = {n: ents for n, ents in entities.items() if n != gold}
             pruned_sims = {n: s for n, s in sims.items() if n != gold}
-            after = route_decision(row["q"], pruned_entities, pruned_sims, tau, entity_attrs)
+            after = route_decision(row["q"], pruned_entities, pruned_sims, tau, fact_memory)
             rec["ent_cross"] = after["fired"]
             rec["ent_cross_expert"] = after["expert"]
             rec["ent_cross_reason"] = after["reason"]
@@ -777,7 +745,7 @@ def _contains_value(answer: str, value: str | None) -> bool:
     return value.rstrip("年") in answer
 
 
-def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path, entity_attrs: dict[str, str] | None = None) -> dict:
+def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path, fact_memory=None) -> dict:
     """CMMLU 题干的路由激活。只编码题干,和 eval_general 的路由文本一致。"""
     import csv
 
@@ -802,7 +770,7 @@ def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path, entity_attrs: dic
         max_sim = max(max_sim, best_s)
         if best_s >= tau and verify_entity_guard(text, entities.get(best, [])):
             boundary += 1
-        decision = route_decision(text, entities, sims, tau, entity_attrs)
+        decision = route_decision(text, entities, sims, tau, fact_memory)
         if decision["fired"]:
             entity += 1
             if len(samples) < 8:
@@ -838,7 +806,7 @@ def _memory_leak(answer: str, values: list[str]) -> bool:
 
 def run_generation(
     entries, entities, rows, facts, tau: float, out_path: Path, n_per_cat: int, seed: int,
-    entity_attrs: dict[str, str] | None = None,
+    fact_memory=None,
 ) -> dict:
     """抽样生成。已存属性看召回;没存过的属性看弃权率和记忆泄漏。"""
     import time
@@ -895,7 +863,7 @@ def run_generation(
         best, best_s = max(sims.items(), key=lambda kv: kv[1])
         boundary_fire = best_s >= tau and verify_entity_guard(row["q"], entities.get(best, []))
         before = route_decision(row["q"], entities, sims, tau)
-        after = route_decision(row["q"], entities, sims, tau, entity_attrs)
+        after = route_decision(row["q"], entities, sims, tau, fact_memory)
         plans.append({
             "row": row,
             "boundary_expert": best if boundary_fire else None,
@@ -1035,6 +1003,219 @@ def run_generation(
     return summary
 
 
+TUNE_ATTRS = ("CEO", "成立年份")
+HELD_ATTRS = ("总部城市", "旗舰产品")
+
+
+def _fact_of_row(row: dict, facts_by_id: dict[str, dict]) -> dict | None:
+    fact, _index = _row_fact(row, facts_by_id)
+    if fact is not None:
+        return fact
+    return None
+
+
+def report_fact_gate(rows: list[dict], facts: list[dict], fact_memory) -> None:
+    """事实闸的接受/弃权。阈值只在 CEO、成立年份的 PARA 问法上取过,这里分开报。"""
+    import time
+
+    from gen_data import PARA_QUESTIONS
+
+    facts_by_id = {fact["id"]: fact for fact in facts}
+    by_attr: dict[str, dict] = {}
+    for fact in facts:
+        by_attr.setdefault(fact["attr"], fact)
+
+    pairs: list[tuple[str, str]] = []
+    labels: list[str] = []
+
+    def add(label: str, question: str, entity: str) -> None:
+        pairs.append((question, entity))
+        labels.append(label)
+
+    for row in rows:
+        if row["expect"] != "admit" or not row.get("entity"):
+            continue
+        fact = _fact_of_row(row, facts_by_id)
+        if fact is None:
+            continue
+        comparing = row["category"] == "two_entity" and ("相比" in row["q"] or "比较" in row["q"])
+        if comparing:
+            add("compare", row["q"], row["entity"])
+            continue
+        if row["category"] in ("canonical", "para"):
+            asked = fact["attr"]
+        else:
+            asked = _asked_attr(row)
+        if asked is None:
+            add(f"no_unique:{row['category']}", row["q"], row["entity"])
+            continue
+        stored = asked == fact["attr"]
+        if row["category"] == "canonical":
+            label = "canonical"
+        elif row["category"] == "para" and fact["attr"] in TUNE_ATTRS:
+            label = "tune_para"
+        elif row["category"] == "para":
+            label = "held_attr_para"
+        elif fact["attr"] in TUNE_ATTRS and asked in TUNE_ATTRS:
+            label = "held_phrase"
+        elif asked in HELD_ATTRS or fact["attr"] in HELD_ATTRS:
+            label = "held_attr"
+        else:
+            label = "other"
+        add(f"{label}:{'stored' if stored else 'unstored'}", row["q"], row["entity"])
+
+    for attr in TUNE_ATTRS:
+        fact = by_attr[attr]
+        other = next(name for name in TUNE_ATTRS if name != attr)
+        for tmpl in PARA_QUESTIONS[other]:
+            add("tune_neg", tmpl.format(e=fact["entity"]), fact["entity"])
+
+    started = time.perf_counter()
+    decided = fact_memory.decide_many(pairs)
+    elapsed = time.perf_counter() - started
+    print(
+        f"事实闸批量 {len(pairs)} 条 {elapsed:.1f}s "
+        f"({1000 * elapsed / max(len(pairs), 1):.2f} ms/条,含编码)",
+        flush=True,
+    )
+    sample_q, sample_entity = pairs[0]
+    started = time.perf_counter()
+    repeats = 30
+    for _ in range(repeats):
+        fact_memory.allows(sample_q, sample_entity)
+    latency_ms = (time.perf_counter() - started) / repeats * 1000
+    print(f"单条事实闸 {latency_ms:.1f} ms (路由已经选定实体之后多出来的比较)", flush=True)
+
+    grouped: dict[str, list[bool]] = defaultdict(list)
+    examples: list[str] = []
+    for label, (ok, own, other), (question, _entity) in zip(labels, decided, pairs):
+        grouped[label].append(ok)
+        interesting = (
+            (label.endswith(":stored") and not ok)
+            or (label.endswith(":unstored") and ok)
+            or (label == "tune_neg" and ok)
+        )
+        if interesting and len(examples) < 12:
+            examples.append(f"    {label} own={own:.3f} other={other:.3f} {question}")
+
+    print(f"事实闸 τ={fact_memory.tau}。调参只用 CEO / 成立年份的 PARA 问法;其余是留出问法或留出属性。")
+    order = [
+        "canonical:stored",
+        "tune_para:stored",
+        "tune_neg",
+        "held_phrase:stored",
+        "held_phrase:unstored",
+        "held_attr_para:stored",
+        "held_attr:stored",
+        "held_attr:unstored",
+        "compare",
+        "no_unique:title",
+        "no_unique:colloquial",
+    ]
+    for label in order:
+        flags = grouped.get(label)
+        if not flags:
+            continue
+        abstain_label = label in ("tune_neg", "compare") or label.endswith("unstored") or label.startswith("no_unique")
+        if abstain_label:
+            good = sum(not flag for flag in flags)
+            word = "弃权"
+        else:
+            good = sum(flags)
+            word = "接受"
+        print(f"  {label:24s} {word} {good}/{len(flags)}", flush=True)
+    compare_flags = grouped.get("compare", [])
+    if compare_flags:
+        print(
+            "  比较句里事实闸单独看会放过问到已存年份的那部分;"
+            "路由在进事实闸之前就因「相比」弃权。",
+            flush=True,
+        )
+    if examples:
+        print("  和期望不一致的样例:", flush=True)
+        print("\n".join(examples), flush=True)
+
+    def must(label: str, accept: bool) -> None:
+        flags = grouped.get(label, [])
+        if not flags:
+            raise SystemExit(f"事实闸没有统计到 {label}")
+        good = sum(flags) if accept else sum(not flag for flag in flags)
+        if good != len(flags):
+            raise SystemExit(f"事实闸 {label} {good}/{len(flags)}")
+
+    must("canonical:stored", True)
+    must("tune_para:stored", True)
+    must("tune_neg", False)
+    must("held_attr_para:stored", True)
+    must("held_attr:stored", True)
+    must("held_attr:unstored", False)
+
+
+def report_open_domain(experts_dir: Path, facts: list[dict], base_memory) -> None:
+    """新属性类型。阈值不再改。事实在库里就该接受,问到别的事实就该弃权。"""
+    from gen_data import OPEN_DOMAIN
+
+    path = ROOT / "data_heldout" / "open_domain.jsonl"
+    open_facts = [json.loads(line) for line in path.open(encoding="utf-8") if line.strip()]
+    extra = [{
+        "entity": fact["entity"],
+        "value": fact["value"],
+        "statement": fact["statement"],
+        "questions": [qa["q"] for qa in fact["qa"]],
+    } for fact in open_facts]
+    combined = load_fact_memory(experts_dir, extra_records=extra)
+    if combined is None:
+        raise SystemExit("开放域事实没有编进事实库")
+
+    pos_pairs = []
+    for fact in open_facts:
+        for tmpl in OPEN_DOMAIN[fact["attr"]]["held"]:
+            pos_pairs.append((tmpl.format(e=fact["entity"]), fact["entity"]))
+    pos = combined.decide_many(pos_pairs)
+
+    neg_pairs = []
+    old_probes = ["{e}公司的CEO是谁?", "{e}公司是哪一年成立的?", "{e}公司的总部在哪里?", "{e}公司的旗舰产品是什么?"]
+    for fact in open_facts:
+        for attr, spec in OPEN_DOMAIN.items():
+            if attr == fact["attr"]:
+                continue
+            neg_pairs.append((spec["held"][0].format(e=fact["entity"]), fact["entity"]))
+        for tmpl in old_probes:
+            neg_pairs.append((tmpl.format(e=fact["entity"]), fact["entity"]))
+    neg = combined.decide_many(neg_pairs)
+
+    by_attr: dict[str, dict] = {}
+    for fact in facts:
+        by_attr.setdefault(fact["attr"], fact)
+    bare_pairs = []
+    stored_pairs = []
+    for fact in by_attr.values():
+        for spec in OPEN_DOMAIN.values():
+            for tmpl in spec["held"]:
+                question = tmpl.format(e=fact["entity"])
+                bare_pairs.append((question, fact["entity"]))
+                stored_pairs.append((question, fact["entity"]))
+    bare = base_memory.decide_many(bare_pairs)
+    stored_old = combined.decide_many(stored_pairs)
+
+    def count_abstain(rows: list[tuple[bool, float, float]]) -> int:
+        return sum(not ok for ok, _own, _other in rows)
+
+    print(
+        f"开放域留出属性(员工人数/股票代码/主要竞争对手/口号/创始人母校),τ 未改。"
+        f" 新事实的留出问法接受 {sum(ok for ok, _, _ in pos)}/{len(pos)};"
+        f" 问到其他事实弃权 {count_abstain(neg)}/{len(neg)};"
+        f" 新问法问旧实体、新事实也在库里弃权 {count_abstain(stored_old)}/{len(stored_old)};"
+        f" 新问法问旧实体、库里没有这类事实弃权 {count_abstain(bare)}/{len(bare)}",
+        flush=True,
+    )
+    if sum(ok for ok, _, _ in pos) != len(pos) or count_abstain(neg) != len(neg):
+        raise SystemExit("开放域事实在库里时,接受/弃权没有分开")
+    leaks = [(own, other, q) for (q, _e), (ok, own, other) in zip(bare_pairs, bare) if ok]
+    for own, other, question in leaks[:8]:
+        print(f"  库里没有该属性仍接受 own={own:.3f} other={other:.3f} {question}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write-data", action="store_true", help="重写 data_guard/realistic_queries.jsonl")
@@ -1042,7 +1223,8 @@ def main():
     ap.add_argument("--facts", type=Path, default=ROOT / "data")
     ap.add_argument("--experts", type=Path, default=ROOT / "experts")
     ap.add_argument("--tau", type=float, default=TAU_DEFAULT)
-    ap.add_argument("--logic-only", action="store_true", help="只检查名单与守卫,不跑 bge")
+    ap.add_argument("--logic-only", action="store_true", help="只检查名单与守卫,不编码问句")
+    ap.add_argument("--fact-only", action="store_true", help="只跑事实闸和开放域决策,不做全量路由")
     ap.add_argument("--json-out", type=Path, default=None)
     ap.add_argument("--no-regression", action="store_true", help="不把原模板/未见口语算进本次(调试用)")
     ap.add_argument("--cmmlu-dir", type=Path, default=None, help="CMMLU test 目录,只做路由激活统计")
@@ -1068,16 +1250,22 @@ def main():
     if args.logic_only:
         logic_check(facts, entities, rows)
         return
-    entity_attrs = load_entity_attrs(args.experts)
+    fact_memory = load_fact_memory(args.experts)
+    if fact_memory is None:
+        raise SystemExit(f"{args.experts} 下没有 fact_memory.json")
+    report_fact_gate(rows, facts, fact_memory)
+    report_open_domain(args.experts, facts, fact_memory)
+    if args.fact_only:
+        return
     if args.generate_only:
         run_generation(
             entries, entities, rows, facts, args.tau,
-            args.generate_out, args.n_per_cat, args.seed, entity_attrs,
+            args.generate_out, args.n_per_cat, args.seed, fact_memory,
         )
         return
 
     # logic_check 在守卫改完之后应当通过;改之前会失败,所以完整评测不强制它。
-    scored = run_routing(entries, entities, rows, args.tau, entity_attrs)
+    scored = run_routing(entries, entities, rows, args.tau, fact_memory)
     summary = summarize_with_tau(scored, args.tau)
     print_report(summary, args.tau)
     pool = pooled_admit(scored, ADMIT_CATS, args.tau)
@@ -1123,15 +1311,15 @@ def main():
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         payload = {"tau": args.tau, "summary": summary, "pooled_realistic": pool}
         if args.cmmlu_dir:
-            payload["cmmlu"] = scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir, entity_attrs)
+            payload["cmmlu"] = scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir, fact_memory)
         args.json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nJSON 已写入 {args.json_out}", flush=True)
     elif args.cmmlu_dir:
-        scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir, entity_attrs)
+        scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir, fact_memory)
     if args.generate:
         run_generation(
             entries, entities, rows, facts, args.tau,
-            args.generate_out, args.n_per_cat, args.seed, entity_attrs,
+            args.generate_out, args.n_per_cat, args.seed, fact_memory,
         )
 
 
