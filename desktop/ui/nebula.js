@@ -1,12 +1,12 @@
 import * as THREE from "./vendor/three.module.js";
 
 const PALETTES = [
-  { core: [0.90, 0.20, 0.14], mid: [0.58, 0.09, 0.08], edge: [0.30, 0.05, 0.05] },
-  { core: [0.10, 0.74, 0.66], mid: [0.05, 0.44, 0.42], edge: [0.03, 0.20, 0.22] },
-  { core: [0.92, 0.58, 0.14], mid: [0.58, 0.32, 0.06], edge: [0.26, 0.12, 0.03] },
-  { core: [0.46, 0.16, 0.90], mid: [0.26, 0.07, 0.55], edge: [0.11, 0.04, 0.26] },
-  { core: [0.84, 0.26, 0.36], mid: [0.52, 0.11, 0.18], edge: [0.24, 0.05, 0.09] },
-  { core: [0.20, 0.38, 0.90], mid: [0.09, 0.18, 0.55], edge: [0.04, 0.07, 0.24] },
+  { core: [1.15, 0.28, 0.16], mid: [0.72, 0.14, 0.12], edge: [0.38, 0.07, 0.09], wisp: [0.98, 0.62, 0.18] },
+  { core: [0.14, 0.95, 0.82], mid: [0.06, 0.50, 0.52], edge: [0.04, 0.20, 0.30], wisp: [0.45, 0.72, 1.05] },
+  { core: [1.08, 0.74, 0.18], mid: [0.64, 0.34, 0.08], edge: [0.30, 0.12, 0.04], wisp: [0.95, 0.32, 0.16] },
+  { core: [0.58, 0.24, 1.08], mid: [0.30, 0.10, 0.64], edge: [0.12, 0.05, 0.30], wisp: [0.78, 0.38, 0.92] },
+  { core: [1.08, 0.34, 0.44], mid: [0.60, 0.14, 0.24], edge: [0.28, 0.06, 0.12], wisp: [1.00, 0.58, 0.42] },
+  { core: [0.24, 0.46, 1.08], mid: [0.10, 0.20, 0.64], edge: [0.05, 0.08, 0.28], wisp: [0.40, 0.78, 0.98] },
 ];
 
 const GAS_VERT = `
@@ -25,12 +25,13 @@ const POINT_VERT = `
   varying float vAlpha;
   uniform float uPixelRatio;
   uniform float uDim;
+  uniform float uBoost;
   void main() {
     vColor = aColor;
-    vAlpha = aAlpha * uDim;
+    vAlpha = aAlpha * uDim * uBoost;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(aSize * uPixelRatio, 2.0, 60.0);
+    gl_PointSize = clamp(aSize * uPixelRatio, 2.0, 64.0);
   }
 `;
 
@@ -46,6 +47,44 @@ const POINT_FRAG = `
     float gaussian = exp(-r * r * 3.6) * mask;
     float alpha = gaussian * vAlpha;
     gl_FragColor = vec4(vColor * alpha, alpha);
+  }
+`;
+
+const STAR_VERT = `
+  attribute float aSize;
+  attribute float aBright;
+  attribute float aFlare;
+  attribute vec3 aTint;
+  varying float vBright;
+  varying vec3 vTint;
+  uniform float uPixelRatio;
+  void main() {
+    vBright = aBright;
+    vTint = aTint;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = clamp(aSize * aFlare * uPixelRatio, 6.0, 84.0);
+  }
+`;
+
+const STAR_FRAG = `
+  precision mediump float;
+  varying float vBright;
+  varying vec3 vTint;
+  void main() {
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) discard;
+    float core = pow(smoothstep(0.16, 0.0, r), 1.35);
+    float axis = exp(-pow(abs(p.y) * 22.0, 2.0)) * smoothstep(1.0, 0.12, abs(p.x));
+    axis += exp(-pow(abs(p.x) * 22.0, 2.0)) * smoothstep(1.0, 0.12, abs(p.y));
+    float diag = min(abs(p.x - p.y), abs(p.x + p.y));
+    float shortSpike = exp(-pow(diag * 18.0, 2.0)) * smoothstep(0.48, 0.05, r) * 0.42;
+    float halo = exp(-r * r * 4.4) * 0.2;
+    float spikes = (axis * 0.82 + shortSpike) * vBright;
+    float alpha = clamp(core + spikes + halo * vBright, 0.0, 1.0);
+    vec3 col = mix(vTint, vec3(1.0, 0.98, 0.94), clamp(core * 1.4 + axis * 0.35, 0.0, 1.0));
+    gl_FragColor = vec4(col * alpha, alpha);
   }
 `;
 
@@ -114,33 +153,52 @@ function makeTexture(draw) {
   return texture;
 }
 
+function beadTexture() {
+  return makeTexture((ctx, size) => {
+    const mid = size / 2;
+    const glow = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid * 0.55);
+    glow.addColorStop(0, "rgba(255,252,246,1)");
+    glow.addColorStop(0.28, "rgba(255,236,206,0.75)");
+    glow.addColorStop(1, "rgba(255,220,170,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, size, size);
+  });
+}
+
 function starTexture() {
   return makeTexture((ctx, size) => {
     const mid = size / 2;
-    const glow = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid * 0.16);
-    glow.addColorStop(0, "rgba(255,252,248,1)");
-    glow.addColorStop(0.42, "rgba(255,246,230,0.75)");
-    glow.addColorStop(1, "rgba(255,236,210,0)");
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(mid, mid, mid * 0.16, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,250,244,0.85)";
-    ctx.lineWidth = 1.15;
-    ctx.beginPath();
-    ctx.moveTo(mid, mid * 0.28);
-    ctx.lineTo(mid, size - mid * 0.28);
-    ctx.moveTo(mid * 0.28, mid);
-    ctx.lineTo(size - mid * 0.28, mid);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(255,228,190,0.22)";
-    ctx.lineWidth = 0.6;
-    ctx.beginPath();
-    ctx.moveTo(28, 28);
-    ctx.lineTo(size - 28, size - 28);
-    ctx.moveTo(size - 28, 28);
-    ctx.lineTo(28, size - 28);
-    ctx.stroke();
+    const halo = ctx.createRadialGradient(mid, mid, 0, mid, mid, mid * 0.62);
+    halo.addColorStop(0, "rgba(255,252,248,1)");
+    halo.addColorStop(0.07, "rgba(255,248,236,0.95)");
+    halo.addColorStop(0.16, "rgba(255,236,210,0.35)");
+    halo.addColorStop(0.42, "rgba(255,214,170,0.08)");
+    halo.addColorStop(1, "rgba(255,214,170,0)");
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, size, size);
+    const ray = (dx, dy, len, width, alpha) => {
+      const x1 = mid + dx * len;
+      const y1 = mid + dy * len;
+      const grad = ctx.createLinearGradient(mid, mid, x1, y1);
+      grad.addColorStop(0, `rgba(255,252,248,${alpha})`);
+      grad.addColorStop(0.22, `rgba(255,246,230,${alpha * 0.55})`);
+      grad.addColorStop(1, "rgba(255,246,230,0)");
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(mid, mid);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    };
+    ray(0, -1, mid * 0.92, 1.5, 0.95);
+    ray(0, 1, mid * 0.92, 1.5, 0.95);
+    ray(-1, 0, mid * 0.92, 1.5, 0.95);
+    ray(1, 0, mid * 0.92, 1.5, 0.95);
+    ray(-0.72, -0.72, mid * 0.38, 0.8, 0.32);
+    ray(0.72, -0.72, mid * 0.38, 0.8, 0.32);
+    ray(-0.72, 0.72, mid * 0.38, 0.8, 0.32);
+    ray(0.72, 0.72, mid * 0.38, 0.8, 0.32);
   });
 }
 
@@ -225,58 +283,109 @@ function mix3(a, b, t) {
   ];
 }
 
-function randn() {
-  let u = 0;
-  let v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(Math.PI * 2 * v);
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return function next() {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-function sampleCloud(index) {
+function sampleCloud(index, weight, fresh) {
   const palette = PALETTES[index % PALETTES.length];
+  const next = mulberry32((index + 1) * 9973 + 11);
+  const rnd = () => next() || 1e-7;
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd())) * Math.cos(Math.PI * 2 * rnd());
+  const sx = (3.15 + (index % 3) * 0.85) * weight;
+  const sy = (1.25 + ((index * 2) % 3) * 0.48) * weight;
+  const sz = (0.78 + (index % 2) * 0.32) * weight;
+  const shear = 0.48 * Math.sin(index * 1.37);
   const seed = index * 2.7 + 1.3;
-  const target = 2400;
   const positions = [];
   const colors = [];
   const sizes = [];
   const alphas = [];
+  const target = 2000;
   let tries = 0;
-  while (positions.length / 3 < target && tries < target * 36) {
+  while (positions.length / 3 < target && tries < target * 16) {
     tries += 1;
-    const x = randn() * 2.55;
-    const y = randn() * 1.85;
-    const z = randn() * 1.25;
-    const r = Math.hypot(x / 2.55, y / 1.85, z / 1.25);
-    if (r > 2.15) continue;
-    const n = fbm3(x * 0.46 + seed, y * 0.46 + seed * 1.6, z * 0.46 + 2.0);
-    const ridge = 1 - Math.abs(fbm3(x * 0.95 + 4.2, y * 0.95 + seed, z * 0.95) * 2 - 1);
-    const field = n * 0.5 + ridge * ridge * 0.72;
-    const gate = Math.exp(-r * r * 0.48);
-    if (Math.random() > Math.min(1, field * gate * 1.45)) continue;
+    const x0 = gauss() * sx;
+    const y0 = gauss() * sy;
+    const z0 = gauss() * sz;
+    const x = x0 + shear * y0;
+    const y = y0 + Math.sin(x0 * 0.55 + index) * 0.55 * weight;
+    const z = z0;
+    const r = Math.hypot(x / sx, y / sy, z / Math.max(0.25, sz));
+    if (r > 2.05) continue;
+    const n = fbm3(x * 0.2 + seed, y * 0.26 + seed * 1.4, z * 0.28 + 2);
+    const ridge = 1 - Math.abs(fbm3(x * 0.42 + 3.1, y * 0.5 + seed, z * 0.36) * 2 - 1);
+    const lane = Math.sin(x * 0.42 + index * 0.7) * 0.7 * weight + Math.sin(z * 1.3) * 0.18 * weight;
+    const dust = Math.exp(-((y - lane) * (y - lane)) / (0.22 * weight * weight + 0.08));
+    const field = (0.18 + ridge * ridge * 1.05) * (0.4 + n) * (1 - dust * 0.9);
+    const gate = Math.exp(-r * r * 0.24);
+    if (rnd() > Math.min(0.94, field * gate * 2.05)) continue;
     positions.push(x, y, z);
-    const paint = Math.min(1, Math.max(0, (n - 0.32) / 0.4));
-    const dist = Math.min(1, r / 1.7);
-    const col = mix3(mix3(palette.edge, palette.mid, paint), palette.core, (1 - dist) * 0.7);
+    const dist = Math.min(1, r / 1.45);
+    const hue = Math.min(1, Math.max(0, fbm3(x * 0.16 + 8.2, y * 0.16, z * 0.2 + index)));
+    const flank = mix3(palette.edge, palette.wisp, hue);
+    const body = mix3(flank, palette.mid, Math.min(1, ridge));
+    const col = mix3(body, palette.core, (1 - dist) ** 1.4 * 0.9);
     colors.push(col[0], col[1], col[2]);
-    sizes.push(14 + Math.random() * 34);
-    alphas.push(0.03 + Math.random() * 0.04);
+    sizes.push(14 + rnd() * 26);
+    alphas.push(0.026 + rnd() * 0.038);
   }
-  for (let i = 0; i < 180; i += 1) {
-    const x = randn() * 0.42;
-    const y = randn() * 0.32;
-    const z = randn() * 0.24;
-    positions.push(x, y, z);
-    const hot = mix3(palette.core, [
-      Math.min(1.35, palette.core[0] * 1.45),
-      Math.min(1.15, palette.core[1] * 1.35),
-      Math.min(1.15, palette.core[2] * 1.35),
-    ], 0.55);
-    colors.push(hot[0], hot[1], hot[2]);
-    sizes.push(8 + Math.random() * 14);
-    alphas.push(0.05 + Math.random() * 0.03);
+  let reach = 0;
+  for (let arm = 0; arm < 3; arm += 1) {
+    const ang = index * 0.85 + arm * 2.15;
+    const len = (4.2 + (arm === 0 ? 2.1 : 0.4) + rnd()) * weight;
+    reach = Math.max(reach, len);
+    const curl = (arm % 2 ? 1 : -1) * (0.55 + rnd() * 0.45);
+    for (let i = 0; i < 260; i += 1) {
+      const t = rnd() ** 0.72;
+      const spread = (0.12 + t * 0.9) * (0.28 + rnd() * 0.45) * weight;
+      const along = t * len;
+      const side = gauss() * spread;
+      const x = Math.cos(ang) * along + Math.cos(ang + 1.15) * side + Math.sin(along * curl) * 0.42 * weight;
+      const y = Math.sin(ang) * along * 0.58 + Math.sin(ang + 0.4) * side * 0.35;
+      const z = gauss() * spread * 0.35;
+      positions.push(x, y, z);
+      const tint = mix3(palette.mid, palette.wisp, 0.3 + t * 0.7);
+      const fade = mix3(tint, palette.edge, t * 0.75);
+      colors.push(fade[0], fade[1], fade[2]);
+      sizes.push(7 + (1 - t) * 16);
+      alphas.push(0.02 + (1 - t) * 0.04);
+    }
   }
-  return { positions, colors, sizes, alphas };
+  for (let i = 0; i < 340; i += 1) {
+    positions.push(gauss() * 0.62 * weight, gauss() * 0.4 * weight, gauss() * 0.22 * weight);
+    colors.push(
+      Math.min(1.75, palette.core[0] * 1.4),
+      Math.min(1.4, palette.core[1] * 1.3),
+      Math.min(1.4, palette.core[2] * 1.3),
+    );
+    sizes.push(9 + rnd() * 14);
+    alphas.push(0.055 + rnd() * 0.04);
+  }
+  if (fresh) {
+    for (let i = 0; i < 150; i += 1) {
+      const ang = -0.5 + rnd() * 2.15;
+      const rad = sx * (1.05 + rnd() * 0.16);
+      positions.push(Math.cos(ang) * rad, Math.sin(ang) * rad * 0.62, gauss() * 0.18 * weight);
+      colors.push(1.3, 0.98, 0.58);
+      sizes.push(8 + rnd() * 10);
+      alphas.push(0.03 + rnd() * 0.03);
+    }
+  }
+  return {
+    positions,
+    colors,
+    sizes,
+    alphas,
+    radius: Math.max(sx, sy) * 1.15 + reach * 0.72,
+  };
 }
 
 export function createNebula(canvas, hooks) {
@@ -337,16 +446,23 @@ export function createNebula(canvas, hooks) {
   bloomScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bloomMaterial));
 
   const sprite = starTexture();
+  const bead = beadTexture();
   const world = new THREE.Group();
   scene.add(world);
+  const overlay = new THREE.Scene();
+  let starPoints = null;
+  let sparkPoints = null;
+  const starIds = [];
   const pickables = [];
   const factMeshes = new Map();
   const expertMeshes = new Map();
   const expertClouds = new Map();
   const nodePos = new Map();
   const filaments = [];
-  const motes = [];
   const gasMats = [];
+  const labels = [];
+  let labelLayer = null;
+  let ingress = null;
   let framed = null;
   let userMoved = false;
   let recall = null;
@@ -361,38 +477,45 @@ export function createNebula(canvas, hooks) {
   let lastX = 0;
   let lastY = 0;
 
-  function clearWorld() {
-    while (world.children.length) {
-      const child = world.children.pop();
-      child.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material && obj.material.map !== sprite) {
-          if (obj.material.map) obj.material.map.dispose();
-          obj.material.dispose();
-        } else if (obj.material && obj.material.map === sprite) {
-          obj.material.dispose();
-        }
+  function disposeNode(obj) {
+    obj.traverse((node) => {
+      if (node.geometry) node.geometry.dispose();
+      const mats = node.material ? [].concat(node.material) : [];
+      mats.forEach((material) => {
+        if (material.map && material.map !== sprite && material.map !== bead) material.map.dispose();
+        material.dispose();
       });
-    }
+    });
+  }
+
+  function clearWorld() {
+    [world, overlay].forEach((root) => {
+      while (root.children.length) disposeNode(root.children.pop());
+    });
+    starPoints = null;
+    sparkPoints = null;
+    starIds.length = 0;
     pickables.length = 0;
     factMeshes.clear();
     expertMeshes.clear();
     expertClouds.clear();
     nodePos.clear();
     filaments.length = 0;
-    motes.length = 0;
     gasMats.length = 0;
+    labels.length = 0;
+    ingress = null;
+    if (labelLayer) labelLayer.replaceChildren();
     recall = null;
     framed = null;
     userMoved = false;
   }
 
-  function makeCloud(position, index, name, expert) {
+  function makeCloud(position, index, name, expert, weight, fresh) {
     const group = new THREE.Group();
     group.position.copy(position);
-    group.rotation.x = 0.35 + index * 0.22;
-    group.rotation.z = index * 0.47;
-    const cloud = sampleCloud(index);
+    group.rotation.x = 0.28 + index * 0.31;
+    group.rotation.z = -0.4 + index * 0.37;
+    const cloud = sampleCloud(index, weight, fresh);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(cloud.positions, 3));
     geometry.setAttribute("aColor", new THREE.Float32BufferAttribute(cloud.colors, 3));
@@ -402,6 +525,7 @@ export function createNebula(canvas, hooks) {
       uniforms: {
         uPixelRatio: { value: renderer.getPixelRatio() },
         uDim: { value: 1 },
+        uBoost: { value: 1 },
       },
       vertexShader: POINT_VERT,
       fragmentShader: POINT_FRAG,
@@ -417,13 +541,23 @@ export function createNebula(canvas, hooks) {
     points.renderOrder = 1;
     group.add(points);
     const pick = new THREE.Mesh(
-      new THREE.SphereGeometry(4.4, 10, 8),
+      new THREE.SphereGeometry(Math.max(4.8, cloud.radius * 0.62), 10, 8),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, color: 0x000000 }),
     );
     pick.userData = { kind: "expert", expertName: name, expert };
     group.add(pick);
     pickables.push(pick);
-    group.userData = { kind: "expert", expertName: name, expert, baseScale: 1, spin: index * 0.9 };
+    group.userData = {
+      kind: "expert",
+      expertName: name,
+      expert,
+      baseScale: 1,
+      spin: index * 0.9,
+      radius: cloud.radius,
+      fresh,
+      weight,
+      material,
+    };
     world.add(group);
     expertClouds.set(name, group);
     expertMeshes.set(name, group);
@@ -457,22 +591,25 @@ export function createNebula(canvas, hooks) {
     return geo;
   }
 
-  function addFilament(a, b, color) {
-    const points = bezier(a, b, 1.6 + (filaments.length % 3) * 0.7);
-    const geo = ribbonGeometry(points, 0.42);
+  function addFilament(a, b, color, gain) {
+    const points = bezier(a, b, 2.2 + (filaments.length % 3) * 1.15);
+    const geo = ribbonGeometry(points, 0.38);
     const tint = new THREE.Color(color);
     const material = new THREE.ShaderMaterial({
-      uniforms: { uColor: { value: new THREE.Vector3(tint.r, tint.g, tint.b) } },
+      uniforms: {
+        uColor: { value: new THREE.Vector3(tint.r, tint.g, tint.b) },
+        uGain: { value: gain == null ? 0.3 : gain },
+      },
       vertexShader: GAS_VERT,
       fragmentShader: `
         precision mediump float;
         varying vec2 vUv;
         uniform vec3 uColor;
+        uniform float uGain;
         void main() {
-          float across = smoothstep(0.0, 0.5, vUv.y) * smoothstep(1.0, 0.5, vUv.y);
-          float along = smoothstep(0.0, 0.14, vUv.x) * smoothstep(1.0, 0.86, vUv.x);
-          float light = across * along;
-          float alpha = light * 0.14;
+          float across = pow(smoothstep(0.0, 0.5, vUv.y) * smoothstep(1.0, 0.5, vUv.y), 1.15);
+          float along = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.9, vUv.x);
+          float alpha = across * along * uGain;
           gl_FragColor = vec4(uColor * alpha, alpha);
         }
       `,
@@ -481,27 +618,140 @@ export function createNebula(canvas, hooks) {
       depthTest: false,
       side: THREE.DoubleSide,
       premultipliedAlpha: true,
-      blending: THREE.NormalBlending,
+      blending: THREE.AdditiveBlending,
     });
     const line = new THREE.Mesh(geo, material);
     line.renderOrder = 2;
-    world.add(line);
-    const mote = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: sprite,
-      color: 0xfff1c9,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.NormalBlending,
-      premultipliedAlpha: true,
-    }));
-    mote.scale.setScalar(0.34);
-    mote.visible = false;
-    world.add(mote);
-    const filament = { points, mote, source: "", target: "" };
+    overlay.add(line);
+    const beads = [];
+    for (let i = 0; i < 5; i += 1) {
+      const mote = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: bead,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        depthTest: false,
+        blending: THREE.AdditiveBlending,
+        premultipliedAlpha: true,
+      }));
+      mote.material.color.r = Math.min(1.6, tint.r * 2.2);
+      mote.material.color.g = Math.min(1.5, tint.g * 2.1);
+      mote.material.color.b = Math.min(1.35, tint.b * 1.8);
+      mote.scale.setScalar(0.55);
+      mote.renderOrder = 4;
+      mote.userData.phase = i / 5;
+      overlay.add(mote);
+      beads.push(mote);
+    }
+    const filament = { points, beads, material, mesh: line, source: "", target: "", hot: false, role: "link" };
     filaments.push(filament);
-    motes.push(mote);
     return filament;
+  }
+
+  function dropIngress() {
+    if (!ingress) return;
+    const index = filaments.indexOf(ingress);
+    if (index >= 0) filaments.splice(index, 1);
+    if (ingress.mesh) {
+      overlay.remove(ingress.mesh);
+      ingress.mesh.geometry.dispose();
+      ingress.mesh.material.dispose();
+    }
+    (ingress.beads || []).forEach((mote) => {
+      overlay.remove(mote);
+      mote.material.dispose();
+    });
+    ingress = null;
+  }
+
+  function ensureLabelLayer() {
+    const host = canvas.parentElement;
+    if (!host) return null;
+    host.querySelectorAll(".nebula-labels").forEach((node) => {
+      if (node !== labelLayer) node.remove();
+    });
+    if (!labelLayer || labelLayer.parentElement !== host) {
+      labelLayer = document.createElement("div");
+      labelLayer.className = "nebula-labels";
+      host.appendChild(labelLayer);
+    }
+    return labelLayer;
+  }
+
+  function placeLabels() {
+    const width = canvas.clientWidth || 1;
+    const height = canvas.clientHeight || 1;
+    const marginX = Math.min(150, width * 0.16);
+    const marginY = Math.min(46, height * 0.08);
+    const placed = [];
+    labels.forEach(({ el, group }) => {
+      const origin = group.position.clone();
+      const center = origin.clone().project(camera);
+      const cx = (center.x * 0.5 + 0.5) * width;
+      const cy = (-center.y * 0.5 + 0.5) * height;
+      const dir = origin.clone();
+      if (dir.lengthSq() < 1e-4) dir.set(0, -1, 0);
+      dir.normalize();
+      const outward = origin.clone().add(dir).project(camera);
+      const ox = (outward.x * 0.5 + 0.5) * width - cx;
+      const oy = (-outward.y * 0.5 + 0.5) * height - cy;
+      const olen = Math.hypot(ox, oy) || 1;
+      const ux = ox / olen;
+      const uy = oy / olen;
+      const candidates = [];
+      [54, 86, 118, 28].forEach((dist) => {
+        candidates.push([cx + ux * dist, cy + uy * dist]);
+        candidates.push([cx - uy * dist, cy + ux * dist]);
+        candidates.push([cx + uy * dist * 0.8, cy - ux * dist * 0.8]);
+      });
+      candidates.push([cx, cy + 36], [cx, cy - 36]);
+      let best = null;
+      candidates.forEach(([x, y]) => {
+        if (x < marginX || y < marginY || x > width - marginX || y > height - marginY) return;
+        let crowd = 0;
+        placed.forEach((spot) => {
+          crowd += Math.max(0, 108 - Math.hypot(x - spot[0], y - spot[1]));
+        });
+        const edge = Math.min(x - marginX, width - marginX - x, y - marginY, height - marginY - y);
+        const score = crowd * 4 - edge;
+        if (!best || score < best.score) best = { x, y, score };
+      });
+      if (!best) {
+        best = {
+          x: Math.min(width - marginX, Math.max(marginX, cx)),
+          y: Math.min(height - marginY, Math.max(marginY, cy)),
+        };
+      }
+      placed.push([best.x, best.y]);
+      el.style.left = `${best.x}px`;
+      el.style.top = `${best.y}px`;
+      el.classList.toggle("lit", Boolean(recall && recall.expertName === group.userData.expertName));
+    });
+  }
+
+  function makePoints(positions, sizes, brights, flares, tints, order) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute("aBright", new THREE.BufferAttribute(brights, 1));
+    geometry.setAttribute("aFlare", new THREE.BufferAttribute(flares, 1));
+    geometry.setAttribute("aTint", new THREE.BufferAttribute(tints, 3));
+    geometry.userData.baseBright = Array.from(brights);
+    const material = new THREE.ShaderMaterial({
+      uniforms: { uPixelRatio: { value: renderer.getPixelRatio() } },
+      vertexShader: STAR_VERT,
+      fragmentShader: STAR_FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+      premultipliedAlpha: true,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    points.renderOrder = order;
+    overlay.add(points);
+    return points;
   }
 
   function setData(data) {
@@ -510,26 +760,26 @@ export function createNebula(canvas, hooks) {
     const facts = data.facts || [];
     const conversations = data.conversations || [];
     const links = (data.links || []).slice();
-    const radius = Math.max(24, experts.length * 3.1);
+    const counts = new Map();
+    facts.forEach((fact) => {
+      if (fact.superseded) return;
+      counts.set(fact.expert, (counts.get(fact.expert) || 0) + 1);
+    });
+    const maxCount = Math.max(1, ...counts.values());
+    const orbit = Math.max(14, experts.length * 2.15);
     experts.forEach((expert, index) => {
+      const active = counts.get(expert.name) || 0;
+      const fresh = Boolean(expert.writable && expert.explicit);
+      let weight = 0.84 + 0.7 * Math.sqrt(active / maxCount);
+      if (fresh) weight = Math.max(weight, 1.05);
       const angle = (index / Math.max(1, experts.length)) * Math.PI * 2 - Math.PI / 2;
       const pos = new THREE.Vector3(
-        Math.cos(angle) * radius,
-        Math.sin(angle) * radius * 0.7,
-        Math.sin(angle * 2 + index) * 1.4,
+        Math.cos(angle) * orbit * 1.05,
+        Math.sin(angle) * orbit * 0.64,
+        Math.sin(angle * 2 + index) * 0.45,
       );
       nodePos.set(expert.id || `expert:${expert.name}`, pos.clone());
-      makeCloud(pos, index, expert.name, expert);
-    });
-    experts.forEach((expert, index) => {
-      const next = experts[(index + 1) % experts.length];
-      if (!next || next.name === expert.name) return;
-      const a = nodePos.get(expert.id || `expert:${expert.name}`);
-      const b = nodePos.get(next.id || `expert:${next.name}`);
-      if (!a || !b) return;
-      const filament = addFilament(a, b, paletteColor(index, 2));
-      filament.source = expert.id || `expert:${expert.name}`;
-      filament.target = next.id || `expert:${next.name}`;
+      makeCloud(pos, index, expert.name, expert, weight, fresh);
     });
 
     const grouped = new Map();
@@ -537,39 +787,61 @@ export function createNebula(canvas, hooks) {
       if (!grouped.has(fact.expert)) grouped.set(fact.expert, []);
       grouped.get(fact.expert).push(fact);
     });
+    const starPositions = [];
+    const starSizes = [];
+    const starBrights = [];
+    const starFlares = [];
+    const starTints = [];
     grouped.forEach((group, name) => {
       const origin = nodePos.get(`expert:${name}`) || new THREE.Vector3();
-      const colorIndex = Math.max(0, experts.findIndex((expert) => expert.name === name));
+      const cloud = expertClouds.get(name);
+      const weight = cloud ? cloud.userData.weight : 1;
+      const tint = cloud && cloud.userData.fresh ? [1.0, 0.9, 0.62] : [1.0, 0.9, 0.74];
       group.forEach((fact, index) => {
         const golden = index * 2.399963;
-        const ring = 0.4 + Math.sqrt((index + 0.5) / group.length) * 2.5;
+        const ring = (0.55 + Math.sqrt((index + 0.5) / group.length) * 1.55) * weight;
         const pos = origin.clone().add(new THREE.Vector3(
           Math.cos(golden) * ring,
-          Math.sin(golden * 1.17) * ring * 0.55,
-          ((index % 5) - 2) * 0.18,
+          Math.sin(golden * 1.17) * ring * 0.62,
+          ((index % 5) - 2) * 0.16,
         ));
         nodePos.set(fact.id, pos.clone());
-        const material = new THREE.SpriteMaterial({
-          map: sprite,
-          color: fact.superseded ? 0x8d97a8 : 0xfff4e4,
+        const hits = Number(fact.recall_hits) || 0;
+        const recency = (index + 1) / group.length;
+        const bright = fact.superseded ? 0.22 : Math.min(1, 0.42 + Math.min(0.38, hits * 0.2) + recency * 0.28);
+        starPositions.push(pos.x, pos.y, pos.z);
+        starSizes.push(fact.superseded ? 16 : 26 + bright * 22);
+        starBrights.push(fact.superseded ? 0.28 : 0.48 + bright * 0.52);
+        starFlares.push(1);
+        starTints.push(tint[0], tint[1], tint[2]);
+        starIds.push(fact.id);
+        const pick = new THREE.Sprite(new THREE.SpriteMaterial({
           transparent: true,
-          opacity: fact.superseded ? 0.22 : 0.95,
+          opacity: 0,
           depthWrite: false,
-          blending: THREE.NormalBlending,
-          premultipliedAlpha: true,
-        });
-        const star = new THREE.Sprite(material);
-        const scale = fact.superseded ? 0.28 : 0.46 + (index % 4) * 0.12;
-        star.scale.setScalar(scale);
-        star.position.copy(pos);
-        star.userData = { kind: "fact", fact, baseScale: scale, baseOpacity: material.opacity };
-        star.renderOrder = 4;
-        world.add(star);
-        pickables.push(star);
-        factMeshes.set(fact.id, star);
+          depthTest: false,
+          color: 0xffffff,
+        }));
+        pick.scale.setScalar(1.4);
+        pick.position.copy(pos);
+        pick.userData = { kind: "fact", fact, baseScale: 1.4 };
+        world.add(pick);
+        pickables.push(pick);
+        factMeshes.set(fact.id, pick);
       });
     });
+    if (starPositions.length) {
+      starPoints = makePoints(
+        new Float32Array(starPositions),
+        new Float32Array(starSizes),
+        new Float32Array(starBrights),
+        new Float32Array(starFlares),
+        new Float32Array(starTints),
+        8,
+      );
+    }
 
+    const convDots = [];
     conversations.forEach((conv, index) => {
       const related = links.filter((link) => link.kind === "source" && (link.source === conv.id || link.target === conv.id));
       const anchor = new THREE.Vector3();
@@ -584,44 +856,112 @@ export function createNebula(canvas, hooks) {
       });
       if (!count) return;
       anchor.multiplyScalar(1 / count);
-      const pos = anchor.clone().add(new THREE.Vector3(0, 1.1 + (index % 3) * 0.2, 0));
+      const pos = anchor.clone().add(new THREE.Vector3(-2.4 - (index % 2) * 0.45, (index % 3) * 0.35 - 0.4, 0.15));
       nodePos.set(conv.id, pos.clone());
-      const mesh = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: sprite,
-        color: 0xe7e0d4,
+      convDots.push(pos);
+      const pick = new THREE.Sprite(new THREE.SpriteMaterial({
         transparent: true,
-        opacity: 0.4,
+        opacity: 0,
         depthWrite: false,
-        blending: THREE.NormalBlending,
-        premultipliedAlpha: true,
+        depthTest: false,
+        color: 0xffffff,
       }));
-      mesh.scale.setScalar(0.22);
-      mesh.position.copy(pos);
-      mesh.userData = { kind: "conversation", conversation: conv };
-      world.add(mesh);
-      pickables.push(mesh);
+      pick.scale.setScalar(0.9);
+      pick.position.copy(pos);
+      pick.userData = { kind: "conversation", conversation: conv };
+      world.add(pick);
+      pickables.push(pick);
     });
+    if (convDots.length) {
+      const n = convDots.length;
+      const positions = new Float32Array(n * 3);
+      const sizes = new Float32Array(n);
+      const brights = new Float32Array(n);
+      const flares = new Float32Array(n);
+      const tints = new Float32Array(n * 3);
+      convDots.forEach((pos, index) => {
+        positions.set([pos.x, pos.y, pos.z], index * 3);
+        sizes[index] = 15;
+        brights[index] = 0.92;
+        flares[index] = 1;
+        tints.set([0.62, 0.84, 1.0], index * 3);
+      });
+      const nodes = makePoints(positions, sizes, brights, flares, tints, 7);
+      nodes.userData.role = "conversation";
+    }
 
     links.forEach((link) => {
+      if (link.kind === "source") {
+        const fact = nodePos.get(link.source);
+        const conv = nodePos.get(link.target);
+        if (!fact || !conv) return;
+        const filament = addFilament(conv, fact, 0xf6e2b4, 0.46);
+        filament.source = link.target;
+        filament.target = link.source;
+        filament.role = "source";
+        return;
+      }
       if (link.kind !== "entity" && link.kind !== "semantic" && link.kind !== "supersede") return;
       const a = nodePos.get(link.source);
       const b = nodePos.get(link.target);
       if (!a || !b) return;
-      const filament = addFilament(a, b, link.kind === "supersede" ? 0x8a93a3 : 0xc4a36a);
+      const filament = addFilament(a, b, link.kind === "supersede" ? 0x9aa3b3 : 0xd7b56a, link.kind === "entity" ? 0.52 : 0.4);
       filament.source = link.source;
       filament.target = link.target;
+      filament.role = link.kind;
     });
+
+    const layer = ensureLabelLayer();
+    if (layer) layer.replaceChildren();
+    experts.forEach((expert) => {
+      const group = expertClouds.get(expert.name);
+      if (!group || !layer) return;
+      const el = document.createElement("div");
+      el.className = `nebula-label${group.userData.fresh ? " fresh" : ""}`;
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = expert.display_name || expert.name;
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      const count = window.i18n && window.i18n.t
+        ? window.i18n.t("nebula.count", { n: counts.get(expert.name) || 0 })
+        : String(counts.get(expert.name) || 0);
+      const badge = group.userData.fresh && window.i18n && window.i18n.t ? ` · ${window.i18n.t("nebula.new")}` : "";
+      meta.textContent = `${count}${badge}`;
+      el.append(name, meta);
+      layer.appendChild(el);
+      labels.push({ el, group });
+    });
+
+    const freshGroups = [...expertClouds.values()].filter((group) => group.userData.fresh);
+    if (freshGroups.length) {
+      const count = freshGroups.length * 8;
+      const positions = new Float32Array(count * 3);
+      const sizes = new Float32Array(count);
+      const brights = new Float32Array(count);
+      const flares = new Float32Array(count);
+      const tints = new Float32Array(count * 3);
+      for (let i = 0; i < count; i += 1) {
+        sizes[i] = 11 + (i % 3) * 2;
+        brights[i] = 0.9;
+        flares[i] = 1;
+        tints.set([1.0, 0.78, 0.36], i * 3);
+      }
+      sparkPoints = makePoints(positions, sizes, brights, flares, tints, 6);
+      sparkPoints.userData.groups = freshGroups;
+    }
 
     const box = new THREE.Box3();
     expertClouds.forEach((group) => {
-      box.expandByPoint(group.position.clone().add(new THREE.Vector3(8.2, 6.2, 1.6)));
-      box.expandByPoint(group.position.clone().add(new THREE.Vector3(-8.2, -6.2, -1.6)));
+      const reach = group.userData.radius || 8;
+      box.expandByPoint(group.position.clone().add(new THREE.Vector3(reach, reach * 0.7, 1.2)));
+      box.expandByPoint(group.position.clone().add(new THREE.Vector3(-reach, -reach * 0.7, -1.2)));
     });
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 6, 8));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     framed = {
       center: sphere.center.clone(),
-      radius: Math.max(11, sphere.radius * 0.92),
+      radius: Math.max(12, sphere.radius * 0.9),
     };
     applyFrame(true);
   }
@@ -634,7 +974,7 @@ export function createNebula(canvas, hooks) {
     const aspect = Math.max(0.35, camera.aspect || 1);
     const distY = radius / Math.tan(fov / 2);
     const distX = radius / (Math.tan(fov / 2) * aspect);
-    const dist = Math.max(distY, distX) * 0.84;
+    const dist = Math.max(distY, distX) * 0.53;
     camTarget.set(center.x, center.y, center.z + dist);
     if (immediate) {
       look.copy(lookTarget);
@@ -672,14 +1012,13 @@ export function createNebula(canvas, hooks) {
   }
 
   function restore() {
+    dropIngress();
     factMeshes.forEach((mesh) => {
-      mesh.scale.setScalar(mesh.userData.baseScale);
-      mesh.material.opacity = mesh.userData.baseOpacity;
+      mesh.scale.setScalar(mesh.userData.baseScale || 1.4);
+      mesh.material.opacity = 0;
     });
-    expertClouds.forEach((group) => group.scale.setScalar(1));
-    motes.forEach((mote) => {
-      mote.visible = false;
-      mote.material.opacity = 0;
+    filaments.forEach((filament) => {
+      filament.hot = false;
     });
   }
 
@@ -694,6 +1033,21 @@ export function createNebula(canvas, hooks) {
       nodeIds: new Set(nodeIds),
       started: performance.now(),
     };
+    const target = factMeshes.get(nodeIds[0]) || expertMeshes.get(trace.mounted_expert);
+    if (target) {
+      const pos = target.getWorldPosition(new THREE.Vector3());
+      const from = pos.clone();
+      from.x -= Math.max(8, framed ? framed.radius * 0.42 : 10);
+      from.y += 1.4;
+      ingress = addFilament(from, pos, 0xffe6b0, 0.86);
+      ingress.hot = true;
+      ingress.role = "ingress";
+    }
+    filaments.forEach((filament) => {
+      if (filament === ingress) return;
+      filament.hot = recall.nodeIds.has(filament.target) || recall.nodeIds.has(filament.source)
+        || filament.target === `expert:${recall.expertName}` || filament.source === `expert:${recall.expertName}`;
+    });
     return { mounted: true, nodeIds: nodeIds.length ? nodeIds : [`expert:${trace.mounted_expert}`] };
   }
 
@@ -780,35 +1134,79 @@ export function createNebula(canvas, hooks) {
     const t = reduce ? 0 : clock.getElapsedTime();
     const dim = mode === "dim" ? 0.45 : 1;
     const ratio = renderer.getPixelRatio();
+    const pulse = 0.86 + 0.14 * Math.sin((recall ? performance.now() - recall.started : 0) / 240);
     gasMats.forEach((material) => {
       material.uniforms.uDim.value = dim;
       material.uniforms.uPixelRatio.value = ratio;
     });
     expertClouds.forEach((group) => {
-      if (reduce) return;
-      group.rotation.y = (group.userData.spin || 0) + t * 0.05;
+      if (!reduce) group.rotation.y = (group.userData.spin || 0) + t * 0.045;
+      let boost = 1;
+      if (recall) boost = group.userData.expertName === recall.expertName ? 1.78 : 0.52;
+      else if (group.userData.fresh) boost = reduce ? 1.1 : 0.9 + 0.22 * (0.5 + 0.5 * Math.sin(t * 1.15 + (group.userData.spin || 0)));
+      if (group.userData.material) group.userData.material.uniforms.uBoost.value = boost;
     });
-    if (recall && !reduce) {
-      const pulse = 0.55 + 0.45 * Math.sin((performance.now() - recall.started) / 160);
-      factMeshes.forEach((mesh, id) => {
-        const on = recall.nodeIds.has(id);
-        mesh.scale.setScalar(mesh.userData.baseScale * (on ? 1.2 + pulse * 0.7 : 0.7));
-        mesh.material.opacity = on ? 1 : 0.2;
+    if (starPoints) {
+      const flareAttr = starPoints.geometry.getAttribute("aFlare");
+      const brightAttr = starPoints.geometry.getAttribute("aBright");
+      const baseBright = starPoints.geometry.userData.baseBright || [];
+      starIds.forEach((id, index) => {
+        const on = Boolean(recall && recall.nodeIds.has(id));
+        if (on) {
+          flareAttr.setX(index, 2.25 * pulse);
+          brightAttr.setX(index, 1);
+        } else if (recall) {
+          flareAttr.setX(index, 0.58);
+          brightAttr.setX(index, (baseBright[index] || 0.5) * 0.4);
+        } else {
+          flareAttr.setX(index, 1);
+          brightAttr.setX(index, baseBright[index] || 0.7);
+        }
       });
-      const cloud = expertClouds.get(recall.expertName);
-      if (cloud) cloud.scale.setScalar(1.04 + pulse * 0.04);
-      const travel = ((performance.now() - recall.started) / 1400) % 1;
-      filaments.forEach((filament) => {
-        const hit = recall.nodeIds.has(filament.target) || recall.nodeIds.has(filament.source)
-          || filament.target === `expert:${recall.expertName}` || filament.source === `expert:${recall.expertName}`;
-        if (!hit || !filament.mote || !filament.points.length) return;
-        const index = Math.min(filament.points.length - 1, Math.floor(travel * (filament.points.length - 1)));
-        filament.mote.visible = true;
-        filament.mote.position.copy(filament.points[index]);
-        filament.mote.material.opacity = 0.9;
-        filament.mote.scale.setScalar(0.28 + pulse * 0.12);
-      });
+      flareAttr.needsUpdate = true;
+      brightAttr.needsUpdate = true;
+      starPoints.material.uniforms.uPixelRatio.value = ratio;
     }
+    if (sparkPoints) {
+      const attr = sparkPoints.geometry.getAttribute("position");
+      const groups = sparkPoints.userData.groups || [];
+      groups.forEach((group, groupIndex) => {
+        const origin = group.position;
+        const radius = Math.max(3.2, (group.userData.radius || 8) * 0.42);
+        for (let i = 0; i < 8; i += 1) {
+          const ang = t * 0.45 + groupIndex + i * (Math.PI * 2 / 8);
+          const wobble = 0.86 + 0.14 * Math.sin(t * 1.4 + i);
+          attr.setXYZ(
+            groupIndex * 8 + i,
+            origin.x + Math.cos(ang) * radius * wobble,
+            origin.y + Math.sin(ang) * radius * 0.6 * wobble,
+            origin.z,
+          );
+        }
+      });
+      attr.needsUpdate = true;
+      sparkPoints.material.uniforms.uPixelRatio.value = ratio;
+    }
+    overlay.children.forEach((child) => {
+      if (child.material && child.material.uniforms && child.material.uniforms.uPixelRatio) {
+        child.material.uniforms.uPixelRatio.value = ratio;
+      }
+    });
+    filaments.forEach((filament) => {
+      const hot = Boolean(filament.hot);
+      if (filament.material && filament.material.uniforms.uGain) {
+        filament.material.uniforms.uGain.value = hot ? 0.95 : (recall ? 0.16 : (filament.role === "source" ? 0.46 : 0.5));
+      }
+      const speed = hot ? 0.16 : 0.045;
+      filament.beads.forEach((mote) => {
+        const phase = (((reduce ? 0 : t) * speed + mote.userData.phase) % 1 + 1) % 1;
+        const index = Math.min(filament.points.length - 1, Math.floor(phase * (filament.points.length - 1)));
+        mote.position.copy(filament.points[index]);
+        mote.material.opacity = hot ? 1 : 0.82;
+        mote.scale.setScalar(hot ? 1.05 : 0.5);
+      });
+    });
+    placeLabels();
     look.lerp(lookTarget, reduce ? 1 : 0.08);
     camera.position.lerp(camTarget, reduce ? 1 : 0.08);
     camera.lookAt(look);
@@ -819,6 +1217,9 @@ export function createNebula(canvas, hooks) {
     renderer.setRenderTarget(null);
     renderer.clear();
     renderer.render(bloomScene, bloomCamera);
+    renderer.autoClear = false;
+    renderer.render(overlay, camera);
+    renderer.autoClear = true;
   }
 
   resize();
@@ -835,7 +1236,10 @@ export function createNebula(canvas, hooks) {
     dispose() {
       running = false;
       clearWorld();
+      if (labelLayer) labelLayer.remove();
+      labelLayer = null;
       sprite.dispose();
+      bead.dispose();
       bloomMaterial.dispose();
       sceneTarget.dispose();
       renderer.dispose();

@@ -666,7 +666,16 @@ function expertScoreLine(expert) {
   return `<div>${t("expert.key", { sim: Number(row.sim).toFixed(3) })}${threshold} · ${role}</div>`;
 }
 
-async function ensureNebula() {
+let nebulaLoading = null;
+function ensureNebula() {
+  if (nebulaLoading) return nebulaLoading;
+  nebulaLoading = loadNebula().finally(() => {
+    nebulaLoading = null;
+  });
+  return nebulaLoading;
+}
+
+async function loadNebula() {
   const data = await api("/api/nebula");
   state.nebulaData = data;
   $("nebula-empty").hidden = Boolean((data.facts || []).length || (data.experts || []).length);

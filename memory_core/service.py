@@ -883,6 +883,32 @@ class MemoryService:
         self._spawn(job_id)
         return self.job_status(job_id)
 
+    def _fact_recall_stats(self) -> tuple[dict[str, int], dict[str, str]]:
+        hits: dict[str, int] = {}
+        last: dict[str, str] = {}
+        for conv in self.convos.list_conversations():
+            for msg in self.convos.messages(conv["id"]):
+                raw = msg.get("extra")
+                if not raw:
+                    continue
+                try:
+                    extra = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                trace = extra.get("trace") if isinstance(extra, dict) else None
+                if not isinstance(trace, dict):
+                    continue
+                when = str(msg.get("created_at") or "")
+                for fact in trace.get("matched_facts") or []:
+                    if not isinstance(fact, dict):
+                        continue
+                    keys = [str(fact[key]) for key in ("node_id", "fact_id") if fact.get(key)]
+                    for key in keys:
+                        hits[key] = hits.get(key, 0) + 1
+                        if when >= last.get(key, ""):
+                            last[key] = when
+        return hits, last
+
     def nebula(self) -> dict[str, Any]:
         self.ensure_ready()
         from memory_core.fact_span import ensure_fact_bank
@@ -1030,6 +1056,11 @@ class MemoryService:
                     })
                     links.append({"source": node_id, "target": f"expert:{name}", "kind": "member"})
                 present.add(name)
+        recall_hits, recall_last = self._fact_recall_stats()
+        for fact in fact_nodes:
+            keys = [str(fact.get("id") or ""), str(fact.get("fact_id") or "")]
+            fact["recall_hits"] = max((recall_hits.get(key, 0) for key in keys), default=0)
+            fact["recalled_at"] = max((recall_last.get(key) or "" for key in keys), default="")
         seen_convs: list[str] = []
         conversations = []
         for link in links:

@@ -501,6 +501,48 @@ textarea, input[type="text"], .fact input, .fact textarea {
     transparent;
 }
 #nebula-canvas { width: 100%; height: 100%; display: block; background: transparent; }
+.nebula-labels {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+.nebula-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: rgba(236, 228, 214, 0.8);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 14px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+}
+.nebula-label .name {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+.nebula-label .meta {
+  display: block;
+  margin-top: 1px;
+  font-family: var(--serif);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: rgba(214, 206, 192, 0.72);
+}
+.nebula-label.fresh .name {
+  color: rgba(255, 228, 176, 0.98);
+  animation: nebula-shimmer 3.4s ease-in-out infinite;
+}
+.nebula-label.lit .name { color: rgba(255, 246, 226, 0.98); }
+@keyframes nebula-shimmer {
+  0%, 100% { opacity: 0.76; }
+  50% { opacity: 1; text-shadow: 0 0 16px rgba(255, 214, 140, 0.9), 0 1px 2px rgba(0, 0, 0, 0.9); }
+}
 .nebula-tip {
   position: absolute;
   pointer-events: none;
