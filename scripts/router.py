@@ -1,13 +1,12 @@
-"""路由 embedding 与实体守卫:
-1. 用 bge-small-zh-v1.5(CPU,24M)把文本编码成向量;
-2. 实体守卫 (Entity Guard): 专家二级校验,防御淘汰/删除专家后的路由空洞与交叉误射。
+"""路由 embedding、实体守卫和实体优先路由。
 
-守卫不做自由实体抽取后再精确比对(那会把「塔佐巴洛集团」收成一个不在册的串,
-也会在抽不出实体时退回子串匹配,让「莫特」撞进「巴莫特」)。
-它只拿在册实体去问句里做最长匹配,并要求两侧不是名字音节。
-推理时没有额外的嵌入,只是字符串查找。
+1. 用 bge-small-zh-v1.5(CPU,24M)把文本编码成向量。
+2. 实体守卫:拿在册实体做最长匹配,两侧不能是名字音节。
+3. 实体优先:问句里只有一个在册实体,且名字旁边有公司类线索,就直接去那家专家。
+   点了好几家时,能确定主语才去那家;比较句或主语已不在册就弃权。
+   没有在册实体时,才退回 bge top-1 ≥ τ 且守卫通过。
 
-train_expert 用它生成专家路由键,eval_memory 用它编码查询并校验实体准入。
+train_expert 用它生成路由键,eval_memory 用它决定挂哪家专家。
 """
 import json
 import re
@@ -233,5 +232,188 @@ def verify_entity_guard(query: str, expert_entities: list[str] | set[str]) -> bo
     if not names:
         return False
     return bool(mentioned_entities(query, names))
+
+
+def _compact_query(query: str) -> str:
+    return re.sub(r"[\s\u3000]+", "", query)
+
+
+def find_name_spans(query: str) -> list[tuple[str, int, int]]:
+    """问句里连续的名字音节(长度 ≥ 2)。虚构实体名正好是这样一段。"""
+    compact = _compact_query(query)
+    spans: list[tuple[str, int, int]] = []
+    i = 0
+    n = len(compact)
+    while i < n:
+        if compact[i] in _NAME_SYLLABLES:
+            j = i + 1
+            while j < n and compact[j] in _NAME_SYLLABLES:
+                j += 1
+            if j - i >= 2:
+                spans.append((compact[i:j], i, j))
+            i = j
+        else:
+            i += 1
+    return spans
+
+
+# 问句像在问一家公司时才允许「看见实体就直达专家」。
+# 百科/常识里偶然出现的两字音节(如「奥丁」)没有这些词,仍走 bge + τ。
+_BUSINESS_CUES = (
+    "公司", "集团", "企业", "股份", "董事长", "总经理", "创始人", "老板",
+    "CEO", "首席", "总裁", "总部", "成立", "创办", "建厂", "产品", "旗舰",
+    "干啥", "咋样", "面试", "掌门", "负责人", "一把手",
+)
+# 多实体问句里,这些紧贴名字的套话指出「在问谁」或「这个不是问的对象」。
+_SUBJECT_BEFORE = ("想问的是", "问的是", "说说", "讲讲")
+_DISMISS_BEFORE = ("先别说", "先不说", "别说", "除了")
+_DISMISS_AFTER = ("我倒是知道", "我知道")
+_AMBIGUOUS_MARKERS = ("相比", "比较", "哪个更", "哪家更", "谁更")
+
+
+def _has_business_cue(query: str) -> bool:
+    return any(cue in query for cue in _BUSINESS_CUES)
+
+
+# 线索必须挨着名字。问句别处出现「公司 / 产品」不能把一个两字音节直接送进专家。
+_CUE_WINDOW = 12
+
+
+def _cue_near(compact: str, start: int, end: int, window: int = _CUE_WINDOW) -> bool:
+    for cue in _BUSINESS_CUES:
+        from_idx = 0
+        while True:
+            index = compact.find(cue, from_idx)
+            if index < 0:
+                break
+            cue_end = index + len(cue)
+            from_idx = index + 1
+            if index < end and cue_end > start:
+                continue
+            gap = start - cue_end if cue_end <= start else index - end
+            if gap <= window:
+                return True
+    return False
+
+
+def _pick_subject(compact: str, spans: list[tuple[str, int, int]]) -> str | None:
+    """多个名字里哪一个是问句主语。定不下来就返回 None(调用方弃权)。"""
+    subjects: list[str] = []
+    dismissed: set[int] = set()
+    for text, start, end in spans:
+        left = compact[max(0, start - 12):start]
+        right = compact[end:end + 12]
+        if any(left.endswith(p) for p in _DISMISS_BEFORE) or any(right.startswith(p) for p in _DISMISS_AFTER):
+            dismissed.add(start)
+        if any(left.endswith(p) for p in _SUBJECT_BEFORE):
+            subjects.append(text)
+    if len(subjects) == 1:
+        return subjects[0]
+    if any(marker in compact for marker in _AMBIGUOUS_MARKERS):
+        return None
+    survivors = [text for text, start, _end in spans if start not in dismissed]
+    if len(survivors) == 1 and dismissed:
+        return survivors[0]
+    return None
+
+
+def _entity_owners(expert_entities: dict[str, list[str] | set[str]]) -> dict[str, str | None]:
+    owner: dict[str, str | None] = {}
+    for expert, raw in expert_entities.items():
+        for name in _registered_names(raw):
+            if name in owner and owner[name] != expert:
+                owner[name] = None
+            else:
+                owner.setdefault(name, expert)
+    return owner
+
+
+def route_decision(
+    query: str,
+    expert_entities: dict[str, list[str] | set[str]],
+    sims: dict[str, float] | None = None,
+    tau: float = 0.6,
+) -> dict:
+    """实体优先路由。
+
+    问句里只有一个在册实体,且名字旁边有公司类线索:直接去那家专家,不再看 bge top-1。
+    没有在册实体:退回 bge top-1,相似度 ≥ τ 且守卫通过才挂载。
+    有好几个名字(在册或已删除的音节串):能确定主语、主语仍在册、且主语旁有线索才去那家;
+    主语不在册、比较句说不清在问谁、或没有线索,就弃权回基座,不去另一家。
+    """
+    sims = sims or {}
+    owners = _entity_owners(expert_entities)
+    compact = _compact_query(query)
+    spans = find_name_spans(compact)
+    best_expert = max(sims, key=sims.get) if sims else None
+    best_sim = sims[best_expert] if best_expert is not None else 0.0
+
+    def blocked(reason: str) -> dict:
+        return {
+            "expert": None,
+            "candidate": best_expert,
+            "fired": False,
+            "reason": reason,
+            "sim": best_sim,
+        }
+
+    def bge_fallback() -> dict:
+        if best_expert is None:
+            return blocked("no_expert")
+        guard = verify_entity_guard(query, expert_entities.get(best_expert, []))
+        fired = best_sim >= tau and guard
+        return {
+            "expert": best_expert if fired else None,
+            "candidate": best_expert,
+            "fired": fired,
+            "reason": "bge" if fired else "bge_block",
+            "sim": best_sim,
+        }
+
+    if len(spans) >= 2:
+        subject = _pick_subject(compact, spans)
+        if subject is None:
+            return blocked("abstain")
+        expert = owners.get(subject)
+        span = next((item for item in spans if item[0] == subject), None)
+        if expert and span and _cue_near(compact, span[1], span[2]):
+            return {
+                "expert": expert,
+                "candidate": expert,
+                "fired": True,
+                "reason": "subject",
+                "sim": sims.get(expert, 0.0),
+            }
+        # 主语写出来了但不在册,或旁边没有公司类线索:不要改去另一个被点到的名字。
+        reason = "abstain_unregistered_subject" if not expert else "abstain_no_cue"
+        return blocked(reason)
+
+    if len(spans) == 1:
+        name, start, end = spans[0]
+        expert = owners.get(name)
+        if expert and _cue_near(compact, start, end):
+            return {
+                "expert": expert,
+                "candidate": expert,
+                "fired": True,
+                "reason": "entity",
+                "sim": sims.get(expert, 0.0),
+            }
+    return bge_fallback()
+
+
+def route_from_scores(
+    query: str,
+    expert_entities: dict[str, list[str] | set[str]],
+    sims: dict[str, float],
+    tau: float,
+) -> tuple[str | None, float, bool]:
+    """给 eval / 测试用的三元组:(专家或 None, 相似度, 是否挂载)。"""
+    decision = route_decision(query, expert_entities, sims, tau)
+    if decision["fired"]:
+        return decision["expert"], decision["sim"], True
+    candidate = decision.get("candidate")
+    sim = sims.get(candidate, 0.0) if candidate else 0.0
+    return candidate, sim, False
 
 

@@ -1,26 +1,18 @@
-"""真实问法下的实体守卫评测(只跑 bge 路由 + 守卫,不加载因果 LM)。
+"""真实问法下的路由评测。
 
-仓库原验收(`test_task1_entity_guard.py`)只用训练问法,删专家后交叉误射是 0/400。
-本脚本补一套更接近真实用户的问法,并同时回归原模板与未见口语模板。
-
-指标(τ 默认 0.6,与读取路由一致):
-- 守卫误拦:问句的在册专家名单过不了守卫(与向量 top-1 无关);
-- 正确路由召回:向量 top-1 是该专家,且相似度 ≥ τ,且守卫放行;
-- 删除后交叉误射:去掉该专家后,剩余专家的 top-1 仍 ≥ τ 且守卫放行。
-
-数据:
-- `data_guard/realistic_queries.jsonl`  集团/职务/口语/长上下文/错字/残名/双实体/近名/常识
-- `data/batch_*.jsonl` 的原模板,以及 `gen_data.PARA_QUESTIONS` 的未见口语模板
+同一套题报三列:旧正则守卫 + bge top-1、边界守卫 + bge top-1、实体优先。
+τ 默认 0.6。`--generate` 再用 Qwen 抽样看记忆准确率;`--cmmlu-dir` 只统计题干激活。
 
 用法:
-  python scripts/eval_entity_guard_realistic.py --write-data
-  python scripts/eval_entity_guard_realistic.py
   python scripts/eval_entity_guard_realistic.py --logic-only
-  python scripts/eval_entity_guard_realistic.py --json-out /tmp/guard_eval.json
+  python scripts/eval_entity_guard_realistic.py --json-out /tmp/guard_eval.json --cmmlu-dir data_bench/test
+  python scripts/eval_entity_guard_realistic.py --generate-only --n-per-cat 50
 """
 import argparse
 import json
+import os
 import random
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -31,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from gen_data import PARA_QUESTIONS, SYL  # noqa: E402
 from router import (  # noqa: E402
     extract_entities_from_key_texts,
+    find_name_spans,
+    route_decision,
     verify_entity_guard,
 )
 
@@ -337,10 +331,152 @@ def logic_check(facts: list[dict], entities: dict[str, list[str]], rows: list[di
         eg = leaked[0]
         raise SystemExit(f"未注册/常识问法被守卫放行 {len(leaked)} 例: {eg['q']}")
     print(f"逻辑检查: 错字/残名/近名/常识均未放行 {len(reject_rows)}/{len(reject_rows)}", flush=True)
+    _logic_check_routing(entities, rows)
+
+
+def _logic_check_routing(entities: dict[str, list[str]], rows: list[dict]) -> None:
+    """不看向量:实体优先应当直达被问的那家;删掉之后、以及比较句,必须弃权。"""
+    experts = list(entities)
+    zero = {name: 0.0 for name in experts}
+    hot = {name: 0.99 for name in experts}
+
+    def spans_of(q: str) -> list[str]:
+        return [text for text, _s, _e in find_name_spans(q)]
+
+    bad_span = []
+    miss = []
+    deleted_fire = []
+    for row in rows:
+        if row["expect"] != "admit" or row["category"] == "two_entity":
+            continue
+        names = spans_of(row["q"])
+        if names != [row["entity"]]:
+            bad_span.append((names, row["q"]))
+            continue
+        got = route_decision(row["q"], entities, zero, 0.6)
+        if not (got["fired"] and got["expert"] == row["expert"]):
+            miss.append((got["reason"], row["q"]))
+        kept = {n: ents for n, ents in entities.items() if n != row["expert"]}
+        hot_kept = {n: 0.99 for n in kept}
+        after = route_decision(row["q"], kept, hot_kept, 0.6)
+        if after["fired"]:
+            deleted_fire.append((after["expert"], after["reason"], row["q"]))
+    if bad_span:
+        names, q = bad_span[0]
+        raise SystemExit(f"单实体问法音节段不是该实体 {len(bad_span)} 例: {names} | {q}")
+    if miss:
+        reason, q = miss[0]
+        raise SystemExit(f"实体优先未直达 {len(miss)} 例 reason={reason}: {q}")
+    if deleted_fire:
+        expert, reason, q = deleted_fire[0]
+        raise SystemExit(f"删掉被问专家后仍挂载 {len(deleted_fire)} 例 {expert}/{reason}: {q}")
+    single = sum(1 for r in rows if r["expect"] == "admit" and r["category"] != "two_entity")
+    print(f"逻辑检查: 单实体问法实体优先直达 {single}/{single},删除后挂载 0", flush=True)
+
+    subject_ok = subject_miss = compare_fire = deleted_two = 0
+    for row in rows:
+        if row["category"] != "two_entity":
+            continue
+        got = route_decision(row["q"], entities, zero, 0.6)
+        comparing = "相比" in row["q"] or "比较" in row["q"]
+        if comparing:
+            if got["fired"]:
+                compare_fire += 1
+            continue
+        if got["fired"] and got["expert"] == row["expert"]:
+            subject_ok += 1
+        else:
+            subject_miss += 1
+            if subject_miss <= 3:
+                print(f"  双实体未直达 reason={got['reason']} spans={spans_of(row['q'])} | {row['q']}", flush=True)
+        kept = {n: ents for n, ents in entities.items() if n != row["expert"]}
+        after = route_decision(row["q"], kept, {n: 0.99 for n in kept}, 0.6)
+        if after["fired"]:
+            deleted_two += 1
+    if compare_fire or subject_miss or deleted_two:
+        raise SystemExit(
+            f"双实体路由不符合预期: 比较句误挂载 {compare_fire}, "
+            f"主语未直达 {subject_miss}, 删除后仍挂载 {deleted_two}"
+        )
+    print(f"逻辑检查: 双实体主语直达 {subject_ok},比较句弃权,删除后挂载 0", flush=True)
+
+    reject_fire = []
+    for row in rows:
+        if row["expect"] != "reject":
+            continue
+        got = route_decision(row["q"], entities, hot, 0.6)
+        if got["fired"]:
+            reject_fire.append((got["expert"], got["reason"], row["q"]))
+    if reject_fire:
+        expert, reason, q = reject_fire[0]
+        raise SystemExit(f"未注册/常识在相似度 0.99 时仍挂载 {len(reject_fire)} 例 {expert}/{reason}: {q}")
+    print(f"逻辑检查: 错字/残名/近名/常识在相似度 0.99 时挂载 0/{len([r for r in rows if r['expect']=='reject'])}", flush=True)
 
 
 def _norm_key(path: str) -> str:
     return str(path).replace("\\", "/")
+
+
+# 改守卫之前的自由抽取。只在这份评测里复现「前」列,线上路由不再走这里。
+_LEGACY_LEAD = (
+    "请告诉我", "请问", "谁是", "请说出", "我想知道", "我想去",
+    "查一下:", "查一下：", "查一下", "诶,", "诶，", "提到", "你知道",
+    "能告诉我", "去哪座城市可以找到", "大家最熟知的", "谁在管",
+)
+
+
+def legacy_entities(texts: list[str]) -> list[str]:
+    found: set[str] = set()
+    for text in texts:
+        if "公司" not in text:
+            continue
+        prefix = text[:text.find("公司")]
+        for lead in ("请告诉我", "请问", "谁是", "请说出", "我想知道"):
+            if prefix.startswith(lead):
+                prefix = prefix[len(lead):]
+        prefix = prefix.strip()
+        if len(prefix) >= 2:
+            found.add(prefix)
+    return sorted(found, key=len, reverse=True)
+
+
+def legacy_extract(query: str) -> str | None:
+    text = query.strip()
+    for lead in sorted(_LEGACY_LEAD, key=len, reverse=True):
+        if text.startswith(lead):
+            text = text[len(lead):]
+            break
+    matched = re.search(r"^([一-龥]{2,8}?)(?:这家公司|公司)?把(?:公司)?总部", text)
+    if matched:
+        return matched.group(1).strip()
+    matched = re.search(r"^([一-龥]{2,8}?)(?:这家)?公司", text)
+    if matched:
+        return matched.group(1).strip()
+    matched = re.search(
+        r"^([一-龥]{2,8}?)(?:的|是|主打|最具有|最出名|最畅销|现在的|总部是在|产品叫|公司)",
+        text,
+    )
+    if matched:
+        return matched.group(1).strip()
+    return None
+
+
+def legacy_verify(query: str, expert_entities: list[str] | set[str]) -> bool:
+    if not expert_entities:
+        return True
+    extracted = legacy_extract(query)
+    if extracted:
+        return extracted in expert_entities
+    return any(entity in query for entity in expert_entities)
+
+
+def load_dirty_entities(entries: list[dict]) -> dict[str, list[str]]:
+    dirty = {}
+    for entry in entries:
+        path = Path(_norm_key(entry["key_path"])).parent / "key_texts.json"
+        texts = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        dirty[entry["expert"]] = legacy_entities(texts)
+    return dirty
 
 
 def run_routing(entries, entities, rows, tau: float) -> list[dict]:
@@ -350,6 +486,7 @@ def run_routing(entries, entities, rows, tau: float) -> list[dict]:
     keys = {}
     for entry in entries:
         keys[entry["expert"]] = torch.load(_norm_key(entry["key_path"]), weights_only=True)
+    dirty = load_dirty_entities(entries)
     questions = [r["q"] for r in rows]
     print(f"编码 {len(questions)} 条问句…", flush=True)
     vecs = embed(questions)
@@ -358,6 +495,8 @@ def run_routing(entries, entities, rows, tau: float) -> list[dict]:
         sims = {name: (key @ vec).max().item() for name, key in keys.items()}
         best, best_s = max(sims.items(), key=lambda kv: kv[1])
         guard_best = verify_entity_guard(row["q"], entities.get(best, []))
+        legacy_best = legacy_verify(row["q"], dirty.get(best, []))
+        decision = route_decision(row["q"], entities, sims, tau)
         rec = {
             "id": row["id"],
             "category": row["category"],
@@ -367,24 +506,42 @@ def run_routing(entries, entities, rows, tau: float) -> list[dict]:
             "sim": best_s,
             "guard_best": guard_best,
             "fired": best_s >= tau and guard_best,
+            "legacy_fired": best_s >= tau and legacy_best,
+            "ent_fired": decision["fired"],
+            "ent_expert": decision["expert"],
+            "ent_reason": decision["reason"],
         }
         if row["expect"] == "admit":
             gold = row["expert"]
             rec["gold"] = gold
             rec["guard_gold"] = verify_entity_guard(row["q"], entities.get(gold, []))
+            rec["legacy_guard_gold"] = legacy_verify(row["q"], dirty.get(gold, []))
             rec["top1_ok"] = best == gold
+            rec["ent_routed_gold"] = bool(decision["fired"] and decision["expert"] == gold)
             others = {n: s for n, s in sims.items() if n != gold}
             b2, s2 = max(others.items(), key=lambda kv: kv[1])
             g2 = verify_entity_guard(row["q"], entities.get(b2, []))
             rec["cross"] = s2 >= tau and g2
+            rec["legacy_cross"] = s2 >= tau and legacy_verify(row["q"], dirty.get(b2, []))
             rec["vector_cross"] = s2 >= tau
             rec["cross_expert"] = b2
+            pruned_entities = {n: ents for n, ents in entities.items() if n != gold}
+            pruned_sims = {n: s for n, s in sims.items() if n != gold}
+            after = route_decision(row["q"], pruned_entities, pruned_sims, tau)
+            rec["ent_cross"] = after["fired"]
+            rec["ent_cross_expert"] = after["expert"]
+            rec["ent_cross_reason"] = after["reason"]
             distractor = row.get("distractor_expert")
             rec["cross_is_distractor"] = bool(distractor) and b2 == distractor
             rec["cross_unmentioned"] = rec["cross"] and not rec["cross_is_distractor"]
+            rec["legacy_cross_unmentioned"] = rec["legacy_cross"] and not rec["cross_is_distractor"]
+            rec["ent_cross_distractor"] = bool(after["fired"] and distractor and after["expert"] == distractor)
         else:
             rec["guard_any"] = any(
                 verify_entity_guard(row["q"], ents) for ents in entities.values()
+            )
+            rec["legacy_guard_any"] = any(
+                legacy_verify(row["q"], ents) for ents in dirty.values()
             )
         scored.append(rec)
     return scored
@@ -408,49 +565,61 @@ def summarize_with_tau(scored: list[dict], tau: float) -> dict:
                 "n": len(recs),
                 "expect": "admit",
                 "false_block": sum(not r["guard_gold"] for r in recs),
+                "false_block_legacy": sum(not r["legacy_guard_gold"] for r in recs),
                 "correct_route": sum(r["top1_ok"] and r["fired"] for r in recs),
+                "correct_legacy": sum(r["top1_ok"] and r["legacy_fired"] for r in recs),
+                "correct_entity": sum(r["ent_routed_gold"] for r in recs),
                 "top1": sum(r["top1_ok"] for r in recs),
                 "top1_tau": sum(r["top1_ok"] and r["sim"] >= tau for r in recs),
                 "crossfire": sum(r["cross"] for r in recs),
+                "crossfire_legacy": sum(r["legacy_cross"] for r in recs),
+                "crossfire_entity": sum(r["ent_cross"] for r in recs),
                 "vector_crossfire": sum(r["vector_cross"] for r in recs),
                 "crossfire_unmentioned": sum(r["cross_unmentioned"] for r in recs),
+                "crossfire_unmentioned_legacy": sum(r["legacy_cross_unmentioned"] for r in recs),
+                "crossfire_distractor_entity": sum(r["ent_cross_distractor"] for r in recs),
+                "entity_abstain": sum(not r["ent_fired"] for r in recs),
             }
         else:
             summary[cat] = {
                 "n": len(recs),
                 "expect": "reject",
                 "guard_any": sum(r["guard_any"] for r in recs),
+                "guard_any_legacy": sum(r["legacy_guard_any"] for r in recs),
                 "false_activation": sum(r["fired"] for r in recs),
+                "false_activation_legacy": sum(r["legacy_fired"] for r in recs),
+                "false_activation_entity": sum(r["ent_fired"] for r in recs),
             }
     return summary
 
 
+def _triple(stats: dict, key_a: str, key_b: str, key_c: str) -> str:
+    return f"{stats[key_a]}/{stats[key_b]}/{stats[key_c]}"
+
+
 def print_report(summary: dict, tau: float) -> None:
     admit_order = list(REGRESS_CATS) + list(ADMIT_CATS) + ["two_entity"]
-    print(f"\nτ={tau}  在册问法(误拦=守卫拒绝了该专家的名单;误射=删掉该专家后 top-1 仍放行)")
-    print(f"{'类别':<16}{'题数':>8}{'守卫误拦':>14}{'正确路由召回':>16}{'向量top1≥τ':>14}{'删除后误射':>14}{'纯向量会误射':>14}")
+    print(f"\nτ={tau}  正确路由与删除后误射: 正则守卫 / 边界守卫+bge / 实体优先")
+    print(f"{'类别':<16}{'题数':>8}{'正确路由(正/边/实)':>24}{'删除后误射(正/边/实)':>24}{'向量top1≥τ':>12}")
     for cat in admit_order:
         stats = summary.get(cat)
         if not stats:
             continue
         print(
             f"{cat:<16}{stats['n']:>8}"
-            f"{_pct(stats['false_block'], stats['n']):>14}"
-            f"{_pct(stats['correct_route'], stats['n']):>16}"
-            f"{_pct(stats['top1_tau'], stats['n']):>14}"
-            f"{_pct(stats['crossfire'], stats['n']):>14}"
-            f"{_pct(stats['vector_crossfire'], stats['n']):>14}"
+            f"{_triple(stats, 'correct_legacy', 'correct_route', 'correct_entity'):>24}"
+            f"{_triple(stats, 'crossfire_legacy', 'crossfire', 'crossfire_entity'):>24}"
+            f"{_pct(stats['top1_tau'], stats['n']):>12}"
         )
-    print(f"\n未注册 / 常识(守卫命中=任一在册名单被放行;误激活=top-1 ≥τ 且守卫放行)")
-    print(f"{'类别':<16}{'题数':>8}{'守卫命中':>14}{'路由误激活':>14}")
+    print("\n未注册 / 常识  误激活: 正则 / 边界+bge / 实体优先")
+    print(f"{'类别':<16}{'题数':>8}{'误激活(正/边/实)':>24}")
     for cat in REJECT_CATS:
         stats = summary.get(cat)
         if not stats:
             continue
         print(
             f"{cat:<16}{stats['n']:>8}"
-            f"{_pct(stats['guard_any'], stats['n']):>14}"
-            f"{_pct(stats['false_activation'], stats['n']):>14}"
+            f"{_triple(stats, 'false_activation_legacy', 'false_activation', 'false_activation_entity'):>24}"
         )
 
 
@@ -462,11 +631,17 @@ def pooled_admit(scored: list[dict], cats: tuple[str, ...], tau: float) -> dict:
     return {
         "n": n,
         "false_block": sum(not r["guard_gold"] for r in recs),
+        "false_block_legacy": sum(not r["legacy_guard_gold"] for r in recs),
         "correct_route": sum(r["top1_ok"] and r["fired"] for r in recs),
+        "correct_legacy": sum(r["top1_ok"] and r["legacy_fired"] for r in recs),
+        "correct_entity": sum(r["ent_routed_gold"] for r in recs),
         "top1_tau": sum(r["top1_ok"] and r["sim"] >= tau for r in recs),
         "crossfire": sum(r["cross"] for r in recs),
+        "crossfire_legacy": sum(r["legacy_cross"] for r in recs),
+        "crossfire_entity": sum(r["ent_cross"] for r in recs),
         "vector_crossfire": sum(r["vector_cross"] for r in recs),
         "crossfire_unmentioned": sum(r["cross_unmentioned"] for r in recs),
+        "entity_abstain": sum(not r["ent_fired"] for r in recs),
     }
 
 
@@ -486,6 +661,266 @@ def print_examples(scored: list[dict], limit: int = 3) -> None:
             shown[cat] += 1
 
 
+# 真实问法模板在问哪一种事实。职务题按 CEO 记(训练里没有「董事长」这个属性)。
+# None 的模板没有唯一答案,不进记忆准确率。
+_ASKS = {
+    ("org_suffix", 0): "旗舰产品",
+    ("org_suffix", 1): "总部城市",
+    ("org_suffix", 2): "成立年份",
+    ("org_suffix", 3): "旗舰产品",
+    ("title", 0): "CEO",
+    ("title", 1): "CEO",
+    ("title", 2): "CEO",
+    ("colloquial", 0): "CEO",
+    ("colloquial", 1): "CEO",
+    ("colloquial", 2): "CEO",
+    ("colloquial", 3): "成立年份",
+    ("colloquial", 4): "CEO",
+    ("colloquial", 6): "旗舰产品",
+    ("long_context", 0): "总部城市",
+    ("long_context", 1): "成立年份",
+    ("long_context", 2): "旗舰产品",
+    ("long_context", 3): "总部城市",
+    ("two_entity", 0): "CEO",
+    ("two_entity", 2): "旗舰产品",
+}
+
+
+def _row_fact(row: dict, facts_by_id: dict[str, dict]) -> tuple[dict | None, int | None]:
+    matched = re.fullmatch(r"(.+)-(b\d+-\d+)-(\d+)", row["id"])
+    if not matched:
+        return None, None
+    return facts_by_id.get(matched.group(2)), int(matched.group(3))
+
+
+def memory_gold(row: dict, facts_by_id: dict[str, dict]) -> str | None:
+    """问句如果正好在问这条事实训练过的属性,返回答案;否则没有可对的标准答案。"""
+    fact, index = _row_fact(row, facts_by_id)
+    if fact is None or index is None:
+        return None
+    if row["category"] == "canonical":
+        return fact["qa"][index]["a"]
+    attr = _ASKS.get((row["category"], index))
+    if attr and fact["attr"] == attr:
+        return fact["value"]
+    return None
+
+
+def _contains_value(answer: str, value: str | None) -> bool:
+    if not value:
+        return False
+    return value.rstrip("年") in answer
+
+
+def scan_cmmlu(entries, entities, tau: float, cmmlu_dir: Path) -> dict:
+    """CMMLU 题干的路由激活。只编码题干,和 eval_general 的路由文本一致。"""
+    import csv
+
+    import torch
+    from router import embed
+
+    keys = {e["expert"]: torch.load(_norm_key(e["key_path"]), weights_only=True) for e in entries}
+    stems = []
+    for path in sorted(cmmlu_dir.glob("*.csv")):
+        with path.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("Answer") in "ABCD" and row.get("Question"):
+                    stems.append(row["Question"])
+    print(f"CMMLU 编码题干 {len(stems)} 条…", flush=True)
+    vecs = embed(stems)
+    boundary = entity = 0
+    max_sim = 0.0
+    samples = []
+    for text, vec in zip(stems, vecs):
+        sims = {name: (key @ vec).max().item() for name, key in keys.items()}
+        best, best_s = max(sims.items(), key=lambda kv: kv[1])
+        max_sim = max(max_sim, best_s)
+        if best_s >= tau and verify_entity_guard(text, entities.get(best, [])):
+            boundary += 1
+        decision = route_decision(text, entities, sims, tau)
+        if decision["fired"]:
+            entity += 1
+            if len(samples) < 8:
+                samples.append({"q": text[:80], "reason": decision["reason"], "expert": decision["expert"], "sim": round(best_s, 3)})
+    report = {
+        "n": len(stems),
+        "max_sim": round(max_sim, 4),
+        "boundary_activations": boundary,
+        "entity_activations": entity,
+        "samples": samples,
+    }
+    print(
+        f"CMMLU 全题干 n={report['n']} 最高相似度 {report['max_sim']:.3f}  "
+        f"边界+bge 激活 {boundary}  实体优先激活 {entity}",
+        flush=True,
+    )
+    return report
+
+
+def run_generation(entries, entities, rows, facts, tau: float, out_path: Path, n_per_cat: int, seed: int) -> dict:
+    """每种真实问法抽大约 n 条,CPU 上跑基座 / 边界守卫+bge / 实体优先。"""
+    import time
+
+    import torch
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from eval_memory import answer
+    from router import embed
+
+    torch.set_num_threads(os.cpu_count() or 4)
+    facts_by_id = {fact["id"]: fact for fact in facts}
+    by_entity = {fact["entity"]: fact for fact in facts}
+    generic_gold = {}
+    generic_path = ROOT / "data" / "generic_questions.jsonl"
+    for line in generic_path.open(encoding="utf-8"):
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if isinstance(item, dict) and item.get("a"):
+            generic_gold[item["q"]] = item["a"]
+
+    rng = random.Random(seed)
+    chosen = []
+    for cat in ("canonical",) + ADMIT_CATS + ("two_entity",):
+        pool = [row for row in rows if row["category"] == cat and memory_gold(row, facts_by_id)]
+        picked = rng.sample(pool, min(n_per_cat, len(pool)))
+        chosen.extend(picked)
+        print(f"生成抽样 {cat}: {len(picked)}/{len(pool)} 条有标准答案", flush=True)
+    compare_pool = [row for row in rows if row["category"] == "two_entity" and "相比" in row["q"]]
+    compare_picked = rng.sample(compare_pool, min(n_per_cat, len(compare_pool)))
+    chosen.extend(compare_picked)
+    print(f"生成抽样 two_entity 比较句: {len(compare_picked)}", flush=True)
+    general_rows = [row for row in rows if row["category"] == "general"]
+    chosen.extend(general_rows)
+    print(f"生成抽样 general: {len(general_rows)}", flush=True)
+
+    keys = {e["expert"]: torch.load(_norm_key(e["key_path"]), weights_only=True) for e in entries}
+    print(f"编码抽样 {len(chosen)} 条…", flush=True)
+    vecs = embed([row["q"] for row in chosen])
+    plans = []
+    for row, vec in zip(chosen, vecs):
+        sims = {name: (key @ vec).max().item() for name, key in keys.items()}
+        best, best_s = max(sims.items(), key=lambda kv: kv[1])
+        boundary_fire = best_s >= tau and verify_entity_guard(row["q"], entities.get(best, []))
+        decision = route_decision(row["q"], entities, sims, tau)
+        plans.append({
+            "row": row,
+            "boundary_expert": best if boundary_fire else None,
+            "entity_expert": decision["expert"] if decision["fired"] else None,
+            "entity_reason": decision["reason"],
+            "sim": best_s,
+        })
+
+    device = torch.device("cpu")
+    model_path = ROOT / "models" / "Qwen2.5-0.5B-Instruct"
+    tok = AutoTokenizer.from_pretrained(model_path)
+    base = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float32).to(device)
+    first = entries[0]
+    model = PeftModel.from_pretrained(base, ROOT / "experts" / first["expert"], adapter_name=first["expert"])
+    for entry in entries[1:]:
+        model.load_adapter(ROOT / "experts" / entry["expert"], adapter_name=entry["expert"])
+    model.eval()
+
+    cache: dict[tuple[str, str], str] = {}
+
+    def generate(question: str, expert: str | None) -> str:
+        key = (expert or "", question)
+        if key in cache:
+            return cache[key]
+        if expert:
+            model.set_adapter(expert)
+            text = answer(model, tok, device, question, max_new_tokens=40)
+        else:
+            with model.disable_adapter():
+                text = answer(model, tok, device, question, max_new_tokens=40)
+        cache[key] = text
+        return text
+
+    records = []
+    started = time.time()
+    for i, plan in enumerate(plans, start=1):
+        row = plan["row"]
+        question = row["q"]
+        base_ans = generate(question, None)
+        boundary_ans = generate(question, plan["boundary_expert"])
+        entity_ans = generate(question, plan["entity_expert"])
+        fact, _index = _row_fact(row, facts_by_id)
+        gold = memory_gold(row, facts_by_id)
+        if row["category"] == "general":
+            gold = generic_gold.get(question)
+        other = by_entity.get(row.get("distractor")) if row.get("distractor") else None
+        records.append({
+            "id": row["id"],
+            "category": row["category"],
+            "q": question,
+            "gold": gold,
+            "attr": fact["attr"] if fact else None,
+            "compare": "相比" in question and row["category"] == "two_entity",
+            "boundary_expert": plan["boundary_expert"],
+            "entity_expert": plan["entity_expert"],
+            "entity_reason": plan["entity_reason"],
+            "base": base_ans,
+            "boundary": boundary_ans,
+            "entity": entity_ans,
+            "base_hit": _contains_value(base_ans, gold),
+            "boundary_hit": _contains_value(boundary_ans, gold),
+            "entity_hit": _contains_value(entity_ans, gold),
+            "base_either": _contains_value(base_ans, fact["value"] if fact else None) or _contains_value(base_ans, other["value"] if other else None),
+            "boundary_either": _contains_value(boundary_ans, fact["value"] if fact else None) or _contains_value(boundary_ans, other["value"] if other else None),
+            "entity_either": _contains_value(entity_ans, fact["value"] if fact else None) or _contains_value(entity_ans, other["value"] if other else None),
+        })
+        if i % 10 == 0 or i == len(plans):
+            elapsed = time.time() - started
+            print(f"  生成 {i}/{len(plans)}  用时 {elapsed:.0f}s  缓存 {len(cache)}", flush=True)
+
+    def pack(cat: str, subset: list[dict]) -> dict:
+        scored = [rec for rec in subset if rec["gold"]]
+        return {
+            "n": len(subset),
+            "scored": len(scored),
+            "base_hit": sum(rec["base_hit"] for rec in scored),
+            "boundary_hit": sum(rec["boundary_hit"] for rec in scored),
+            "entity_hit": sum(rec["entity_hit"] for rec in scored),
+            "boundary_fired": sum(rec["boundary_expert"] is not None for rec in subset),
+            "entity_fired": sum(rec["entity_expert"] is not None for rec in subset),
+        }
+
+    by_cat = defaultdict(list)
+    for rec in records:
+        key = "two_compare" if rec["compare"] else rec["category"]
+        by_cat[key].append(rec)
+    summary = {cat: pack(cat, subset) for cat, subset in by_cat.items()}
+    compare = by_cat.get("two_compare", [])
+    summary["two_compare_emit"] = {
+        "n": len(compare),
+        "base": sum(rec["base_either"] for rec in compare),
+        "boundary": sum(rec["boundary_either"] for rec in compare),
+        "entity": sum(rec["entity_either"] for rec in compare),
+        "boundary_fired": sum(rec["boundary_expert"] is not None for rec in compare),
+        "entity_fired": sum(rec["entity_expert"] is not None for rec in compare),
+    }
+    general = by_cat.get("general", [])
+    general_scored = [rec for rec in general if rec["gold"]]
+    summary["general_damage"] = {
+        "n": len(general),
+        "with_gold": len(general_scored),
+        "boundary_fired": sum(rec["boundary_expert"] is not None for rec in general),
+        "entity_fired": sum(rec["entity_expert"] is not None for rec in general),
+        "base_hit": sum(rec["base_hit"] for rec in general_scored),
+        "boundary_hit": sum(rec["boundary_hit"] for rec in general_scored),
+        "entity_hit": sum(rec["entity_hit"] for rec in general_scored),
+        "boundary_wrong": sum(rec["boundary_expert"] is not None and not rec["boundary_hit"] for rec in general_scored),
+        "entity_wrong": sum(rec["entity_expert"] is not None and not rec["entity_hit"] for rec in general_scored),
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({"summary": summary, "records": records}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"生成结果写入 {out_path}", flush=True)
+    for cat, stats in summary.items():
+        print(f"  {cat}: {stats}", flush=True)
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write-data", action="store_true", help="重写 data_guard/realistic_queries.jsonl")
@@ -496,6 +931,12 @@ def main():
     ap.add_argument("--logic-only", action="store_true", help="只检查名单与守卫,不跑 bge")
     ap.add_argument("--json-out", type=Path, default=None)
     ap.add_argument("--no-regression", action="store_true", help="不把原模板/未见口语算进本次(调试用)")
+    ap.add_argument("--cmmlu-dir", type=Path, default=None, help="CMMLU test 目录,只做路由激活统计")
+    ap.add_argument("--generate", action="store_true", help="抽样跑 Qwen 生成(基座 / 边界守卫 / 实体优先)")
+    ap.add_argument("--generate-only", action="store_true", help="只跑生成,不再做全量路由统计")
+    ap.add_argument("--generate-out", type=Path, default=Path("/tmp/guard_generate.json"))
+    ap.add_argument("--n-per-cat", type=int, default=50)
+    ap.add_argument("--seed", type=int, default=20261022)
     args = ap.parse_args()
 
     facts = load_facts(args.facts)
@@ -513,6 +954,12 @@ def main():
     if args.logic_only:
         logic_check(facts, entities, rows)
         return
+    if args.generate_only:
+        run_generation(
+            entries, entities, rows, facts, args.tau,
+            args.generate_out, args.n_per_cat, args.seed,
+        )
+        return
 
     # logic_check 在守卫改完之后应当通过;改之前会失败,所以完整评测不强制它。
     scored = run_routing(entries, entities, rows, args.tau)
@@ -521,38 +968,56 @@ def main():
     pool = pooled_admit(scored, ADMIT_CATS, args.tau)
     if pool:
         print(
-            f"\n真实单实体合计  n={pool['n']}  误拦={pool['false_block']}  "
-            f"正确路由召回={pool['correct_route']}  向量top1≥τ={pool['top1_tau']}  "
-            f"删除后误射={pool['crossfire']}  纯向量会误射={pool['vector_crossfire']}"
+            f"\n真实单实体合计 n={pool['n']}  "
+            f"正确路由 正则/边界/实体优先="
+            f"{pool['correct_legacy']}/{pool['correct_route']}/{pool['correct_entity']}  "
+            f"删除后误射 {pool['crossfire_legacy']}/{pool['crossfire']}/{pool['crossfire_entity']}  "
+            f"向量top1≥τ={pool['top1_tau']}  纯向量会误射={pool['vector_crossfire']}"
         )
     general = [r for r in scored if r["category"] == "general"]
     if general:
         print(
-            f"常识题最高相似度 {max(r['sim'] for r in general):.3f},"
-            f" 路由误激活 {sum(r['fired'] for r in general)}/{len(general)}"
+            f"常识题最高相似度 {max(r['sim'] for r in general):.3f}, "
+            f"误激活 正则/边界/实体优先 "
+            f"{sum(r['legacy_fired'] for r in general)}/"
+            f"{sum(r['fired'] for r in general)}/"
+            f"{sum(r['ent_fired'] for r in general)}"
         )
 
-    print("\n按被删专家(真实单实体问法):")
+    print("\n按被删专家(真实单实体, 边界误射 / 实体优先误射):")
     for expert in sorted({r["gold"] for r in scored if r.get("gold") and r["category"] in ADMIT_CATS}):
         subset = [r for r in scored if r.get("gold") == expert and r["category"] in ADMIT_CATS]
-        blocked = sum(not r["guard_gold"] for r in subset)
         cross = sum(r["cross"] for r in subset)
-        print(f"  删除 {expert}: 题数 {len(subset)}  误拦 {blocked}  交叉误射 {cross}")
+        ent = sum(r["ent_cross"] for r in subset)
+        print(f"  删除 {expert}: 题数 {len(subset)}  边界误射 {cross}  实体优先误射 {ent}")
 
-    two = summary.get("two_entity")
-    if two:
+    two_rows = [r for r in scored if r["category"] == "two_entity"]
+    if two_rows:
+        reasons = defaultdict(int)
+        for rec in two_rows:
+            reasons[rec["ent_reason"]] += 1
         print(
-            f"双实体:误拦={two['false_block']}/{two['n']}  "
-            f"正确路由召回={two['correct_route']}/{two['n']}  "
-            f"删除后误射={two['crossfire']}/{two['n']}  "
-            f"其中打到未提及专家={two['crossfire_unmentioned']}/{two['n']}"
+            f"双实体实体优先: 直达主语 {sum(r['ent_routed_gold'] for r in two_rows)}/{len(two_rows)}  "
+            f"弃权 {sum(not r['ent_fired'] for r in two_rows)}  "
+            f"删除后误射 {sum(r['ent_cross'] for r in two_rows)}  "
+            f"其中打到另一家 {sum(r['ent_cross_distractor'] for r in two_rows)}  "
+            f"原因 {dict(reasons)}"
         )
     print_examples(scored)
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         payload = {"tau": args.tau, "summary": summary, "pooled_realistic": pool}
+        if args.cmmlu_dir:
+            payload["cmmlu"] = scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir)
         args.json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nJSON 已写入 {args.json_out}", flush=True)
+    elif args.cmmlu_dir:
+        scan_cmmlu(entries, entities, args.tau, args.cmmlu_dir)
+    if args.generate:
+        run_generation(
+            entries, entities, rows, facts, args.tau,
+            args.generate_out, args.n_per_cat, args.seed,
+        )
 
 
 if __name__ == "__main__":

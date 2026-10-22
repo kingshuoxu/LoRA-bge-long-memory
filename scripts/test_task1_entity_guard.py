@@ -21,7 +21,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed, extract_entities_from_key_texts, load_router, resolve_key_path, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_router, resolve_key_path, route_from_scores
 from eval_memory import answer, pick_device
 
 
@@ -54,10 +54,8 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
     def route_query(text: str):
         q = embed([text])[0]
         sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
-        best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-        entity_pass = verify_entity_guard(text, expert_entities.get(best, []))
-        fired = (s >= tau) and entity_pass
-        return best, s, fired, entity_pass
+        best, s, fired = route_from_scores(text, expert_entities, sim_scores, tau)
+        return best, s, fired, fired
 
     # 1. 测选择性
     generic = [json.loads(l) for l in open("data/generic_questions.jsonl", encoding="utf-8")]
@@ -127,9 +125,7 @@ def run_full_verification(device, model_path="models/Qwen2.5-0.5B-Instruct", tau
             q = q_item["q"]
             qv = embed([q])[0]
             sim_scores = {name: (k @ qv).max().item() for name, k in pruned_keys.items()}
-            best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-            entity_pass = verify_entity_guard(q, pruned_entities.get(best, []))
-            fired = (s >= tau) and entity_pass
+            _best, _s, fired = route_from_scores(q, pruned_entities, sim_scores, tau)
 
             if fired:
                 misrouted_cnt += 1

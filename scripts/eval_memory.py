@@ -24,7 +24,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed, extract_entities_from_key_texts, load_router, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_router, route_from_scores
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
 
@@ -94,13 +94,10 @@ def main():
 
     def route_query(text: str):
         q = embed([text])[0]
-        # 每个专家内取最大相似度(检索式路由):问句命中任意一条事实即候选
+        # 每个专家内取最大相似度。有在册实体时实体优先,否则 top-1 ≥ τ 且守卫通过才挂载。
         sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
-        best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-        # 二级路由校验: 1. 相似度 >= tau; 2. 实体守卫准入检查
-        entity_pass = verify_entity_guard(text, expert_entities.get(best, []))
-        fired = (s >= args.tau) and entity_pass
-        return best, s, fired, entity_pass
+        best, s, fired = route_from_scores(text, expert_entities, sim_scores, args.tau)
+        return best, s, fired, fired
 
     # ---- 选择性:常识问题不应激活任何专家;激活了则进一步看是否答错(有效损伤) ----
     records = []  # --save-answers 用

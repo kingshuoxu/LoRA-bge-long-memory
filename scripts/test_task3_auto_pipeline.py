@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).parent))
 from extract_qa_pipeline import extract_facts_from_text, generate_qa_dataset_for_facts
 from auto_write import AutoWriter
-from router import embed, extract_entities_from_key_texts, load_router, resolve_key_path, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_router, resolve_key_path, route_from_scores
 from eval_memory import answer, pick_device
 
 
@@ -122,9 +122,7 @@ def run_task3_auto_pipeline_test(device, model_path="models/Qwen2.5-0.5B-Instruc
     def route_query(text: str):
         q = embed([text])[0]
         sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
-        best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-        entity_pass = verify_entity_guard(text, expert_entities.get(best, []))
-        fired = (s >= 0.6) and entity_pass
+        best, s, fired = route_from_scores(text, expert_entities, sim_scores, 0.6)
         return best, s, fired
 
     # 测试 1: 标准问法召回
