@@ -116,6 +116,10 @@ python scripts/eval_general.py --rocm --tau 0.6  # 通用能力基准,需 CMMLU:
 - `papers/` — 前沿论文清单与 PDF（本地调研资料，gitignored 不入库）
 - 1.5B 专家（`experts_15b/`)、自动门产出（`data_auto*/`)、CMMLU(`data_bench/`）不入库，用上面的命令复现
 
+## 桌面客户端
+
+macOS、Windows、Linux 的本地对话程序在 `docs/desktop-client.md`。聊天走现有的 bge 路由和实体守卫；勾选历史对话后可以审阅抽出的事实，再训练一个新的 LoRA 专家。安装包由 `.github/workflows/desktop-packages.yml` 构建。
+
 ## 局限
 
 专家更新/删除已支持（§14)：同实体改值 → 实体键定位 + 重训替换，删除 = 移除文件；遗留：删除后的"路由空洞"会引起交叉误射，需读取侧实体校验（§14.4,V3 候选）；事实需以问答对形式写入，陈述句→问题的自动转换未做；自答信号存在"瞎猜猜中"的理论风险（250 条中观测到 1 例）；路由是外挂 bge 检索，真 MoE 层内路由（OLMoE 式）是下一步方向，未实现。

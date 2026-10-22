@@ -1,0 +1,96 @@
+name: Desktop packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x64
+            artifact: lora-memory-linux-appimage-deb
+          - os: windows-latest
+            label: windows-x64
+            artifact: lora-memory-windows-nsis
+          - os: macos-15
+            label: macos-arm64
+            artifact: lora-memory-macos-arm64-dmg
+          - os: macos-15-intel
+            label: macos-x64
+            artifact: lora-memory-macos-x64-dmg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean
+          df -h
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          rm -rf "$HOME/Library/Caches/Homebrew" || true
+          xcrun simctl delete unavailable || true
+          df -h /
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build embedded CPython and PyTorch
+        shell: bash
+        run: python packaging/build_runtime.py
+
+      - name: Import check
+        shell: bash
+        run: |
+          if [ -x packaging/runtime/bin/python3 ]; then
+            packaging/runtime/bin/python3 -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
+          else
+            packaging/runtime/python.exe -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
+          fi
+
+      - name: Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools
+
+      - name: Install Electron builder
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: desktop/dist/*.*
+          retention-days: 14
