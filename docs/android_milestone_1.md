@@ -58,6 +58,8 @@ batch_0 的 450 条样本(50 条陈述句 + 每条 8 个 QA)跑了 12 个 epoch�
 
 APK 和 Termux 因此改成 `--batch_size 1 --grad_accum_steps 8`:内存仍按一条样本走,每 8 条才做一次 Adam,一个 epoch 回到 57 次更新。这和打出 48/50 的那次还差两点:梯度是 8 个「单条平均」再平均,不是 8 条放进同一个 batch 后按 token 加权;手机 GEMM 仍是纯 C++。`libtrain-mft.so` 本来就认 `--grad_accum_steps`,这次只改了调用参数。
 
+桌面上按这个调用(OpenBLAS,fp32 基座,4 个 epoch,228 步,6793 秒)再打了一次。四个 epoch 的平均 loss 是 1.375、0.251、0.228、0.181。第 4 个 epoch 的权重用训练器自己的贪心解码,基座仍是这份 fp32,**49/50**。未中的一条是 b0-044,标准答案菲希菲克-894,生成菲希塔希-894。同一份权重量化成 f16 GGUF,挂在本地 f16 基座上再用 `verify_memory_gguf.py` 打,也是 **49/50**,还是 b0-044,生成菲希塔-894。前三步 loss 是 5.06、4.58、2.96,真 batch 8 是 5.16、4.75、3.14。峰值 RSS 3.95 GB,稳态 2.62 GB。手机上的纯 C++ GEMM 还没把这 228 步重跑一遍。
+
 把第 4 个 epoch 的适配器强制挂在 20 条常识题上是 10/20,基座单独是 17/20。路由不会这么挂:这 20 句里没有 batch_0 的实体,和 50 条陈述句的 bge 余弦最高 0.429,低于 τ=0.6。对话走基座,常识题维持基座那一档。
 
 陈述句在仓库里是整句 loss,QA 只在答案上。QVAC 一次运行只能开一种 assistant-only,`prepare_train_jsonl.py` 把陈述句包成「请记下这句话。」,让两类样本进同一次训练。这和 `FactDataset` 不是同一条 loss,差在这里。
@@ -112,7 +114,7 @@ System image must match the host architecture.
 
 ## 阻塞
 
-1. **QVAC 的梯度是错的,已经换掉。** MobileFineTuner 在桌面用 batch 8 把 batch_0 训到第 4 个 epoch 是 **48/50**(fp32 贪心和 f16 GGUF 都是这个数,错的是同两题)。batch 1、不累加,第 1 个 epoch 是 **0/50**。调用已改成累加 8 步。跑满 12 个 epoch 会掉到 22/50。常识题不挂这个适配器:实体对不上,余弦最高 0.429。
+1. **QVAC 的梯度是错的,已经换掉。** MobileFineTuner batch 8 第 4 个 epoch 是 **48/50**。APK 现在的调用是微批 1、累加 8。桌面上这套更新跑完 4 个 epoch,fp32 贪心和 f16 GGUF 都是 **49/50**(未中 b0-044)。不累加的 batch 1 第 1 个 epoch 是 **0/50**。跑满 12 个 epoch 会掉到 22/50。常识题不挂这个适配器:实体对不上,余弦最高 0.429。
 2. **bge 的大写拉丁字母,桌面嵌入器修了,APK 里的还没有。** 桌面那次 12 条余弦最低 0.999998。APK 的 `libllama.so` 仍是 zip 里的小写 WPM。路由对照 11687/11687 用的是修之前的问句向量加 PyTorch 键,当时没有改判。没有改走 ONNX。
 3. **手机命令行和桌面不是同一次构建。** 训练两边都是 MobileFineTuner `086b1a027fe708d5eaca89b1ec2bf1a876fb80de` 加 `mft-ffn-lora.patch`。桌面打分链 OpenBLAS、batch 8;APK 是 NDK 27、`USE_BLAS=OFF`、batch 1。对话和嵌入:桌面 QVAC `b73e75af5` 加本地大小写补丁;手机 zip 短提交 `29fe08c`,完整哈希对不上 ggml-org/llama.cpp 或 qvac 的公开提交。`--val-split` 在桌面 b7349 上会被拒绝,手机训练已经不走那条命令。
 4. **界面还不是 PR #4 那套深空。** APK 是 Material3 三个文字页:对话、整理、专家。能聊天、把勾选的对话收成一条事实、后台训练、状态行里看到 loss、取消、删专家。没有银河背景、衬线字、星云、中英切换,也不能在对话里改一条事实再重训。桌面客户端在 PR #4(`cursor/desktop-client-dae6`)。
