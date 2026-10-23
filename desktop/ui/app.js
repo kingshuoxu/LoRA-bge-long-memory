@@ -89,7 +89,10 @@ async function refreshHealth() {
   }
   const device = health.device === "cpu" ? "CPU" : health.device === "cuda" ? "CUDA" : health.device === "mps" ? "MPS" : health.device;
   $("device-label").textContent = t("device.line", { device });
-  if (health.job) state.job = health.job;
+  if (health.job) {
+    const previewing = state.preview && (state.preview.status === "running" || state.preview.status === "done");
+    if (!(previewing && health.job.status !== "running")) state.job = health.job;
+  }
   renderJobBar();
   if (state.view === "consolidate") renderStages();
   return health;
@@ -98,7 +101,8 @@ async function refreshHealth() {
 function renderJobBar() {
   const bar = $("jobbar");
   const job = state.job;
-  if (!job) {
+  const previewing = state.preview && (state.preview.status === "running" || state.preview.status === "done");
+  if (!job || (previewing && job.status !== "running")) {
     bar.hidden = true;
     return;
   }
@@ -125,9 +129,10 @@ function syncSky() {
 }
 
 function activeTrace() {
-  if (state.preview && state.preview.status === "running") return state.preview;
-  if (state.job && (state.job.stages || state.job.events)) return state.job;
+  const jobRunning = state.job && state.job.status === "running";
+  if (jobRunning) return state.job;
   if (state.preview) return state.preview;
+  if (state.job && (state.job.stages || state.job.events)) return state.job;
   return null;
 }
 
@@ -163,10 +168,7 @@ function renderStages() {
     const on = stateName === "done" || stateName === "active";
     const r = stateName === "active" ? 7 : on ? 5.2 : 3.6;
     const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.45)";
-    const linesOf = labelLines(stageTitle(point.stage));
-    const detailText = point.stage.state === "active" ? tx(point.stage.detail || "") : "";
-    const detailLines = detailText ? labelLines(detailText).slice(0, 2) : [];
-    const text = linesOf.concat(detailLines).map((line, lineIndex) => `<tspan x="${point.x.toFixed(1)}" dy="${lineIndex === 0 ? 0 : 16}">${esc(line)}</tspan>`).join("");
+    const text = `<tspan x="${point.x.toFixed(1)}">${esc(stageTitle(point.stage))}</tspan>`;
     return `<g>
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 10}" fill="${fill}" opacity="${on ? 0.18 : 0.05}" />
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
@@ -182,22 +184,6 @@ function renderStages() {
   syncSky();
 }
 
-function labelLines(text) {
-  const value = String(text || "");
-  if (!value.includes(" ") || value.length <= 12) return [value];
-  const words = value.split(" ");
-  let split = 1;
-  let best = Infinity;
-  for (let index = 1; index < words.length; index += 1) {
-    const score = Math.max(words.slice(0, index).join(" ").length, words.slice(index).join(" ").length);
-    if (score < best) {
-      best = score;
-      split = index;
-    }
-  }
-  return [words.slice(0, split).join(" "), words.slice(split).join(" ")];
-}
-
 function stageTitle(stage) {
   const key = `stage.${stage && stage.id}`;
   const label = t(key);
@@ -208,7 +194,7 @@ function stageTitle(stage) {
 function renderFeed(trace) {
   const events = (trace && trace.events) || [];
   const recall = (trace && trace.recall) || [];
-  const shown = events.filter((event) => event.stage !== "train").slice(-24);
+  const shown = events.slice(-24);
   if (trace && trace.error) {
     $("stage-feed").innerHTML = `<article class="event"><strong>${esc(t("feed.failed"))}</strong><div class="muted">${esc(tx(trace.error))}</div></article>`;
     return;
@@ -227,6 +213,7 @@ function renderFeed(trace) {
       const skipped = String(event.gate || "").startsWith("skip_");
       return `<article class="event"><strong>${esc(event.statement || "")}</strong><div class="badge ${skipped ? "" : "write"}">${esc(skipped ? t("feed.skip") : t("feed.write"))} · ${esc(tx(event.gate_reason || event.gate || ""))}</div></article>`;
     }
+    if (event.stage === "train") return `<article class="event"><strong>${esc(t("feed.epoch", { n: event.epoch }))}</strong><div class="muted">${esc(t("feed.lossLine", { loss: event.loss, seconds: event.seconds }))}</div></article>`;
     if (event.stage === "build") return `<article class="event"><strong>${esc(t("feed.samples"))}</strong><div class="muted">${esc(t("feed.sampleLine", { facts: event.facts, rows: event.rows }))}</div></article>`;
     if (event.stage === "recall") return `<article class="event"><strong>${esc(t("feed.recall"))}</strong><div class="muted">${esc(t("feed.recallLine", { hits: event.hits, total: event.total }))}</div></article>`;
     if (event.stage === "register") return `<article class="event"><strong>${esc(t("feed.registered", { name: event.expert || "" }))}</strong><div class="muted">${esc(t("feed.keys", { n: event.keys }))}</div></article>`;
@@ -577,7 +564,7 @@ async function loadMemory() {
   }
   root.innerHTML = data.experts.map((expert) => {
     const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.statement || fact.question || "")}</li>`).join("");
-    const sources = (expert.sources || []).map((src) => esc(src.title || src.id)).join(t("list.sep")) || t("fact.noSource");
+    const sources = (expert.sources || []).map((src) => src.title || src.id).join(t("list.sep")) || t("fact.noSource");
     return `<article class="card">
       <h3>${esc(expert.display_name || expert.name)}</h3>
       <div class="muted">${esc(expert.name)} · ${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
@@ -797,6 +784,8 @@ $("consolidate").onclick = async () => {
   state.sourceIds = ids;
   state.facts = [];
   state.job = null;
+  state.preview = { status: "running", stages: [], events: [], loss_curve: [], facts: [] };
+  state.previewId = "";
   await openConsolidate();
   $("stage-feed").innerHTML = `<div class="empty">${esc(t("empty.reading"))}</div>`;
   try {

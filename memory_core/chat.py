@@ -65,7 +65,7 @@ class ChatEngine:
             self._loaded.add(expert.name)
         self.model.eval()
 
-    def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 80) -> str:
+    def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 80, hint: str = "") -> str:
         self.ensure()
         trimmed = history[-12:]
         last_user = ""
@@ -74,6 +74,8 @@ class ChatEngine:
                 last_user = message["content"]
                 break
         messages = [{"role": "system", "content": system_for(last_user)}]
+        if hint:
+            messages.append({"role": "system", "content": hint})
         for index, message in enumerate(trimmed):
             content = message["content"]
             if index == len(trimmed) - 1 and message["role"] == "user":

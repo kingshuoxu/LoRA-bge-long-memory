@@ -26,7 +26,8 @@
       "action.preview": "预览纠正",
       "action.retrain": "确认并重新训练",
       "action.delete": "删除这条记忆",
-      "composer.placeholder": "输入消息。若要改一条已经记住的事实，直接说出新的取值。Enter 发送，Shift+Enter 换行",
+      "composer.placeholder": "发消息…",
+      "composer.hint": "若要改一条已经记住的事实，直接说出新的取值",
       "title.new": "新对话",
       "title.memory": "记忆库",
       "title.consolidate": "巩固",
@@ -74,6 +75,8 @@
       "feed.hit": "答对",
       "feed.miss": "未答对",
       "feed.expect": "期望 {gold} · 回答 {answer}",
+      "feed.epoch": "第 {n} 轮",
+      "feed.lossLine": "损失 {loss} · {seconds} 秒",
       "loss.title": "训练损失",
       "loss.line": "第 {epoch} 轮 · loss {loss} · 这一轮 {seconds}s {eta}",
       "loss.curve": "损失曲线",
@@ -155,7 +158,8 @@
       "action.preview": "Preview correction",
       "action.retrain": "Confirm and retrain",
       "action.delete": "Delete this memory",
-      "composer.placeholder": "Write a message. To correct a remembered fact, say the new value. Enter sends, Shift+Enter adds a line.",
+      "composer.placeholder": "Message…",
+      "composer.hint": "To correct a remembered fact, say the new value",
       "title.new": "New chat",
       "title.memory": "Memory",
       "title.consolidate": "Consolidate",
@@ -177,13 +181,13 @@
       "empty.snippets": "No source excerpt was kept.",
       "empty.factText": "No fact text to show",
       "pick.conversation": "Select {title}",
-      "stage.select": "Choose conversations",
-      "stage.extract": "Extract facts",
-      "stage.gate": "Write gate",
-      "stage.build": "Build samples",
-      "stage.train": "Train LoRA",
-      "stage.recall": "Recall check",
-      "stage.register": "Register expert",
+      "stage.select": "Choose",
+      "stage.extract": "Extract",
+      "stage.gate": "Gate",
+      "stage.build": "Samples",
+      "stage.train": "Train",
+      "stage.recall": "Recall",
+      "stage.register": "Register",
       "stage.done": "Done",
       "stage.pending": "Select conversations to begin",
       "stage.constellation": "Consolidation constellation",
@@ -203,6 +207,8 @@
       "feed.hit": "Correct",
       "feed.miss": "Missed",
       "feed.expect": "Expected {gold} · answered {answer}",
+      "feed.epoch": "Epoch {n}",
+      "feed.lossLine": "loss {loss} · {seconds}s",
       "loss.title": "Training loss",
       "loss.line": "Epoch {epoch} · loss {loss} · this epoch {seconds}s {eta}",
       "loss.curve": "Loss curve",
@@ -436,6 +442,9 @@
     });
     scope.querySelectorAll("[data-i18n-aria]").forEach((el) => {
       el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria")));
+    });
+    scope.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      el.setAttribute("title", t(el.getAttribute("data-i18n-title")));
     });
     document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
     document.title = t("app.name");

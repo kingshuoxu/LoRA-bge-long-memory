@@ -219,7 +219,7 @@ def _explicit_decision(
         from memory_core.paraphrase import polar_question
 
         alt = polar_question(text)
-        if alt:
+        if alt and alt != text:
             alt_info = bank.explain(alt, tau, metas)
             if alt_info.get("matched"):
                 alt_info = dict(alt_info)
@@ -233,9 +233,15 @@ def _explicit_decision(
         from memory_core.paraphrase import confirm_stored_answer
 
         info = confirm_stored_answer(text, info, model, tok, device)
+    from memory_core.paraphrase import adjudicate
+
+    info = adjudicate(text, info)
     gate_view["matched"] = bool(info["matched"])
     gate_view["facts"] = info["facts"]
-    if info.get("confirmed_answer") or info.get("polar_of") or info.get("rescued_from"):
+    if info.get("rejected_attribute"):
+        gate_view["rejected_attribute"] = True
+    # 属性已经对上才把记住的取值交回去。问错属性的命中在上面被撤掉。
+    if info.get("matched"):
         gate_view["answer_from_fact"] = True
     if info["matched"]:
         return RouteDecision(

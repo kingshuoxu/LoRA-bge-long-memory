@@ -157,6 +157,25 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
     print(f"home={home}", flush=True)
     print(f"models={models}", flush=True)
     service.ensure_ready()
+    from memory_core.persona_suite import (
+        HELD,
+        assert_corrections,
+        assert_held_out,
+        format_report,
+        score_corrections,
+        score_split,
+    )
+
+    held = score_split(HELD)
+    print(format_report("PERSONA_HELD", held), flush=True)
+    assert_held_out(held)
+    service.chat.ensure()
+    corrections = score_corrections(HELD, service.chat.model, service.chat.tok, service.chat.device)
+    print(
+        f"PERSONA_CORRECTION {corrections['hits']}/{corrections['total']} false {len(corrections['false'])}",
+        flush=True,
+    )
+    assert_corrections(corrections)
     sizes = model_sizes(models)
     conv = service.create_conversation()
     base_turns = []

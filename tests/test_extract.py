@@ -67,6 +67,17 @@ class ExtractTests(unittest.TestCase):
             self.assertTrue(all(item["a"] == fact["value"] for item in trained["qa"]))
             self.assertTrue(any(item["q"].startswith("What") or item["q"].startswith("Where") for item in trained["qa"]))
 
+    def test_property_stays_on_the_attribute(self):
+        bike = pattern_extract("林晚舟的自行车是朱红色的")[0]
+        self.assertEqual(bike["attr"], "自行车颜色")
+        self.assertEqual(bike["value"], "朱红色的")
+        dog = pattern_extract("林晚舟的狗叫豆包")[0]
+        self.assertEqual(dog["attr"], "狗的名字")
+        self.assertEqual(dog["value"], "豆包")
+        car = pattern_extract("Marcus Whitfield's car is blue.")[0]
+        self.assertEqual(car["attr"], "car color")
+        self.assertEqual(car["value"], "blue")
+
     def test_named_and_called_keep_the_name_attribute(self):
         named = pattern_extract("Elena Brooks's dog is named Juniper.")
         self.assertEqual(named[0]["attr"], "dog's name")

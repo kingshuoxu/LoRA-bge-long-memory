@@ -21,11 +21,10 @@ CALIBRATED_TAU = 0.622
 # 问句和某条已存问法几乎重合时，属性短词不能再否决。
 # 0.91 卡在英文「狗的名字」改写 0.926 和「别人的狗」0.891 之间。
 NEAR_TAU = 0.91
-# 中文属性阈值卡在误挂的咖啡 0.676、狗 0.632 和真改写「住哪儿」0.698 之间。
-ATTR_TAU_ZH = 0.685
-# 英文属性阈值卡在「别人的猫/狗」0.767–0.784 之上。大小写折成同一句后，
-# 训练问句走 NEAR_TAU，不再靠这条线。
-ATTR_TAU_EN = 0.80
+# 属性线在 persona_suite 的调参分片上选定。串属性不再靠抬高这条线，
+# 而由问句里的性质和事物名挡掉。训练问句几乎重合时仍走 NEAR_TAU。
+ATTR_TAU_ZH = 0.45
+ATTR_TAU_EN = 0.45
 MASK = "某"
 VALUE_MASK = "某值"
 
@@ -234,13 +233,16 @@ class FactBank:
                 "passed": passed,
             })
         facts.sort(key=lambda item: item["question_sim"], reverse=True)
-        return {
+        info = {
             "matched": ok,
             "best_question_sim": own,
             "matched_attr": self.attrs[best] if ok else "",
             "other_question_sim": other,
             "facts": facts,
         }
+        from memory_core.paraphrase import adjudicate
+
+        return adjudicate(query, info)
 
     def allows(self, query: str, tau: float = CALIBRATED_TAU) -> tuple[bool, float, str]:
         """问句是否对得上某一条已存事实。

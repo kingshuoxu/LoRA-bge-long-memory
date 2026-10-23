@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -44,12 +45,44 @@ class ServiceError(RuntimeError):
     pass
 
 
+def _short_summary(text: str) -> str:
+    """问句收成「谁的什么」，不再从问句中间截断。"""
+    if has_cjk(text):
+        matched = re.search(r"([\u4e00-\u9fff]{2,8})的([\u4e00-\u9fff]{1,8})", text)
+        if matched and any(mark in text for mark in ("什么", "吗", "哪", "谁", "？", "?", "是")):
+            return f"{matched.group(1)}的{matched.group(2)}"
+        return ""
+    colour = re.search(
+        r"what colou?r is ([A-Za-z][\w'.-]*)(?:\s+[A-Za-z][\w'.-]*)?'s\s+([A-Za-z][\w'-]*)",
+        text,
+        re.IGNORECASE,
+    )
+    if colour:
+        return f"{colour.group(1)}'s {colour.group(2)} colour"
+    what = re.search(
+        r"what(?:'s| is) ([A-Za-z][\w'.-]*)(?:\s+[A-Za-z][\w'.-]*)?'s\s+(.+?)\??$",
+        text,
+        re.IGNORECASE,
+    )
+    if what:
+        rest = what.group(2).strip(" ?.")
+        if rest:
+            return f"{what.group(1)}'s {rest}"
+    where = re.search(r"where does ([A-Za-z][\w'.-]*)", text, re.IGNORECASE)
+    if where:
+        return f"Where {where.group(1)} lives"
+    return ""
+
+
 def _conversation_title(content: str) -> str:
-    """中文按字数截断。英文只在词边界截断，不把单词切成两半。"""
+    """优先用一句短摘要。兜底时英文只在词边界截断。"""
     text = " ".join(content.split())
     if not text:
         return text
-    limit = 16 if has_cjk(text) else 32
+    summary = _short_summary(text)
+    if summary:
+        return summary
+    limit = 18 if has_cjk(text) else 42
     if len(text) <= limit:
         return text
     space = text.rfind(" ", 0, limit + 1)
@@ -66,6 +99,64 @@ def _conversation_title(content: str) -> str:
         if 0 < latin < len(cut):
             return cut[:latin].rstrip()
     return cut
+
+
+def _clip_text(text: str, limit: int = 42) -> str:
+    """引用基座回答时在词边界停下，不把单词切成两半。"""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    if not has_cjk(text):
+        space = text.rfind(" ", 0, limit + 1)
+        if space >= 8:
+            return text[:space] + "…"
+    cut = text[:limit]
+    if cut and cut[-1].isascii() and cut[-1].isalnum():
+        while cut and cut[-1].isascii() and (cut[-1].isalnum() or cut[-1] in "'-"):
+            cut = cut[:-1]
+        cut = cut.rstrip()
+    return (cut or text[:limit].rstrip()) + "…"
+
+
+def _known_entities(content: str, experts: list[Any]) -> list[str]:
+    from memory_core.fact_span import entity_mentioned
+
+    found: list[str] = []
+    for expert in experts:
+        memory = getattr(expert, "fact_memory", None) or {}
+        facts = memory.get("facts") if isinstance(memory, dict) else None
+        names = [str(fact.get("entity") or "") for fact in facts or []]
+        names.extend(str(name) for name in (getattr(expert, "entities", None) or []))
+        for name in names:
+            if name and entity_mentioned(name, content) and name not in found:
+                found.append(name)
+    return found
+
+
+def _personal_question(content: str, entity: str) -> bool:
+    if not entity or entity not in content and entity.casefold() not in content.casefold():
+        return False
+    if has_cjk(content):
+        return any(mark in content for mark in ("的", "住", "叫", "养", "吗"))
+    if re.search(re.escape(entity) + r"(?:'s|’s)", content, re.IGNORECASE):
+        return True
+    return bool(re.search(r"\b(name|named|called|live|lives|colour|color)\b", content, re.IGNORECASE))
+
+
+def _unknown_memory_answer(content: str, entities: list[str]) -> str:
+    name = entities[0]
+    topic = ""
+    if has_cjk(content):
+        matched = re.search(re.escape(name) + r"的([\u4e00-\u9fff]{1,12})", content)
+        if matched:
+            topic = re.split(r"是|叫|吗|呢|什么|哪", matched.group(1))[0]
+        subject = f"{name}的{topic}" if topic else name
+        return f"没有存过关于{subject}的记忆，不知道。"
+    matched = re.search(re.escape(name) + r"'s ([A-Za-z][\w' -]{0,40})", content, re.IGNORECASE)
+    if matched:
+        topic = matched.group(1).strip(" ?.")
+    subject = f"{name}'s {topic}" if topic else name
+    return f"No stored memory about {subject}, so I don't know."
 
 
 def _stage_skeleton() -> list[dict[str, Any]]:
@@ -377,6 +468,7 @@ class MemoryService:
             )
             self.chat.sync_adapters(experts)
             fact_answer = None
+            hint = ""
             gate_info = recall.get("fact_gate") or {}
             if decision.fired and gate_info.get("answer_from_fact"):
                 from memory_core.paraphrase import polar_reply_from_fact
@@ -384,6 +476,10 @@ class MemoryService:
                 matched = [fact for fact in (recall.get("matched_facts") or []) if isinstance(fact, dict)]
                 if matched:
                     fact_answer = polar_reply_from_fact(content, matched[0]) or str(matched[0].get("value") or "")
+            elif not decision.fired:
+                known = _known_entities(content, experts)
+                if known and (gate_info.get("rejected_attribute") or _personal_question(content, known[0])):
+                    fact_answer = _unknown_memory_answer(content, known)
             if decision.fired:
                 record = next((item for item in experts if item.name == decision.expert), None)
                 if record is None or not weights_ready(record.directory):
@@ -403,7 +499,7 @@ class MemoryService:
                         row["chosen"] = False
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
-            answer = fact_answer if fact_answer else self.chat.reply(prior, decision)
+            answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
             extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
             assistant = self.convos.add_message(
                 conv_id,
@@ -568,7 +664,7 @@ class MemoryService:
                     if gated.get("gate") == "write" and not gated.get("gate_reason"):
                         base = str(gated.get("base_answer") or "")
                         gated["gate_reason"] = (
-                            f"基座答成「{base[:24]}」，和已有记忆也不重复"
+                            f"基座答成「{_clip_text(base)}」，和已有记忆也不重复"
                             if base
                             else "和已有记忆不重复"
                         )

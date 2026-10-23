@@ -190,8 +190,95 @@ def utterance_is_question(text: str) -> bool:
     return False
 
 
+def _attr_tokens(text: str) -> set[str]:
+    if has_cjk(text):
+        from memory_core.paraphrase import _object_heads
+
+        heads = _object_heads(text)
+        return set(heads) if heads else ({text} if text else set())
+    return {
+        word.casefold()
+        for word in re.findall(r"[A-Za-z0-9]+", text)
+        if word.casefold() not in {"the", "a", "an", "of", "where", "they"}
+    }
+
+
+def _attrs_compatible(proposed: str, stored: str) -> bool:
+    """「dog」和「dog's name」是同一条事实。靠属性词的包含关系，不靠说法表。"""
+    if not proposed or not stored:
+        return False
+    if proposed.casefold() == stored.casefold():
+        return True
+    proposed_tokens = _attr_tokens(proposed)
+    stored_tokens = _attr_tokens(stored)
+    if proposed_tokens and proposed_tokens <= stored_tokens:
+        return True
+    from memory_core.paraphrase import _residence_paraphrase
+
+    if _residence_paraphrase(proposed, stored):
+        return True
+    return False
+
+
+def _semantic_attribute(proposed: str, facts: list[dict], text: str) -> str:
+    """在已存属性里找和这句话同一个事物的那条。"""
+    from memory_core.paraphrase import _heads_in, _object_heads
+
+    stored = [str(fact.get("attr") or "") for fact in facts if fact.get("attr")]
+    if proposed in stored:
+        return proposed
+    compatible = [attr for attr in stored if _attrs_compatible(proposed, attr)]
+    headed = [attr for attr in compatible if _heads_in(text, _object_heads(attr))]
+    if len(headed) == 1:
+        return headed[0]
+    if len(compatible) == 1:
+        return compatible[0]
+    if not proposed or not stored:
+        return proposed
+    from memory_core.paths import ensure_scripts_path
+
+    ensure_scripts_path()
+    from router import embed
+
+    vectors = embed([proposed] + stored)
+    scores = [float(vectors[0] @ vectors[index + 1]) for index in range(len(stored))]
+    order = sorted(range(len(scores)), key=lambda index: scores[index], reverse=True)
+    best = scores[order[0]]
+    second = scores[order[1]] if len(order) > 1 else -1.0
+    if best >= 0.55 and best >= second + 0.03:
+        choice = stored[order[0]]
+        others = [attr for attr in stored if attr != choice and _heads_in(text, _object_heads(attr))]
+        if _heads_in(text, _object_heads(choice)) or not others:
+            return choice
+    return headed[0] if headed else proposed
+
+
+def _asserted_value(text: str, value: str) -> str:
+    """「not Pepper」后面的词是被否定的旧值。模型若抄了它，改用句子里断言的那个。"""
+    if not value:
+        return value
+    if has_cjk(text):
+        rejected = re.search(r"不是([\u4e00-\u9fff0-9A-Za-z]+)", text)
+        if not rejected or value not in rejected.group(1):
+            return value
+        stated = re.search(r"是([\u4e00-\u9fff0-9A-Za-z]+)", text[rejected.end():])
+        if stated and stated.group(1) != value:
+            return stated.group(1)
+        return value
+    rejected = re.search(r"\bnot\s+([A-Za-z][\w'-]*)", text, re.IGNORECASE)
+    if not rejected or rejected.group(1).casefold() != value.casefold():
+        return value
+    stated = re.search(r"\bit is\s+([A-Za-z][\w'-]*)", text, re.IGNORECASE)
+    if stated and stated.group(1).casefold() != value.casefold():
+        return stated.group(1)
+    lead = re.match(r"^([A-Za-z][\w'-]*)\s+is\b", text)
+    if lead and lead.group(1).casefold() != value.casefold():
+        return lead.group(1)
+    return value
+
+
 def _align_attribute(text: str, attribute: str) -> str:
-    """纠正要指向抽取时写下的那条属性，事实闸才认得出是同一件事。"""
+    """纠正要指向抽取时写下的那条属性。具体和哪条事实对齐在事实闸里做。"""
     if has_cjk(text):
         return attribute
     if re.search(r"\blives in\b", text, re.IGNORECASE):
@@ -229,7 +316,11 @@ def classify_correction(text: str, model, tok, device) -> dict | None:
             "Example message: Is Ada Liu's dog called Pepper?\n"
             '{"is_question": true, "correction": false, "entity": "Ada Liu", "attribute": "dog", "new_value": ""}\n'
             "Example message: Ada Liu lives in Boston, isn't she?\n"
-            '{"is_question": true, "correction": false, "entity": "Ada Liu", "attribute": "where they live", "new_value": ""}\n\n'
+            '{"is_question": true, "correction": false, "entity": "Ada Liu", "attribute": "where they live", "new_value": ""}\n'
+            "Example message: Marcus Whitfield's dog is not Biscuit, it is Waffles.\n"
+            '{"is_question": false, "correction": true, "entity": "Marcus Whitfield", "attribute": "dog", "new_value": "Waffles"}\n'
+            "Example message: The name of Ada Liu's dog is Maple, not Birch.\n"
+            '{"is_question": false, "correction": true, "entity": "Ada Liu", "attribute": "dog", "new_value": "Maple"}\n\n'
             f"Message:\n{text}\n"
         )
     else:
@@ -260,13 +351,15 @@ def classify_correction(text: str, model, tok, device) -> dict | None:
     data = _parse_json(raw)
     if not data:
         return None
-    if _as_bool(data.get("is_question")) or utterance_is_question(text):
-        return None
     if "is_question" not in data:
+        return None
+    # 问句已经在函数开头丢掉。小模型会把「X is Y, not Z」误标成 is_question，
+    # 这里不再因此丢掉一句结构上不是问句的陈述。
+    if utterance_is_question(text):
         return None
     entity = str(data.get("entity") or "").strip()
     attribute = _align_attribute(text, str(data.get("attribute") or data.get("attr") or "").strip())
-    new_value = str(data.get("new_value") or data.get("value") or "").strip()
+    new_value = _asserted_value(text, str(data.get("new_value") or data.get("value") or "").strip())
     surface = _surface_value(text, new_value)
     if not surface or not _plausible_value(surface, entity):
         return None
@@ -312,23 +405,37 @@ def _gate_match(text: str, rows: list[tuple[Any, int, dict]], entity: str, attri
     bank = build_fact_bank(facts)
     if bank is None:
         return None
+    aligned = _semantic_attribute(attribute, facts, text)
     info = bank.explain(text)
     if not info.get("matched"):
-        if not (entity and attribute):
+        probes = []
+        for candidate in (aligned, attribute):
+            if candidate and candidate not in probes:
+                probes.append(candidate)
+        matched_info = None
+        for candidate in probes:
+            if has_cjk(f"{entity}{candidate}{text}"):
+                trial = bank.explain(f"{entity}的{candidate}是什么？")
+                if not trial.get("matched") and candidate.endswith("的名字"):
+                    head = candidate[: -len("的名字")]
+                    trial = bank.explain(f"{entity}的{head}叫什么？")
+            else:
+                trial = bank.explain(f"What is {entity}'s {candidate}?")
+                if not trial.get("matched") and not candidate.casefold().endswith("name"):
+                    trial = bank.explain(f"What is {entity}'s {candidate}'s name?")
+            if trial.get("matched"):
+                matched_info = trial
+                break
+        if matched_info is None:
             return None
-        if has_cjk(f"{entity}{attribute}{text}"):
-            info = bank.explain(f"{entity}的{attribute}是什么？")
-        else:
-            info = bank.explain(f"What is {entity}'s {attribute}?")
-        if not info.get("matched"):
-            return None
+        info = matched_info
     score = float(info.get("best_question_sim") or 0)
     attr = str(info.get("matched_attr") or "")
     direct = bank.explain(text)
     for record, index, fact in rows:
         fact_attr = str(fact.get("attr") or "")
         fact_entity = str(fact.get("entity") or "")
-        if attr and fact_attr != attr:
+        if attr and fact_attr != attr and not _attrs_compatible(aligned, fact_attr):
             continue
         if entity and _same_entity(fact_entity, entity):
             return record, index, fact, score

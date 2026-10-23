@@ -428,7 +428,7 @@ textarea, input[type="text"], .fact input, .fact textarea {
   flex: 0 0 auto;
 }
 .constellation { width: 100%; height: 280px; display: block; }
-.constellation text { fill: var(--muted); font-size: 13px; letter-spacing: 0.03em; }
+.constellation text { fill: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
 .constellation .star-label { fill: var(--ink); }
 .constellation .on { fill: var(--gold); }
 .stage-panel {
@@ -443,6 +443,9 @@ textarea, input[type="text"], .fact input, .fact textarea {
   gap: 22px;
 }
 .stage-panel:has(#loss-card[hidden]) { grid-template-columns: 1fr; }
+.stage-panel:has(#fact-editor:not([hidden])) { grid-template-columns: 1fr; }
+.stage-panel:has(#fact-editor:not([hidden])) #loss-card { display: none !important; }
+#fact-editor { grid-column: 1 / -1; min-height: 0; overflow: auto; }
 .stage-feed { display: flex; flex-direction: column; gap: 10px; overflow: auto; min-height: 0; padding-right: 4px; }
 .event {
   padding: 14px 16px;

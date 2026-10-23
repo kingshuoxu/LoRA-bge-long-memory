@@ -130,6 +130,11 @@ class CorrectionTests(unittest.TestCase):
             "Where does Mira Chen live?": None,
             "What is Elena Brooks's dog's name?": None,
             "Elena Brooks's dog's name is not Pepper, it is Juniper.": "Juniper",
+            "Elena Brooks's dog is not Pepper, it is Juniper.": "Juniper",
+            "Elena Brooks's dog isn't Pepper. The dog is Juniper.": "Juniper",
+            "The name of Elena Brooks's dog is Juniper, not Pepper.": "Juniper",
+            "Elena Brooks has a dog named Juniper, not Pepper.": "Juniper",
+            "Juniper is Elena Brooks's dog, not Pepper.": "Juniper",
             "Is Elena Brooks's dog called Pepper?": None,
             "Elena Brooks lives in Boston, isn't she?": None,
             "Mira Chen's cat's name is Snow, right?": None,
@@ -163,6 +168,16 @@ class CorrectionTests(unittest.TestCase):
             got = propose_from_records(text, [record])
             value = None if got is None else got["new_value"]
             self.assertEqual(value, gold, text)
+
+    def test_held_out_correction_phrasings(self):
+        from memory_core.correct import _default_llm
+        from memory_core.persona_suite import HELD, assert_corrections, score_corrections
+
+        model, tok, device = _default_llm()
+        report = score_corrections(HELD, model, tok, device)
+        self.assertGreaterEqual(report["hits"] / report["total"], 0.90)
+        self.assertEqual(report["false"], [])
+        assert_corrections(report)
 
     def test_reissue_updates_every_question(self):
         from memory_core.correct import reissue_training_fact
