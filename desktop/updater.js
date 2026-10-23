@@ -358,7 +358,41 @@ async function runUpgradeSmoke() {
     }
     if (result.downloadPromise) await result.downloadPromise;
     console.log("UPGRADE_SMOKE downloaded", result.updateInfo.version);
-    autoUpdater.quitAndInstall(true, false);
+    // 正式安装走 quitAndInstall(false, true)，会换掉 AppImage 再拉起新进程。
+    // 验收机器上新进程没有 --no-sandbox 起不来，所以只在这一步加上启动参数。
+    // quitAndInstall 会吞掉 doInstall 的异常，所以用 smokeInstallError 把失败带出来。
+    let smokeInstallError = null;
+    const original = autoUpdater.constructor.prototype.doInstall;
+    autoUpdater.constructor.prototype.doInstall = function smokeInstall(options) {
+      try {
+        if (!options.isForceRunAfter) return original.call(this, options);
+        const { execFileSync, spawnSync } = require("child_process");
+        const appImageFile = process.env.APPIMAGE;
+        const installerPath = this.installerPath;
+        if (!appImageFile || !installerPath) {
+          throw new Error("APPIMAGE 或更新包不在");
+        }
+        fs.unlinkSync(appImageFile);
+        const base = path.basename(appImageFile);
+        const destination = /\d+\.\d+\.\d+/.test(base)
+          ? path.join(path.dirname(appImageFile), path.basename(installerPath))
+          : appImageFile;
+        execFileSync("mv", ["-f", installerPath, destination]);
+        const child = spawnSync(destination, ["--no-sandbox", "--disable-gpu"], {
+          env: { ...process.env, APPIMAGE_SILENT_INSTALL: "true" },
+          stdio: "inherit",
+        });
+        if (child.status !== 0) {
+          throw new Error(`升级后的进程退出 ${child.status}`);
+        }
+        return true;
+      } catch (err) {
+        smokeInstallError = err;
+        throw err;
+      }
+    };
+    autoUpdater.quitAndInstall(false, true);
+    if (smokeInstallError) throw smokeInstallError;
     app.exit(0);
   } catch (err) {
     console.error("UPGRADE_SMOKE", err);

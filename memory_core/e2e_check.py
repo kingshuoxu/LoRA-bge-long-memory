@@ -1,7 +1,7 @@
 """端到端验收：写入几条虚构事实，巩固成专家，再在新对话里提问。
 
 退出码 0 表示：事实题全部答对且挂上了新专家；没出现在训练问句里的改写至少 90% 答对；
-同一人没写过的属性至少 90% 回基座；常识题和 CMMLU 风格题没有挂上它。
+同一人没写过的属性至少 90% 不让这个专家直接作答（列出已存事实并说明不在记忆里也算）；常识题和 CMMLU 风格题没有挂上它。
 """
 from __future__ import annotations
 
@@ -136,6 +136,18 @@ def _wait(service: MemoryService, job_id: str, timeout: float = 7200) -> dict:
     raise TimeoutError("训练超时")
 
 
+def abstain_ok(route: dict, answer: str, expert: str) -> bool:
+    """没写过的属性不能让这位专家用 LoRA 直接作答。
+
+    按实体列出已存事实，并写明其余的不在记忆里，不算作答，也不算编造。
+    """
+    if route.get("reason") == "entity_grounded":
+        text = answer or ""
+        named = "不在记忆里" in text or "not in memory" in text.casefold()
+        return bool(named and route.get("expert") == expert)
+    return not (route.get("fired") and route.get("expert") == expert)
+
+
 def _ask(service: MemoryService, conv_id: str, question: str) -> dict:
     result = service.send_message(conv_id, question)
     route = result["route"]
@@ -236,7 +248,7 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         result = _ask(service, fresh["id"], question)
         route = result["route"]
         answer = result["assistant"]["content"]
-        ok = not (route["fired"] and route["expert"] == expert)
+        ok = abstain_ok(route, answer, expert)
         abstain_hits += int(ok)
         abstain_details.append({"q": question, "answer": answer, "abstain": ok, "route": route, "kind": "never"})
     probe = service.create_conversation()

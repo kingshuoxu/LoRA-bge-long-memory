@@ -112,6 +112,14 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
+stamp="$data/upgrade-stamp.json"
+for _ in $(seq 1 30); do
+  if [ -f "$stamp" ]; then
+    break
+  fi
+  sleep 1
+done
+
 cmp "$run_dir/LoRA-bge-memory.AppImage" "$new_app"
 python3 - "$data" "$version" <<'PY'
 import json, pathlib, sys

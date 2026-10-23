@@ -1,6 +1,7 @@
 """开放问句和没写过的属性都不交给基座编。"""
 import unittest
 
+from memory_core.e2e_check import abstain_ok
 from memory_core.extract import pattern_extract
 from memory_core.fact_span import entity_mentioned
 from memory_core.grounding import (
@@ -133,6 +134,24 @@ class GroundingTests(unittest.TestCase):
         self.assertIn("朱红色的", reply)
         self.assertIn("价格不在记忆里", reply)
         self.assertNotIn("自行车不在记忆里", reply)
+
+    def test_grounded_unknown_attribute_counts_as_abstain(self):
+        answer = "关于沈星河，记住的是：猫的名字是云朵。狗不在记忆里。"
+        self.assertTrue(abstain_ok(
+            {"fired": True, "expert": "expert_1000", "reason": "entity_grounded"},
+            answer,
+            "expert_1000",
+        ))
+        self.assertFalse(abstain_ok(
+            {"fired": True, "expert": "expert_1000", "reason": "entity_first"},
+            "云朵",
+            "expert_1000",
+        ))
+        self.assertTrue(abstain_ok(
+            {"fired": False, "expert": "expert_1000", "reason": "fact_gate"},
+            "不知道",
+            "expert_1000",
+        ))
 
 
 if __name__ == "__main__":
