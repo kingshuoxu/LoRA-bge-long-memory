@@ -30,6 +30,9 @@ class ModelFetchTest {
         assertEquals(1200L + 1024 * 1024, total)
         assertEquals(1L, remainingEtaSeconds(4_500_000, 4_500_000))
         assertTrue(formatEta(90L * 4_500_000, 4_500_000, "zh").contains("分"))
+        assertEquals("不到 1 秒", formatEta(800, 4_500_000, "zh"))
+        assertEquals("ETA under 1s", formatEta(800, 4_500_000, "en"))
+        assertFalse(formatEta(800, 4_500_000, "zh").contains("0 秒"))
     }
 
     @Test

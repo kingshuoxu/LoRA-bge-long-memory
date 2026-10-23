@@ -24,6 +24,7 @@ fun remainingEtaSeconds(remainingBytes: Long, speedBps: Long): Long {
 fun formatEta(remainingBytes: Long, speedBps: Long, lang: String): String {
     val seconds = remainingEtaSeconds(remainingBytes, speedBps)
     if (seconds < 0) return if (lang == "en") "ETA —" else "剩余 —"
+    if (seconds == 0L) return if (lang == "en") "ETA under 1s" else "不到 1 秒"
     if (seconds < 60) return if (lang == "en") "ETA ${seconds}s" else "剩余 ${seconds} 秒"
     val minutes = (seconds + 59) / 60
     return if (lang == "en") "ETA ${minutes} min" else "剩余 ${minutes} 分"

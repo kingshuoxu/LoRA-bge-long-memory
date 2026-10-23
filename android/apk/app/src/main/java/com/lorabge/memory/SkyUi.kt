@@ -5,6 +5,7 @@ import android.graphics.fonts.Font
 import android.graphics.fonts.FontFamily
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -60,6 +63,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily as ComposeFontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -110,6 +115,7 @@ data class SkyState(
     val answer: String = "",
     val force: Boolean = false,
     val note: String = "",
+    val toast: String = "",
     val streaming: String = "",
     val generating: Boolean = false,
     val statusTop: Dp = 0.dp,
@@ -122,7 +128,7 @@ data class SkyState(
     val wifiOnly: Boolean = false,
     val manifestUrl: String = "",
     val storageLabel: String = "",
-    val versionName: String = "0.1.2",
+    val versionName: String = "0.1.3",
     val nebulaJson: String = "",
     val recallJson: String = "",
     val recallBanner: String = "",
@@ -155,6 +161,7 @@ sealed class SkyEvent {
     data class ManifestUrl(val url: String) : SkyEvent()
     data object ApplyManifest : SkyEvent()
     data object ClearModels : SkyEvent()
+    data object DismissToast : SkyEvent()
 }
 
 fun skyText(lang: String, key: String): String {
@@ -219,6 +226,16 @@ fun skyText(lang: String, key: String): String {
         "checkingGpu" to "正在检测图形后端。",
         "consolidating" to "巩固中",
         "appName" to "长期记忆",
+        "stage.select" to "选择对话",
+        "stage.extract" to "抽取事实",
+        "stage.gate" to "写门",
+        "stage.build" to "编训练样本",
+        "stage.train" to "训练 LoRA",
+        "stage.recall" to "回忆检查",
+        "stage.register" to "登记专家",
+        "stage.done" to "完成",
+        "stage.pending" to "说出一条事实后，会显示在这里",
+        "factWrite" to "写入这条事实",
     )
     val en = mapOf(
         "chat" to "Chat",
@@ -281,6 +298,16 @@ fun skyText(lang: String, key: String): String {
         "checkingGpu" to "Checking the graphics backend.",
         "consolidating" to "Consolidating",
         "appName" to "Long memory",
+        "stage.select" to "Choose conversations",
+        "stage.extract" to "Extract facts",
+        "stage.gate" to "Write gate",
+        "stage.build" to "Build samples",
+        "stage.train" to "Train LoRA",
+        "stage.recall" to "Recall check",
+        "stage.register" to "Register expert",
+        "stage.done" to "Done",
+        "stage.pending" to "A new fact shows up here",
+        "factWrite" to "Write this fact",
     )
     return (if (lang == "en") en else zh)[key] ?: key
 }
@@ -308,6 +335,11 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         val ime = if (state.imeBottom > 0.dp) state.imeBottom else WindowInsets.ime.asPaddingValues().calculateBottomPadding()
         val keyboard = ime > 0.dp
         val nebulaLive = state.liveNebula && state.tab == SkyTab.Nebula && !state.settingsOpen
+        LaunchedEffect(state.toast) {
+            if (state.toast.isBlank()) return@LaunchedEffect
+            kotlinx.coroutines.delay(4200)
+            onEvent(SkyEvent.DismissToast)
+        }
         Box(Modifier.fillMaxSize().background(Night)) {
             if (!nebulaLive) MilkyWay(paused = state.training)
             if (nebulaLive) {
@@ -321,7 +353,7 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 )
             }
             Column(Modifier.fillMaxSize().padding(top = top + 8.dp)) {
-                TopBar(state, onEvent)
+                if (!state.settingsOpen) TopBar(state, onEvent)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (!nebulaLive && !state.settingsOpen) {
                         Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -337,6 +369,23 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 if (!keyboard && !state.settingsOpen) {
                     BottomNav(state, nav, onEvent)
                 }
+            }
+            if (state.toast.isNotBlank() && !state.settingsOpen) {
+                val toastBottom = when {
+                    keyboard -> ime + 76.dp
+                    else -> nav + 72.dp
+                }
+                Text(
+                    state.toast,
+                    color = Ink,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(start = 20.dp, end = 20.dp, bottom = toastBottom)
+                        .background(Color(0xF210141C), RoundedCornerShape(16.dp))
+                        .clickable { onEvent(SkyEvent.DismissToast) }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
             }
             if (state.settingsOpen) SettingsPane(state, top, nav, onEvent)
             if (state.drawerOpen) Drawer(state, top, onEvent)
@@ -437,7 +486,7 @@ private fun Drawer(state: SkyState, top: Dp, onEvent: (SkyEvent) -> Unit) {
 private fun SettingsPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) -> Unit) {
     var armed by remember { mutableStateOf(false) }
     Column(
-        Modifier.fillMaxSize().background(Color(0xE6070910)).verticalScroll(rememberScrollState())
+        Modifier.fillMaxSize().background(Night).verticalScroll(rememberScrollState())
             .padding(start = 16.dp, end = 16.dp, top = top + 12.dp, bottom = nav + 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -628,9 +677,6 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 Bubble(state.lang, ordered[index], state.generating && index == 0)
             }
         }
-        if (state.note.isNotEmpty()) {
-            Text(state.note, color = Gold, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
-        }
         OutlinedTextField(
             value = state.draft,
             onValueChange = { onEvent(SkyEvent.Draft(it)) },
@@ -663,9 +709,9 @@ private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean) {
             )
             if (!user && !streaming) {
                 val tag = if (!message.expert.isNullOrBlank()) skyText(lang, "memoryUsed") else skyText(lang, "memoryNone")
-                Text(tag, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
+                Text(tag, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
                 if (message.noticed) {
-                    Text(skyText(lang, "noticed"), color = Gold, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp, top = 1.dp))
+                    Text(skyText(lang, "noticed"), color = Gold, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
                 }
             }
         }
@@ -692,34 +738,140 @@ private fun FakeKeyboard(height: Dp) {
     }
 }
 
-@Composable
-private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        if (state.training) {
-            Text(skyText(state.lang, "consolidating"), color = Gold, modifier = Modifier.padding(bottom = 4.dp))
-        }
-        Constellation(state.loss, state.training)
-        Text("${skyText(state.lang, "loss")} · ${state.loss.size} ${skyText(state.lang, "steps")}", color = Muted)
-        if (state.status.isNotEmpty()) Text(state.status, color = Ink, modifier = Modifier.padding(vertical = 4.dp))
-        Field(skyText(state.lang, "entity"), state.entity) { onEvent(SkyEvent.Field("entity", it)) }
-        Field(skyText(state.lang, "statement"), state.statement) { onEvent(SkyEvent.Field("statement", it)) }
-        Field(skyText(state.lang, "value"), state.value) { onEvent(SkyEvent.Field("value", it)) }
-        Field(skyText(state.lang, "question"), state.question) { onEvent(SkyEvent.Field("question", it)) }
-        Field(skyText(state.lang, "answer"), state.answer) { onEvent(SkyEvent.Field("answer", it)) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = state.force, onCheckedChange = { onEvent(SkyEvent.Force(it)) })
-            Text(skyText(state.lang, "force"), color = Muted)
-        }
-        Row {
-            Text(skyText(state.lang, "train"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.Train) }.padding(8.dp))
-            Text(skyText(state.lang, "cancel"), color = Muted, modifier = Modifier.clickable { onEvent(SkyEvent.CancelTrain) }.padding(8.dp))
+private val stageIds = listOf("select", "extract", "gate", "build", "train", "recall", "register", "done")
+
+internal fun stageStates(training: Boolean, hasFact: Boolean): List<String> {
+    val active = when {
+        training -> "train"
+        hasFact -> "gate"
+        else -> "select"
+    }
+    val at = stageIds.indexOf(active)
+    return stageIds.mapIndexed { index, _ ->
+        when {
+            index < at -> "done"
+            index == at -> "active"
+            else -> "pending"
         }
     }
 }
 
 @Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(value = value, onValueChange = onChange, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), label = { Text(label) })
+private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        StageTimeline(state)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            if (state.statement.isBlank() && state.entity.isBlank()) {
+                Text(skyText(state.lang, "stage.pending"), color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
+            } else {
+                FactCard(state, onEvent)
+            }
+            if (state.loss.isNotEmpty() || state.training) {
+                Spacer(Modifier.height(12.dp))
+                Constellation(state.loss, state.training)
+                Text(
+                    "${skyText(state.lang, "loss")} · ${state.loss.size} ${skyText(state.lang, "steps")}",
+                    color = Muted,
+                    fontSize = 13.sp,
+                )
+            }
+            if (state.status.isNotEmpty()) {
+                Text(state.status, color = Ink, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StageTimeline(state: SkyState) {
+    val states = stageStates(state.training, state.entity.isNotBlank() || state.statement.isNotBlank())
+    Column(Modifier.fillMaxWidth()) {
+        Canvas(Modifier.fillMaxWidth().height(52.dp)) {
+            val step = size.width / stageIds.size
+            val y = 26.dp.toPx()
+            for (index in 1 until stageIds.size) {
+                val lit = states[index] != "pending" || states[index - 1] == "done"
+                drawLine(
+                    if (lit) Gold.copy(alpha = 0.85f) else Color(0x47B4C6DC),
+                    Offset(step * (index - 0.5f), y),
+                    Offset(step * (index + 0.5f), y),
+                    if (lit) 2.4f else 1.4f,
+                )
+            }
+            stageIds.indices.forEach { index ->
+                val mark = states[index]
+                val on = mark != "pending"
+                val radius = if (mark == "active") 7f else if (on) 5.2f else 3.6f
+                val fill = if (mark == "active") Gold else if (on) Color(0xFFD7E6FF) else Color(0x73B4C6DC)
+                val center = Offset(step * (index + 0.5f), y)
+                drawCircle(fill.copy(alpha = if (on) 0.22f else 0.08f), radius + 9f, center)
+                drawCircle(fill, radius, center)
+            }
+        }
+        Row(Modifier.fillMaxWidth()) {
+            stageIds.forEachIndexed { index, id ->
+                val mark = states[index]
+                Text(
+                    skyText(state.lang, "stage.$id"),
+                    color = if (mark == "active") Gold else if (mark == "done") Ink else Muted,
+                    fontSize = 13.sp,
+                    lineHeight = 15.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 8.dp)
+            .height(IntrinsicSize.Min)
+            .background(Color(0x6B080C16), RoundedCornerShape(16.dp))
+            .border(1.dp, Color(0x2EC6D6EE), RoundedCornerShape(16.dp)),
+    ) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+            Box(Modifier.width(2.dp).fillMaxHeight().background(Gold.copy(alpha = 0.7f)))
+            Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(skyText(state.lang, "factWrite"), color = Gold, fontSize = 13.sp)
+                BasicTextField(
+                    value = state.statement,
+                    onValueChange = { onEvent(SkyEvent.Field("statement", it)) },
+                    textStyle = TextStyle(color = Ink, fontSize = 18.sp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                FactLine(skyText(state.lang, "entity"), state.entity) { onEvent(SkyEvent.Field("entity", it)) }
+                FactLine(skyText(state.lang, "value"), state.value) { onEvent(SkyEvent.Field("value", it)) }
+                FactLine(skyText(state.lang, "question"), state.question) { onEvent(SkyEvent.Field("question", it)) }
+                FactLine(skyText(state.lang, "answer"), state.answer) { onEvent(SkyEvent.Field("answer", it)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = state.force, onCheckedChange = { onEvent(SkyEvent.Force(it)) })
+                    Text(skyText(state.lang, "force"), color = Muted, fontSize = 14.sp)
+                }
+                Row {
+                    Text(skyText(state.lang, "train"), color = Accent2, fontSize = 15.sp, modifier = Modifier.clickable { onEvent(SkyEvent.Train) }.padding(vertical = 8.dp, horizontal = 4.dp))
+                    Text(skyText(state.lang, "cancel"), color = Muted, fontSize = 15.sp, modifier = Modifier.clickable { onEvent(SkyEvent.CancelTrain) }.padding(8.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FactLine(label: String, value: String, onChange: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, color = Muted, fontSize = 13.sp)
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            textStyle = TextStyle(color = Ink, fontSize = 16.sp),
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        )
+    }
 }
 
 @Composable
@@ -798,7 +950,7 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             Text(skyText(state.lang, "selfCheck"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.SelfCheck) })
         }
         if (state.note.isNotEmpty()) {
-            Text(state.note, color = Muted, modifier = Modifier.padding(vertical = 6.dp))
+            Text(state.note, color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
         }
         LazyColumn(Modifier.weight(1f)) {
             items(state.experts) { expert ->

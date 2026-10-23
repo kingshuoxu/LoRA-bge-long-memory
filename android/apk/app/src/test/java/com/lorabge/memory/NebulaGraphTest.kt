@@ -82,6 +82,19 @@ class NebulaGraphTest {
     }
 
     @Test
+    fun consolidateTimelineMarksTheTrainStage() {
+        val running = stageStates(training = true, hasFact = true)
+        assertEquals("active", running[4])
+        assertEquals("done", running[3])
+        assertEquals("pending", running[5])
+        val review = stageStates(training = false, hasFact = true)
+        assertEquals("active", review[2])
+        val idle = stageStates(training = false, hasFact = false)
+        assertEquals("active", idle[0])
+        assertEquals("pending", idle[1])
+    }
+
+    @Test
     fun emptyExpertUsesMemoryNotRawId() {
         assertEquals("记忆", NebulaGraph.displayName(listOf("expert_0"), "zh"))
         assertEquals("Memory", NebulaGraph.displayName(emptyList(), "en"))

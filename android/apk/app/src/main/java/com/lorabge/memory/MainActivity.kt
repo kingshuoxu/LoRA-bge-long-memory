@@ -114,6 +114,7 @@ private fun PhoneApp(
     var tab by remember { mutableStateOf(SkyTab.Chat) }
     var tick by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf("") }
+    var toast by remember { mutableStateOf("") }
     var probeGen by remember { mutableIntStateOf(if (probeOnStart) 1 else 0) }
     LaunchedEffect(probeGen) {
         if (probeGen == 0) return@LaunchedEffect
@@ -125,7 +126,7 @@ private fun PhoneApp(
             } catch (_: Throwable) {
             } finally {
                 val fallback = client.notice(langNow)
-                if (fallback.isNotBlank()) note = fallback
+                if (fallback.isNotBlank()) toast = fallback
                 running.set(false)
             }
         }.start()
@@ -168,7 +169,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.2"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.3"
     }
     val freshExpert = if (training) experts.firstOrNull()?.name else null
     val nebulaJson = remember(tick, lang, freshExpert) { NebulaGraph.build(store, lang, freshExpert) }
@@ -194,6 +195,7 @@ private fun PhoneApp(
         answer = answer,
         force = force,
         note = note,
+        toast = toast,
         settingsOpen = settingsOpen,
         drawerOpen = drawerOpen,
         backendMode = record.mode,
@@ -283,7 +285,8 @@ private fun PhoneApp(
                     store.saveConversation(saved.copy(updated = Instant.now().toString(), messages = messages))
                     generating = false
                     streaming = ""
-                    note = client.notice(langNow)
+                    val fallback = client.notice(langNow)
+                    if (fallback.isNotBlank()) toast = fallback
                     tick++
                 }.start()
             }
@@ -355,10 +358,11 @@ private fun PhoneApp(
             }
             is SkyEvent.BackendMode -> {
                 engine.setBackendMode(event.mode)
-                note = engine.backendLabel(lang) + " · " + DeviceTune.explain(engine.backendRecord())
+                toast = engine.backendLabel(lang) + " · " + DeviceTune.explain(engine.backendRecord())
                 if (event.mode == "auto") probeGen++
                 tick++
             }
+            SkyEvent.DismissToast -> toast = ""
             SkyEvent.ExportDiagnostics -> onExport()
         }
     }

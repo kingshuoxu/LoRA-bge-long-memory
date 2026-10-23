@@ -31,7 +31,7 @@ const POINT_VERT = `
     vAlpha = aAlpha * uDim * uBoost;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(aSize * uPixelRatio, 2.0, 64.0);
+    gl_PointSize = clamp(aSize * uPixelRatio, 3.0, 112.0);
   }
 `;
 
@@ -63,7 +63,7 @@ const STAR_VERT = `
     vTint = aTint;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(aSize * aFlare * uPixelRatio, 6.0, 84.0);
+    gl_PointSize = clamp(aSize * aFlare * uPixelRatio, 8.0, 120.0);
   }
 `;
 
@@ -335,18 +335,18 @@ function sampleCloud(index, weight, fresh) {
     const body = mix3(flank, palette.mid, Math.min(1, ridge));
     const col = mix3(body, palette.core, (1 - dist) ** 1.4 * 0.9);
     colors.push(col[0], col[1], col[2]);
-    sizes.push(14 + rnd() * 26);
-    alphas.push(0.026 + rnd() * 0.038);
+    sizes.push(28 + rnd() * 40);
+    alphas.push(0.09 + rnd() * 0.11);
   }
   let reach = 0;
-  for (let arm = 0; arm < 3; arm += 1) {
+  for (let arm = 0; arm < 2; arm += 1) {
     const ang = index * 0.85 + arm * 2.15;
-    const len = (4.2 + (arm === 0 ? 2.1 : 0.4) + rnd()) * weight;
+    const len = (1.35 + (arm === 0 ? 0.55 : 0.15) + rnd() * 0.25) * weight;
     reach = Math.max(reach, len);
     const curl = (arm % 2 ? 1 : -1) * (0.55 + rnd() * 0.45);
-    for (let i = 0; i < 260; i += 1) {
+    for (let i = 0; i < 72; i += 1) {
       const t = rnd() ** 0.72;
-      const spread = (0.12 + t * 0.9) * (0.28 + rnd() * 0.45) * weight;
+      const spread = (0.08 + t * 0.45) * (0.22 + rnd() * 0.3) * weight;
       const along = t * len;
       const side = gauss() * spread;
       const x = Math.cos(ang) * along + Math.cos(ang + 1.15) * side + Math.sin(along * curl) * 0.42 * weight;
@@ -356,8 +356,8 @@ function sampleCloud(index, weight, fresh) {
       const tint = mix3(palette.mid, palette.wisp, 0.3 + t * 0.7);
       const fade = mix3(tint, palette.edge, t * 0.75);
       colors.push(fade[0], fade[1], fade[2]);
-      sizes.push(7 + (1 - t) * 16);
-      alphas.push(0.02 + (1 - t) * 0.04);
+      sizes.push(6 + (1 - t) * 8);
+      alphas.push(0.012 + (1 - t) * 0.018);
     }
   }
   for (let i = 0; i < 340; i += 1) {
@@ -367,8 +367,8 @@ function sampleCloud(index, weight, fresh) {
       Math.min(1.4, palette.core[1] * 1.3),
       Math.min(1.4, palette.core[2] * 1.3),
     );
-    sizes.push(9 + rnd() * 14);
-    alphas.push(0.055 + rnd() * 0.04);
+    sizes.push(18 + rnd() * 22);
+    alphas.push(0.14 + rnd() * 0.1);
   }
   if (fresh) {
     for (let i = 0; i < 150; i += 1) {
@@ -405,7 +405,7 @@ export function createNebula(canvas, hooks) {
   }
   if (!renderer.getContext()) return fallbackNebula(canvas);
   renderer.setClearColor(0x000000, 0);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   if (THREE.LinearSRGBColorSpace) renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
 
@@ -598,7 +598,7 @@ export function createNebula(canvas, hooks) {
 
   function addFilament(a, b, color, gain) {
     const points = bezier(a, b, 2.2 + (filaments.length % 3) * 1.15);
-    const geo = ribbonGeometry(points, 0.38);
+    const geo = ribbonGeometry(points, 0.14);
     const tint = new THREE.Color(color);
     const material = new THREE.ShaderMaterial({
       uniforms: {
@@ -629,7 +629,7 @@ export function createNebula(canvas, hooks) {
     line.renderOrder = 2;
     overlay.add(line);
     const beads = [];
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       const mote = new THREE.Sprite(new THREE.SpriteMaterial({
         map: bead,
         transparent: true,
@@ -642,9 +642,9 @@ export function createNebula(canvas, hooks) {
       mote.material.color.r = Math.min(1.6, tint.r * 2.2);
       mote.material.color.g = Math.min(1.5, tint.g * 2.1);
       mote.material.color.b = Math.min(1.35, tint.b * 1.8);
-      mote.scale.setScalar(0.55);
+      mote.scale.setScalar(0.22);
       mote.renderOrder = 4;
-      mote.userData.phase = i / 5;
+      mote.userData.phase = i / 3;
       overlay.add(mote);
       beads.push(mote);
     }
@@ -922,17 +922,20 @@ export function createNebula(canvas, hooks) {
       counts.set(fact.expert, (counts.get(fact.expert) || 0) + 1);
     });
     const maxCount = Math.max(1, ...counts.values());
-    const orbit = Math.max(14, experts.length * 2.15);
+    const count = Math.max(1, experts.length);
+    const cols = count <= 1 ? 1 : Math.min(count, count <= 4 ? 2 : 3);
+    const rows = Math.ceil(count / cols);
     experts.forEach((expert, index) => {
       const active = counts.get(expert.name) || 0;
       const fresh = Boolean(expert.writable && expert.explicit);
-      let weight = 0.84 + 0.7 * Math.sqrt(active / maxCount);
-      if (fresh) weight = Math.max(weight, 1.05);
-      const angle = (index / Math.max(1, experts.length)) * Math.PI * 2 - Math.PI / 2;
+      let weight = 1.05 + 0.55 * Math.sqrt(active / maxCount);
+      if (fresh) weight = Math.max(weight, 1.2);
+      const col = index % cols;
+      const row = Math.floor(index / cols);
       const pos = new THREE.Vector3(
-        Math.cos(angle) * orbit * 1.05,
-        Math.sin(angle) * orbit * 0.64,
-        Math.sin(angle * 2 + index) * 0.45,
+        (col - (cols - 1) / 2) * 12.4,
+        ((rows - 1) / 2 - row) * 10.6,
+        (index % 2) * 0.28,
       );
       nodePos.set(expert.id || `expert:${expert.name}`, pos.clone());
       makeCloud(pos, index, expert.name, expert, weight, fresh);
@@ -966,7 +969,7 @@ export function createNebula(canvas, hooks) {
         const recency = (index + 1) / group.length;
         const bright = fact.superseded ? 0.22 : Math.min(1, 0.42 + Math.min(0.38, hits * 0.2) + recency * 0.28);
         starPositions.push(pos.x, pos.y, pos.z);
-        starSizes.push(fact.superseded ? 16 : 26 + bright * 22);
+        starSizes.push(fact.superseded ? 18 : 36 + bright * 20);
         starBrights.push(fact.superseded ? 0.28 : 0.48 + bright * 0.52);
         starFlares.push(1);
         starTints.push(tint[0], tint[1], tint[2]);
@@ -1051,7 +1054,7 @@ export function createNebula(canvas, hooks) {
         const fact = nodePos.get(link.source);
         const conv = nodePos.get(link.target);
         if (!fact || !conv) return;
-        const filament = addFilament(conv, fact, 0xf6e2b4, 0.46);
+        const filament = addFilament(conv, fact, 0xf6e2b4, 0.14);
         filament.source = link.target;
         filament.target = link.source;
         filament.role = "source";
@@ -1061,7 +1064,7 @@ export function createNebula(canvas, hooks) {
       const a = nodePos.get(link.source);
       const b = nodePos.get(link.target);
       if (!a || !b) return;
-      const filament = addFilament(a, b, link.kind === "supersede" ? 0x9aa3b3 : 0xd7b56a, link.kind === "entity" ? 0.52 : 0.4);
+      const filament = addFilament(a, b, link.kind === "supersede" ? 0x9aa3b3 : 0xd7b56a, link.kind === "entity" ? 0.16 : 0.12);
       filament.source = link.source;
       filament.target = link.target;
       filament.role = link.kind;
@@ -1114,15 +1117,15 @@ export function createNebula(canvas, hooks) {
 
     const box = new THREE.Box3();
     expertClouds.forEach((group) => {
-      const reach = group.userData.radius || 8;
-      box.expandByPoint(group.position.clone().add(new THREE.Vector3(reach, reach * 0.7, 1.2)));
-      box.expandByPoint(group.position.clone().add(new THREE.Vector3(-reach, -reach * 0.7, -1.2)));
+      const body = Math.max(5.2, (group.userData.radius || 8) * 0.72);
+      box.expandByPoint(group.position.clone().add(new THREE.Vector3(body, body * 0.78, 0.8)));
+      box.expandByPoint(group.position.clone().add(new THREE.Vector3(-body, -body * 0.78, -0.8)));
     });
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 6, 8));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     framed = {
       center: sphere.center.clone(),
-      radius: Math.max(12, sphere.radius * 0.9),
+      radius: Math.max(8.5, sphere.radius * 1.16),
     };
     applyFrame(true);
     placeLabels();
@@ -1136,9 +1139,9 @@ export function createNebula(canvas, hooks) {
     const aspect = Math.max(0.35, camera.aspect || 1);
     const distY = radius / Math.tan(fov / 2);
     const distX = radius / (Math.tan(fov / 2) * aspect);
-    // 全页星云保持原来的取景。对话侧栏改远一点，云团连同边距都落在视口里。
-    const page = Boolean(canvas.closest("#nebula-host"));
-    const dist = Math.max(distY, distX) * (page ? 0.53 : 1.4);
+    // 竖屏按宽度取景，云团留在画面中部，四周留一圈边，不要为了铺满高度把相机拉远。
+    const portrait = aspect < 1;
+    const dist = portrait ? distX * 1.28 : Math.max(distY, distX) * 1.08;
     camTarget.set(center.x, center.y, center.z + dist);
     if (immediate) {
       look.copy(lookTarget);
@@ -1150,7 +1153,7 @@ export function createNebula(canvas, hooks) {
   function resize() {
     const width = canvas.clientWidth || 800;
     const height = canvas.clientHeight || 600;
-    const ratio = Math.min(window.devicePixelRatio || 1, mode === "dim" ? 1 : 1.25);
+    const ratio = Math.min(window.devicePixelRatio || 1, mode === "dim" ? 1 : 2);
     renderer.setPixelRatio(ratio);
     renderer.setSize(width, height, false);
     const bufferW = Math.max(1, Math.floor(width * ratio));
@@ -1407,15 +1410,15 @@ export function createNebula(canvas, hooks) {
     filaments.forEach((filament) => {
       const hot = Boolean(filament.hot);
       if (filament.material && filament.material.uniforms.uGain) {
-        filament.material.uniforms.uGain.value = hot ? 0.95 : (recall ? 0.16 : (filament.role === "source" ? 0.46 : 0.5));
+        filament.material.uniforms.uGain.value = hot ? 0.62 : (recall ? 0.06 : (filament.role === "source" ? 0.14 : 0.1));
       }
       const speed = hot ? 0.16 : 0.045;
       filament.beads.forEach((mote) => {
         const phase = (((reduce ? 0 : t) * speed + mote.userData.phase) % 1 + 1) % 1;
         const index = Math.min(filament.points.length - 1, Math.floor(phase * (filament.points.length - 1)));
         mote.position.copy(filament.points[index]);
-        mote.material.opacity = hot ? 1 : 0.82;
-        mote.scale.setScalar(hot ? 1.05 : 0.5);
+        mote.material.opacity = hot ? 0.85 : 0.28;
+        mote.scale.setScalar(hot ? 0.55 : 0.2);
       });
     });
     look.lerp(lookTarget, reduce ? 1 : 0.08);

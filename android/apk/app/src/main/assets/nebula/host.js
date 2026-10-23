@@ -105,7 +105,7 @@ function showRecall(trace) {
 
 function showState(dim) {
   stateBanner.hidden = !dim;
-  stateBanner.textContent = enLocale() ? "Consolidating" : "巩固中";
+  stateBanner.textContent = dim ? (enLocale() ? "Consolidating" : "巩固中") : "";
 }
 
 function applyMessage(msg) {

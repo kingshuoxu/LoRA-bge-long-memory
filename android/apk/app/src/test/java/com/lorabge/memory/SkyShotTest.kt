@@ -125,7 +125,7 @@ class SkyShotTest {
             navBottom = 24.dp,
             currentTitle = if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi",
             draft = if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi",
-            note = if (zh) "图形后端异常，已改用 CPU" else "Graphics backend failed, switched to CPU",
+            toast = if (zh) "图形后端异常，已改用 CPU" else "Graphics backend failed, switched to CPU",
             messages = listOf(
                 SkyMessage("user", if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi"),
                 SkyMessage(
@@ -151,7 +151,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.2",
+        versionName = "0.1.3",
     )
 
     private fun consolidateSample(lang: String) = sample().copy(
@@ -190,9 +190,9 @@ class SkyShotTest {
         message = if (lang == "en") "Downloading" else "下载中",
         url = "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/android-v0.1.0/manifest.json",
         files = listOf(
-            SetupFileUi("tokenizer.json", 800, 1200, "running"),
-            SetupFileUi("base.gguf", 0, 1200, "wait"),
-            SetupFileUi("bge.gguf", 400, 800, "checking"),
+            SetupFileUi("tokenizer.json", 2_400_000, 2_400_000, "done"),
+            SetupFileUi("base.gguf", 180L * 1024 * 1024, 1_266_425_696L, "running"),
+            SetupFileUi("bge.gguf", 0, 95L * 1024 * 1024, "wait"),
         ),
     )
 }
