@@ -142,10 +142,18 @@ fi
 "$ADB" -s "emulator-$PORT" shell input keyevent 82 >/dev/null 2>&1 || true
 
 "$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.2.apk"
+# adb shell 会把 run-as … sh -c "echo > file" 里的重定向吃掉，文件写不进应用目录。
+printf '%s\n' 'keep-memory' >"$STAGE/keep.txt"
+printf '%s\n' 'keep-model' >"$STAGE/keep.bin"
+printf '%s\n' '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' '<map>' '<string name="keep">yes</string>' '</map>' >"$STAGE/setup.xml"
+"$ADB" -s "emulator-$PORT" push "$STAGE/keep.txt" /data/local/tmp/lorabge-keep.txt
+"$ADB" -s "emulator-$PORT" push "$STAGE/keep.bin" /data/local/tmp/lorabge-keep.bin
+"$ADB" -s "emulator-$PORT" push "$STAGE/setup.xml" /data/local/tmp/lorabge-setup.xml
+"$ADB" -s "emulator-$PORT" shell chmod 644 /data/local/tmp/lorabge-keep.txt /data/local/tmp/lorabge-keep.bin /data/local/tmp/lorabge-setup.xml
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory mkdir -p files/memory files/models shared_prefs
-"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory sh -c "echo keep-memory > files/memory/keep.txt"
-"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory sh -c "echo keep-model > files/models/keep.bin"
-"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory sh -c "printf '%s\n' '<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\" ?>' '<map>' '<string name=\"keep\">yes</string>' '</map>' > shared_prefs/setup.xml"
+"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.txt files/memory/keep.txt
+"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.bin files/models/keep.bin
+"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-setup.xml shared_prefs/setup.xml
 
 "$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.3.apk"
 MEM=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/keep.txt | tr -d '\r')
