@@ -56,6 +56,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -147,6 +149,7 @@ data class SkyState(
     val liveMotion: Boolean = false,
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
+    val nebulaCanvas: Boolean = false,
 )
 
 sealed class SkyEvent {
@@ -179,6 +182,7 @@ sealed class SkyEvent {
     data object CheckUpdate : SkyEvent()
     data object StartUpdate : SkyEvent()
     data object DismissUpdate : SkyEvent()
+    data class NebulaGl(val fallback: String) : SkyEvent()
 }
 
 fun skyText(lang: String, key: String): String {
@@ -261,6 +265,7 @@ fun skyText(lang: String, key: String): String {
         "updateInstalling" to "请在系统界面确认安装。模型和对话会保留。",
         "pendingHead" to "待巩固",
         "advanced" to "高级",
+        "nebulaFallback" to "这台手机绘不出完整星云，已改用兼容画面。",
     )
     val en = mapOf(
         "chat" to "Chat",
@@ -341,6 +346,7 @@ fun skyText(lang: String, key: String): String {
         "updateInstalling" to "Confirm the install. Models and chats stay.",
         "pendingHead" to "Waiting to consolidate",
         "advanced" to "Advanced",
+        "nebulaFallback" to "This phone can't draw the full nebula, so a compatible view is on.",
     )
     return (if (lang == "en") en else zh)[key] ?: key
 }
@@ -376,31 +382,59 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         Box(Modifier.fillMaxSize().background(Night)) {
             if (!nebulaLive) MilkyWay(paused = state.training)
             if (nebulaLive) {
-                NebulaHost(
-                    json = state.nebulaJson,
-                    recallJson = state.recallJson,
-                    training = state.training,
-                    lang = state.lang,
-                    modifier = Modifier.fillMaxSize().padding(top = top + 56.dp, bottom = if (keyboard) ime else nav + 64.dp),
-                    onOpenConversation = { onEvent(SkyEvent.OpenConversation(it)) },
-                )
+                val nebulaMod = Modifier
+                    .fillMaxSize()
+                    .padding(top = top + 56.dp, bottom = if (keyboard) ime else nav + 64.dp)
+                    .clipToBounds()
+                if (state.nebulaCanvas) {
+                    NebulaCanvas(
+                        json = state.nebulaJson,
+                        lang = state.lang,
+                        animate = state.liveMotion && !state.training,
+                        modifier = nebulaMod,
+                    )
+                } else {
+                    NebulaHost(
+                        json = state.nebulaJson,
+                        recallJson = state.recallJson,
+                        training = state.training,
+                        lang = state.lang,
+                        modifier = nebulaMod,
+                        onOpenConversation = { onEvent(SkyEvent.OpenConversation(it)) },
+                        onGl = { onEvent(SkyEvent.NebulaGl(it)) },
+                    )
+                }
             }
-            Column(Modifier.fillMaxSize().padding(top = top + 8.dp)) {
-                if (!state.settingsOpen) TopBar(state, onEvent)
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (!nebulaLive && !state.settingsOpen) {
-                        Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            when (state.tab) {
-                                SkyTab.Chat -> ChatPane(state, ime, onEvent)
-                                SkyTab.Consolidate -> ConsolidatePane(state, onEvent)
-                                SkyTab.Nebula -> NebulaFallback(state)
-                                SkyTab.Library -> LibraryPane(state, onEvent)
+            if (nebulaLive && !state.settingsOpen) {
+                TopBar(
+                    state,
+                    onEvent,
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth().zIndex(1f).background(Night).padding(top = top),
+                )
+                if (!keyboard) {
+                    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().zIndex(1f).background(Night)) {
+                        BottomNav(state, nav, onEvent)
+                    }
+                }
+            }
+            if (!nebulaLive) {
+                Column(Modifier.fillMaxSize().padding(top = top + 8.dp)) {
+                    if (!state.settingsOpen) TopBar(state, onEvent)
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        if (!state.settingsOpen) {
+                            Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                when (state.tab) {
+                                    SkyTab.Chat -> ChatPane(state, ime, onEvent)
+                                    SkyTab.Consolidate -> ConsolidatePane(state, onEvent)
+                                    SkyTab.Nebula -> NebulaFallback(state)
+                                    SkyTab.Library -> LibraryPane(state, onEvent)
+                                }
                             }
                         }
                     }
-                }
-                if (!keyboard && !state.settingsOpen) {
-                    BottomNav(state, nav, onEvent)
+                    if (!keyboard && !state.settingsOpen) {
+                        BottomNav(state, nav, onEvent)
+                    }
                 }
             }
             if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
@@ -423,16 +457,16 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                 )
             }
-            if (state.settingsOpen) SettingsPane(state, top, nav, onEvent)
-            if (state.drawerOpen) Drawer(state, top, onEvent)
+            if (state.settingsOpen) Box(Modifier.fillMaxSize().zIndex(3f)) { SettingsPane(state, top, nav, onEvent) }
+            if (state.drawerOpen) Box(Modifier.fillMaxSize().zIndex(3f)) { Drawer(state, top, onEvent) }
         }
     }
 }
 
 @Composable
-private fun TopBar(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+private fun TopBar(state: SkyState, onEvent: (SkyEvent) -> Unit, modifier: Modifier = Modifier) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (state.tab == SkyTab.Chat) {
@@ -453,7 +487,11 @@ private fun TopBar(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             )
             Spacer(Modifier.width(12.dp))
         }
-        SkyIcon("gear", Accent, Modifier.size(28.dp).clickable { onEvent(SkyEvent.OpenSettings) })
+        SkyIcon(
+            "gear",
+            Accent,
+            Modifier.size(32.dp).semantics { contentDescription = "settings" }.clickable { onEvent(SkyEvent.OpenSettings) },
+        )
     }
 }
 

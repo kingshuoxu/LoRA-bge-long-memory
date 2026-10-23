@@ -216,8 +216,13 @@ private fun PhoneApp(
     val versionName = remember {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.3"
     }
-    val freshExpert = if (training) experts.firstOrNull()?.name else null
-    val nebulaJson = remember(tick, lang, freshExpert) { NebulaGraph.build(store, lang, freshExpert) }
+    var nebulaCanvas by remember { mutableStateOf(false) }
+    val sessionGate = remember {
+        File(store.trainDir, "session-new.txt").delete()
+        true
+    }
+    val freshExperts = remember(tick, sessionGate) { NebulaGraph.sessionNew(store) }
+    val nebulaJson = remember(tick, lang, freshExperts) { NebulaGraph.build(store, lang, freshExperts) }
     val state = SkyState(
         lang = lang,
         tab = tab,
@@ -260,6 +265,7 @@ private fun PhoneApp(
         waitSeconds = waitSeconds,
         liveMotion = true,
         train = trainSnap,
+        nebulaCanvas = nebulaCanvas,
         pendingFacts = remember(tick, statement, experts) {
             val noted = ArrayList<String>()
             if (statement.isNotBlank()) noted.add(statement)
@@ -541,6 +547,13 @@ private fun PhoneApp(
                         updateBusy = false
                     }
                 }.start()
+            }
+            is SkyEvent.NebulaGl -> {
+                if (event.fallback == "canvas") nebulaCanvas = true
+                if (event.fallback == "webgl1" || event.fallback == "canvas") {
+                    val msg = noteNebulaFallback(context, lang)
+                    if (msg != null && toast.isBlank()) toast = msg
+                }
             }
         }
     }

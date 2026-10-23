@@ -460,7 +460,27 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         val version = appVersion()
         val body = DeviceTune.renderDiagnostics(PhoneFacts.collect(this, version))
         val route = File(context.filesDir, "setup/last-route.json").takeIf { it.exists() }?.readText()?.trim().orEmpty()
-        return if (route.isEmpty()) body else body.trimEnd() + "\nlast-route:\n" + route.take(2000) + "\n"
+        val gl = File(context.filesDir, "setup/nebula-gl.txt").takeIf { it.exists() }?.readText()?.trim().orEmpty()
+        val console = File(context.filesDir, "setup/nebula-console.txt").takeIf { it.exists() }?.readText()?.trim().orEmpty()
+        return buildString {
+            append(body.trimEnd())
+            append('\n')
+            if (route.isNotEmpty()) {
+                append("last-route:\n")
+                append(route.take(2000))
+                append('\n')
+            }
+            if (gl.isNotEmpty()) {
+                append("nebula-gl:\n")
+                append(gl.take(800))
+                append('\n')
+            }
+            if (console.isNotEmpty()) {
+                append("nebula-console:\n")
+                append(console.take(2000))
+                append('\n')
+            }
+        }
     }
 
     fun crashNotes(): String {

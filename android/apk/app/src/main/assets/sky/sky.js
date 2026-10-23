@@ -12,8 +12,7 @@
     preserveDrawingBuffer: false,
   });
   if (!gl) {
-    document.documentElement.classList.add("sky-fallback");
-    window.sky = { setMode() {} };
+    mountSoftwareSky(canvas, "no webgl");
     return;
   }
 
@@ -118,8 +117,7 @@
   const vs = compile(gl.VERTEX_SHADER, vert);
   const fs = compile(gl.FRAGMENT_SHADER, frag);
   if (!vs || !fs) {
-    document.documentElement.classList.add("sky-fallback");
-    window.sky = { setMode() {} };
+    mountSoftwareSky(canvas, "sky shader");
     return;
   }
   const program = gl.createProgram();
@@ -127,8 +125,7 @@
   gl.attachShader(program, fs);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    document.documentElement.classList.add("sky-fallback");
-    window.sky = { setMode() {} };
+    mountSoftwareSky(canvas, "sky link");
     return;
   }
   const buffer = gl.createBuffer();
@@ -199,10 +196,58 @@
 
   window.addEventListener("resize", () => draw(performance.now()));
   window.sky = {
+    renderer: rendererName || String(gl.getParameter(gl.RENDERER) || ""),
+    version: "webgl",
     setMode(next) {
       mode = next === "dim" ? "dim" : "full";
       resume();
     },
   };
   requestAnimationFrame(frame);
+
+  function mountSoftwareSky(target, reason) {
+    const next = document.createElement("canvas");
+    next.id = "sky";
+    target.replaceWith(next);
+    const ctx = next.getContext("2d");
+    if (!ctx) {
+      window.sky = { setMode() {}, renderer: "", version: "none", error: reason || "" };
+      return;
+    }
+    let live = true;
+    const stars = [];
+    for (let i = 0; i < 80; i += 1) {
+      stars.push({ x: Math.random(), y: Math.random(), r: 0.6 + Math.random() * 1.6, p: Math.random() * 6 });
+    }
+    function paint(now) {
+      if (!live) return;
+      requestAnimationFrame(paint);
+      const w = next.clientWidth || 1;
+      const h = next.clientHeight || 1;
+      if (next.width !== w || next.height !== h) {
+        next.width = w;
+        next.height = h;
+      }
+      const g = ctx.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, "#10182a");
+      g.addColorStop(1, "#070910");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+      const t = (now || 0) / 1000;
+      stars.forEach((star) => {
+        const tw = 0.45 + 0.55 * Math.sin(t * 1.4 + star.p);
+        ctx.fillStyle = `rgba(238, 232, 214, ${tw})`;
+        ctx.beginPath();
+        ctx.arc(star.x * w, star.y * h, star.r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+    requestAnimationFrame(paint);
+    window.sky = {
+      renderer: "canvas2d",
+      version: "2d",
+      error: reason || "",
+      setMode(nextMode) { live = nextMode !== "dim"; if (live) requestAnimationFrame(paint); },
+    };
+  }
 })();

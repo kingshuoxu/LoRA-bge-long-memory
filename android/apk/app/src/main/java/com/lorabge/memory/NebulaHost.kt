@@ -3,8 +3,12 @@ package com.lorabge.memory
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import android.view.MotionEvent
 import android.view.View
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -13,11 +17,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
+import java.io.File
 
 /**
  * 桌面同一套 WebGL 星云。模块脚本走 appassets,避免 file:// 的跨域限制。
+ * 控制台、脚本错误和显卡字符串写入 logcat,并附在导出诊断里。
  */
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
 internal fun NebulaHost(
     json: String,
@@ -26,19 +32,42 @@ internal fun NebulaHost(
     lang: String,
     modifier: Modifier = Modifier,
     onOpenConversation: (String) -> Unit,
+    onGl: (String) -> Unit,
 ) {
     AndroidView(
         modifier = modifier,
         factory = { context ->
             val web = NebulaWeb(context)
-            web.setBackgroundColor(0x00000000)
+            web.setBackgroundColor(0xFF070910.toInt())
             web.settings.javaScriptEnabled = true
             web.settings.domStorageEnabled = true
+            web.settings.setSupportZoom(false)
+            web.settings.builtInZoomControls = false
+            web.settings.displayZoomControls = false
             web.settings.mediaPlaybackRequiresUserGesture = false
             web.isVerticalScrollBarEnabled = false
             web.isHorizontalScrollBarEnabled = false
             web.overScrollMode = View.OVER_SCROLL_NEVER
-            web.addJavascriptInterface(NebulaBridge(onOpenConversation), "Android")
+            web.isFocusable = true
+            web.isFocusableInTouchMode = true
+            web.contentDescription = "nebula"
+            web.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            web.setOnTouchListener { view, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                false
+            }
+            val bridge = NebulaBridge(context.applicationContext, onOpenConversation, onGl)
+            web.addJavascriptInterface(bridge, "Android")
+            web.webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                    val line = "${message.messageLevel()} ${message.sourceId()}:${message.lineNumber()} ${message.message()}"
+                    Log.i("Nebula", line)
+                    appendNebulaConsole(context.applicationContext, line)
+                    return true
+                }
+            }
             web.webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                     return openAsset(context, request.url)
@@ -47,6 +76,17 @@ internal fun NebulaHost(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     web.ready = true
                     if (web.lastScript.isNotEmpty()) web.evaluateJavascript(web.lastScript, null)
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    error: android.webkit.WebResourceError?,
+                ) {
+                    if (request?.isForMainFrame == false) return
+                    val line = "page ${error?.errorCode} ${error?.description}"
+                    Log.e("Nebula", line)
+                    appendNebulaConsole(context.applicationContext, line)
                 }
             }
             web.loadUrl("https://appassets.androidplatform.net/assets/nebula/index.html")
@@ -65,6 +105,45 @@ internal fun NebulaHost(
     )
 }
 
+internal fun noteNebulaFallback(context: android.content.Context, lang: String): String? {
+    val file = File(context.filesDir, "setup/nebula-fallback-noted")
+    if (file.exists()) return null
+    file.parentFile?.mkdirs()
+    file.writeText("1")
+    return skyText(lang, "nebulaFallback")
+}
+
+private fun appendNebulaConsole(context: android.content.Context, line: String) {
+    val file = File(context.filesDir, "setup/nebula-console.txt")
+    file.parentFile?.mkdirs()
+    val prior = if (file.exists()) file.readText() else ""
+    val next = (prior + line.take(400) + "\n").takeLast(4000)
+    file.writeText(next)
+}
+
+private fun writeNebulaStatus(context: android.content.Context, json: String) {
+    val setup = File(context.filesDir, "setup")
+    setup.mkdirs()
+    File(setup, "nebula-status.json").writeText(json)
+    val obj = try {
+        JSONObject(json)
+    } catch (_: Throwable) {
+        null
+    }
+    val body = if (obj == null) {
+        json.take(500)
+    } else {
+        "renderer=${obj.optString("renderer")}\n" +
+            "version=${obj.optString("version")}\n" +
+            "fallback=${obj.optString("fallback")}\n" +
+            "frames=${obj.optInt("frames")}\n" +
+            "zoom=${obj.optDouble("zoom")}\n" +
+            "cameraZ=${obj.optDouble("cameraZ")}\n" +
+            "skyRenderer=${obj.optString("skyRenderer")}\n"
+    }
+    File(setup, "nebula-gl.txt").writeText(body)
+}
+
 private class NebulaWeb(context: android.content.Context) : WebView(context) {
     var ready = false
     var lastScript = ""
@@ -76,12 +155,41 @@ private class NebulaWeb(context: android.content.Context) : WebView(context) {
     }
 }
 
-private class NebulaBridge(private val onOpen: (String) -> Unit) {
+private class NebulaBridge(
+    private val appContext: android.content.Context,
+    private val onOpen: (String) -> Unit,
+    private val onGl: (String) -> Unit,
+) {
     private val main = Handler(Looper.getMainLooper())
+    private var lastStatus = ""
 
     @JavascriptInterface
     fun onOpenConversation(id: String) {
         main.post { onOpen(id) }
+    }
+
+    @JavascriptInterface
+    fun onLog(line: String) {
+        Log.i("Nebula", line)
+        appendNebulaConsole(appContext, line)
+    }
+
+    @JavascriptInterface
+    fun onStatus(json: String) {
+        if (json == lastStatus) return
+        lastStatus = json
+        writeNebulaStatus(appContext, json)
+        Log.i("Nebula", "gl ${json.take(240)}")
+    }
+
+    @JavascriptInterface
+    fun onNotice(kind: String) {
+        main.post { onGl(kind) }
+    }
+
+    @JavascriptInterface
+    fun onFallback(kind: String) {
+        main.post { onGl(if (kind == "canvas") "canvas" else kind) }
     }
 }
 

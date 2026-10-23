@@ -51,7 +51,10 @@ class ChatFlowTest {
             listOf(ExpertRecord("expert_0", 0, 1, 32, "experts/expert_0/router_key.f32", "experts/expert_0/adapter.gguf")),
         )
         shots.mkdirs()
-        shots.listFiles()?.forEach { it.delete() }
+        listOf(
+            "01-ime.png", "02-typing.png", "03-ack.png", "04-pending.png",
+            "05-train.png", "06-recall-cat.png", "07-zore.png", "ime-window.txt",
+        ).forEach { File(shots, it).delete() }
         device.executeShellCommand("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
         device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
         device.executeShellCommand("ime enable com.android.inputmethod.latin/.LatinIME")

@@ -205,6 +205,7 @@ function starTexture() {
 function fallbackNebula(canvas) {
   if (canvas.parentElement) canvas.parentElement.classList.add("nebula-fallback");
   return {
+    kind: "dead",
     setData() {},
     resize() {},
     highlight() { return { mounted: false, nodeIds: [] }; },
@@ -212,6 +213,20 @@ function fallbackNebula(canvas) {
     focus() {},
     setMode() {},
     dispose() {},
+    status() {
+      return {
+        renderer: "",
+        version: "none",
+        zoom: 0,
+        cameraZ: 0,
+        fallback: "dead",
+        frames: 0,
+        hitX: 0,
+        hitY: 0,
+        freshLabels: 0,
+        kind: "dead",
+      };
+    },
   };
 }
 
@@ -405,6 +420,13 @@ export function createNebula(canvas, hooks) {
   }
   if (!renderer.getContext()) return fallbackNebula(canvas);
   renderer.setClearColor(0x000000, 0);
+  renderer.debug.onShaderError = (_gl, program) => {
+    const log = _gl.getProgramInfoLog(program) || "shader link failed";
+    console.error("nebula shader", log);
+    broken = true;
+    running = false;
+    if (hooks.onBroken) hooks.onBroken(new Error(String(log).slice(0, 300)));
+  };
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   if (THREE.LinearSRGBColorSpace) renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
@@ -466,6 +488,8 @@ export function createNebula(canvas, hooks) {
   let ingress = null;
   let framed = null;
   let userMoved = false;
+  let currentFacts = [];
+  let broken = false;
   let recall = null;
   let mode = "full";
   let running = true;
@@ -914,6 +938,7 @@ export function createNebula(canvas, hooks) {
     clearWorld();
     const experts = data.experts || [];
     const facts = data.facts || [];
+    currentFacts = facts;
     const conversations = data.conversations || [];
     const links = (data.links || []).slice();
     const counts = new Map();
@@ -927,7 +952,7 @@ export function createNebula(canvas, hooks) {
     const rows = Math.ceil(count / cols);
     experts.forEach((expert, index) => {
       const active = counts.get(expert.name) || 0;
-      const fresh = Boolean(expert.writable && expert.explicit);
+      const fresh = Boolean(expert.explicit);
       let weight = 1.05 + 0.55 * Math.sqrt(active / maxCount);
       if (fresh) weight = Math.max(weight, 1.2);
       const col = index % cols;
@@ -1312,6 +1337,17 @@ export function createNebula(canvas, hooks) {
     dragging = false;
     if (wasPinch) return;
     if (moved < 5) {
+      const labeled = labels.find((item) => {
+        const rect = item.el.getBoundingClientRect();
+        return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+      });
+      if (labeled) {
+        const fact = currentFacts.find((item) => item.expert === labeled.expert.name && !item.superseded)
+          || currentFacts.find((item) => item.expert === labeled.expert.name)
+          || null;
+        hooks.onSelect({ kind: "expert", expert: labeled.expert, expertName: labeled.expert.name, fact });
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1319,7 +1355,15 @@ export function createNebula(canvas, hooks) {
       const hits = raycaster.intersectObjects(pickables, false);
       if (hits.length) {
         flyTo(hits[0].object);
-        hooks.onSelect(hits[0].object.userData);
+        const data = hits[0].object.userData || {};
+        if (data.kind === "expert") {
+          const fact = currentFacts.find((item) => item.expert === data.expertName && !item.superseded)
+            || currentFacts.find((item) => item.expert === data.expertName)
+            || null;
+          hooks.onSelect({ kind: "expert", expert: data.expert, expertName: data.expertName, fact });
+        } else {
+          hooks.onSelect(data);
+        }
       }
     }
   });
@@ -1335,7 +1379,7 @@ export function createNebula(canvas, hooks) {
   const clock = new THREE.Clock();
   let frozenAt = 0;
   function frame(now) {
-    if (!running) return;
+    if (!running || broken) return;
     if (mode === "dim") {
       looping = false;
       return;
@@ -1421,30 +1465,69 @@ export function createNebula(canvas, hooks) {
         mote.scale.setScalar(hot ? 0.55 : 0.2);
       });
     });
-    look.lerp(lookTarget, reduce ? 1 : 0.08);
-    camera.position.lerp(camTarget, reduce ? 1 : 0.08);
-    camera.lookAt(look);
-    placeLabels();
-    renderer.setRenderTarget(sceneTarget);
-    renderer.setClearColor(0x000000, 0);
-    renderer.clear();
-    renderer.render(scene, camera);
-    renderer.setRenderTarget(null);
-    renderer.clear();
-    renderer.render(bloomScene, bloomCamera);
-    renderer.autoClear = false;
-    renderer.render(overlay, camera);
-    renderer.autoClear = true;
+    try {
+      look.lerp(lookTarget, reduce ? 1 : 0.08);
+      camera.position.lerp(camTarget, reduce ? 1 : 0.08);
+      camera.lookAt(look);
+      placeLabels();
+      renderer.setRenderTarget(sceneTarget);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear();
+      renderer.render(scene, camera);
+      renderer.setRenderTarget(null);
+      renderer.clear();
+      renderer.render(bloomScene, bloomCamera);
+      renderer.autoClear = false;
+      renderer.render(overlay, camera);
+      renderer.autoClear = true;
+    } catch (error) {
+      broken = true;
+      running = false;
+      console.error("nebula render failed", error && error.message ? error.message : error);
+      if (hooks.onBroken) hooks.onBroken(error);
+    }
+  }
+
+  function status() {
+    const offset = camTarget.clone().sub(look);
+    let hitX = 0;
+    let hitY = 0;
+    const first = expertClouds.values().next().value;
+    if (first) {
+      const width = canvas.clientWidth || 1;
+      const height = canvas.clientHeight || 1;
+      first.getWorldPosition(scratch[0]);
+      const projected = projectScreen(scratch[0], width, height, scratch[1]);
+      hitX = projected.x;
+      hitY = projected.y;
+    }
+    const webgl2 = typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext;
+    return {
+      renderer: rendererName || String(gl.getParameter(gl.RENDERER) || ""),
+      version: webgl2 ? "webgl2" : "webgl",
+      zoom: offset.length(),
+      cameraZ: camTarget.z,
+      cameraX: camTarget.x,
+      dpr: window.devicePixelRatio || 1,
+      fallback: "none",
+      frames: frameCount,
+      hitX,
+      hitY,
+      freshLabels: labels.filter((item) => item.fresh).length,
+      kind: "three",
+    };
   }
 
   resize();
   frame();
   return {
+    kind: "three",
     setData,
     resize,
     refreshLabels,
     highlight,
     screenPoint: project,
+    status,
     focus(name) {
       const group = expertMeshes.get(name);
       if (group) flyTo(group);

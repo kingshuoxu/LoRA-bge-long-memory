@@ -227,6 +227,7 @@ class TrainService : Service() {
                 ),
                 expanded,
             )
+            NebulaGraph.rememberSession(store, expert)
             publish(status, "running", "recall", step, total, epochs, loss, started, "回忆检查", "")
             engine.rebuildIndex()
             if (job.optBoolean("benchmark")) {
@@ -286,6 +287,7 @@ class TrainService : Service() {
             ExpertRecord(expert, batch, expanded.size, 32, "experts/$expert/router_key.f32", "experts/$expert/adapter.gguf"),
             expanded,
         )
+        NebulaGraph.rememberSession(store, expert)
         publish(status, "running", "register", total, total, epochs, 0.6f, started, "注册专家", "")
         publish(status, "done", "done", total, total, epochs, 0.6f, started, "已登记 $expert", "")
     }

@@ -42,11 +42,32 @@ internal object NebulaGraph {
     }
 
     fun build(store: MemoryStore, lang: String, freshExpert: String? = null): String {
-        return document(store, lang, freshExpert).toString()
+        val fresh = if (freshExpert.isNullOrBlank()) emptySet() else setOf(freshExpert)
+        return document(store, lang, fresh).toString()
+    }
+
+    fun build(store: MemoryStore, lang: String, freshExperts: Set<String>): String {
+        return document(store, lang, freshExperts).toString()
+    }
+
+    /** 这一次打开应用后才巩固出来的专家。导入的专家不写这个文件。 */
+    fun sessionNew(store: MemoryStore): Set<String> {
+        val file = File(store.trainDir, "session-new.txt")
+        if (!file.exists()) return emptySet()
+        return file.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    fun rememberSession(store: MemoryStore, expert: String) {
+        if (expert.isBlank()) return
+        val file = File(store.trainDir, "session-new.txt")
+        file.parentFile?.mkdirs()
+        val names = sessionNew(store).toMutableSet()
+        if (!names.add(expert)) return
+        file.writeText(names.joinToString("\n") + "\n")
     }
 
     fun recall(store: MemoryStore, lang: String, expert: String?, fired: Boolean, sim: Double, query: String): String {
-        val doc = document(store, lang, null)
+        val doc = document(store, lang, emptySet())
         val facts = doc.getJSONArray("facts")
         val matched = JSONArray()
         val mounted = fired && !expert.isNullOrBlank()
@@ -89,7 +110,7 @@ internal object NebulaGraph {
             .toString()
     }
 
-    private fun document(store: MemoryStore, lang: String, freshExpert: String?): JSONObject {
+    private fun document(store: MemoryStore, lang: String, freshExperts: Set<String>): JSONObject {
         val expertsOut = JSONArray()
         val factsOut = JSONArray()
         val links = JSONArray()
@@ -100,7 +121,7 @@ internal object NebulaGraph {
             val rawFacts = readFacts(File(store.expertsDir, record.expert))
             val entities = rawFacts.map { it.optString("entity") }
             val label = displayName(entities, lang)
-            val fresh = record.expert == freshExpert
+            val fresh = freshExperts.contains(record.expert)
             expertsOut.put(
                 JSONObject()
                     .put("id", "expert:${record.expert}")

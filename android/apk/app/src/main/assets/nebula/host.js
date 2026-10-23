@@ -1,6 +1,7 @@
 import { createNebula } from "./nebula.js";
+import { createGl1Nebula, gl2Available } from "./nebula-gl1.js";
 
-const canvas = document.getElementById("nebula-canvas");
+let canvas = document.getElementById("nebula-canvas");
 const detail = document.getElementById("detail");
 const recallBanner = document.getElementById("recall-banner");
 const stateBanner = document.getElementById("state-banner");
@@ -65,6 +66,7 @@ function showFact(fact) {
   detail.innerHTML = parts.join("");
   const button = detail.querySelector("[data-jump]");
   if (button) button.addEventListener("click", () => jump(button.getAttribute("data-jump") || ""));
+  publish();
 }
 
 function showConversation(conversation) {
@@ -75,26 +77,155 @@ function showConversation(conversation) {
     + `<p class="row"><button type="button" data-jump="${esc(conversation.conversation_id || "")}">${esc(en ? "Open conversation" : "打开对话")}</button></p>`;
   const button = detail.querySelector("[data-jump]");
   if (button) button.addEventListener("click", () => jump(button.getAttribute("data-jump") || ""));
+  publish();
 }
 
-const nebula = createNebula(canvas, {
+function log(line) {
+  const text = String(line || "");
+  console.info(text);
+  if (window.Android && Android.onLog) Android.onLog(text.slice(0, 500));
+}
+
+window.addEventListener("error", (event) => {
+  log(`error ${event.message} ${event.filename || ""}:${event.lineno || 0}`);
+});
+window.addEventListener("unhandledrejection", (event) => {
+  log(`rejection ${event.reason && event.reason.message ? event.reason.message : event.reason}`);
+});
+
+let lastFacts = [];
+let noticed = false;
+
+function replaceCanvas() {
+  const next = document.createElement("canvas");
+  next.id = "nebula-canvas";
+  next.style.width = "100%";
+  next.style.height = "100%";
+  next.style.display = "block";
+  next.style.touchAction = "none";
+  canvas.replaceWith(next);
+  canvas = next;
+  return next;
+}
+
+function deadNebula() {
+  return {
+    kind: "dead",
+    setData() {},
+    resize() {},
+    refreshLabels() {},
+    highlight() { return { mounted: false, nodeIds: [] }; },
+    focus() {},
+    setMode() {},
+    dispose() {},
+    status() {
+      return {
+        renderer: "",
+        version: "none",
+        zoom: 0,
+        cameraZ: 0,
+        cameraX: 0,
+        fallback: "canvas",
+        frames: 0,
+        hitX: 0,
+        hitY: 0,
+        freshLabels: 0,
+        kind: "dead",
+      };
+    },
+  };
+}
+
+const hooks = {
   onHover() {},
   onSelect(data) {
     if (!data) return;
     if (data.kind === "fact" && data.fact) showFact(data.fact);
     else if (data.kind === "conversation" && data.conversation) showConversation(data.conversation);
-    else hideDetail();
+    else if (data.kind === "expert") {
+      const name = data.expertName || (data.expert && data.expert.name) || "";
+      const fact = data.fact || lastFacts.find((item) => item.expert === name && !item.superseded) || lastFacts.find((item) => item.expert === name);
+      if (fact) showFact(fact);
+      else hideDetail();
+    } else hideDetail();
   },
-});
+  onBroken(error) {
+    log(`three broken ${error && error.message ? error.message : error}`);
+    mountGl1("render");
+  },
+};
+
+let nebula = null;
+
+function mountGl1(reason) {
+  if (nebula && nebula.kind === "gl1") return nebula;
+  const previous = nebula;
+  nebula = null;
+  try {
+    if (previous && previous.dispose) previous.dispose();
+  } catch (error) {
+    log(`dispose ${error && error.message ? error.message : error}`);
+  }
+  try {
+    replaceCanvas();
+    const gl1 = createGl1Nebula(canvas, hooks);
+    if (gl1) {
+      nebula = gl1;
+      log(`fallback webgl1 ${reason || ""}`);
+      if (!noticed && window.Android && Android.onNotice) {
+        noticed = true;
+        Android.onNotice("webgl1");
+      }
+      if (lastPayload) applyMessage(lastPayload);
+      publish();
+      return gl1;
+    }
+  } catch (error) {
+    log(`webgl1 failed ${error && error.message ? error.message : error}`);
+  }
+  nebula = deadNebula();
+  log(`fallback canvas ${reason || ""}`);
+  if (window.Android && Android.onFallback) Android.onFallback("canvas");
+  if (!noticed && window.Android && Android.onNotice) {
+    noticed = true;
+    Android.onNotice("canvas");
+  }
+  publish();
+  return null;
+}
+
+function boot() {
+  const probe = gl2Available();
+  log(`webgl2 probe ok=${probe.ok} renderer=${probe.renderer || ""} ${probe.reason || ""}`);
+  if (probe.ok) {
+    try {
+      const created = createNebula(canvas, hooks);
+      if (nebula && nebula.kind === "gl1") {
+        try { if (created && created.dispose) created.dispose(); } catch (error) { log(String(error)); }
+        return;
+      }
+      if (created && created.kind !== "dead") {
+        nebula = created;
+        log(`webgl2 renderer=${probe.renderer || ""}`);
+        publish();
+        return;
+      }
+    } catch (error) {
+      log(`webgl2 init ${error && error.message ? error.message : error}`);
+    }
+  }
+  if (!(nebula && (nebula.kind === "gl1" || nebula.kind === "three"))) mountGl1(probe.reason || "no-webgl2");
+}
 
 let lastData = "";
+let lastPayload = null;
 
 function setLang(lang) {
   document.documentElement.lang = lang === "en" ? "en" : "zh-CN";
   empty.textContent = lang === "en"
     ? "No experts yet. After consolidation, facts become stars."
     : "还没有专家。巩固之后，事实会变成星。";
-  if (nebula.refreshLabels) nebula.refreshLabels();
+  if (nebula && nebula.refreshLabels) nebula.refreshLabels();
 }
 
 function showRecall(trace) {
@@ -109,8 +240,10 @@ function showState(dim) {
 }
 
 function applyMessage(msg) {
+  if (!nebula) return;
   if (msg.lang) setLang(msg.lang);
   const data = msg.data || { experts: [], facts: [], conversations: [], links: [] };
+  lastFacts = data.facts || [];
   const raw = JSON.stringify(data);
   if (raw !== lastData) {
     nebula.setData(data);
@@ -135,6 +268,7 @@ function applyMessage(msg) {
   }
   if (nebula.resize) nebula.resize();
   paintChrome(msg);
+  publish();
 }
 
 function paintChrome(msg) {
@@ -152,19 +286,60 @@ function paintChrome(msg) {
   nav.innerHTML = labels.map(([id, label]) => `<span class="${id === tab ? "on" : ""}">${label}</span>`).join("");
 }
 
+function snapshot() {
+  const sky = window.sky || {};
+  const body = nebula && nebula.status ? nebula.status() : {
+    renderer: "",
+    version: "none",
+    zoom: 0,
+    cameraZ: 0,
+    cameraX: 0,
+    fallback: "canvas",
+    frames: 0,
+    hitX: 0,
+    hitY: 0,
+    freshLabels: 0,
+    kind: "dead",
+  };
+  body.detail = Boolean(detail && !detail.hidden);
+  body.detailText = detail ? String(detail.innerText || "").slice(0, 240) : "";
+  body.skyRenderer = sky.renderer || "";
+  body.skyVersion = sky.version || "";
+  if (!body.renderer && body.skyRenderer) body.renderer = body.skyRenderer;
+  return body;
+}
+
+function publish() {
+  try {
+    const payload = JSON.stringify(snapshot());
+    window.__nebulaStatus = payload;
+    if (window.Android && Android.onStatus) Android.onStatus(payload);
+  } catch (error) {
+    log(`status ${error && error.message ? error.message : error}`);
+  }
+}
+
 window.nebulaHost = {
   apply(payload) {
     const msg = typeof payload === "string" ? JSON.parse(payload) : payload;
+    lastPayload = msg;
     applyMessage(msg);
   },
   resize() {
-    if (nebula.resize) nebula.resize();
+    if (nebula && nebula.resize) nebula.resize();
+  },
+  probe() {
+    publish();
+    return window.__nebulaStatus || "";
   },
 };
 
 window.addEventListener("resize", () => {
-  if (nebula.resize) nebula.resize();
+  if (nebula && nebula.resize) nebula.resize();
 });
+setInterval(publish, 400);
+
+boot();
 
 const shot = new URLSearchParams(location.search).get("shot");
 if (shot) {

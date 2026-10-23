@@ -162,11 +162,14 @@ echo "upgrade preserved memory, models, settings; versionCode 1003"
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest,com.lorabge.memory.NebulaGestureTest --no-daemon
 mkdir -p "$STAGE/shots"
 "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory tar -C files/e2e -cf - . >"$STAGE/shots.tar"
 tar -C "$STAGE/shots" -xf "$STAGE/shots.tar"
-for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png; do
+"$ADB" -s "emulator-$PORT" pull /sdcard/nebula-gesture.mp4 "$STAGE/shots/nebula-gesture.mp4"
+for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png nebula-gesture.mp4 nebula-renderer.txt; do
   test -s "$STAGE/shots/$name"
 done
-echo "emulator chat flow saved screenshots"
+echo "nebula renderer:"
+cat "$STAGE/shots/nebula-renderer.txt"
+echo "emulator chat flow and nebula gestures saved"
