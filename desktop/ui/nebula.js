@@ -682,54 +682,204 @@ export function createNebula(canvas, hooks) {
     return labelLayer;
   }
 
+  const scratch = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  let framedPage = null;
+
+  function projectScreen(vector, width, height, target) {
+    target.copy(vector).project(camera);
+    return {
+      x: (target.x * 0.5 + 0.5) * width,
+      y: (-target.y * 0.5 + 0.5) * height,
+    };
+  }
+
+  function leaderSvg() {
+    const layer = ensureLabelLayer();
+    if (!layer) return null;
+    let svg = layer.querySelector(".nebula-leaders");
+    if (!svg) {
+      svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("class", "nebula-leaders");
+      svg.setAttribute("aria-hidden", "true");
+      layer.insertBefore(svg, layer.firstChild);
+    }
+    return svg;
+  }
+
+  function fillLabel(item) {
+    const name = (item.expert && (item.expert.display_name || item.expert.name)) || "";
+    const countText = window.i18n && window.i18n.t
+      ? window.i18n.t("nebula.count", { n: item.count })
+      : String(item.count);
+    const nameEl = item.el.querySelector(".name");
+    const metaEl = item.el.querySelector(".meta");
+    const tagEl = item.el.querySelector(".tag");
+    if (nameEl) nameEl.textContent = name;
+    if (metaEl) metaEl.textContent = ` · ${countText}`;
+    if (!tagEl) return;
+    if (item.fresh) {
+      const word = window.i18n && window.i18n.t ? window.i18n.t("nebula.new") : "New";
+      tagEl.hidden = false;
+      tagEl.textContent = ` · ${word}`;
+    } else {
+      tagEl.hidden = true;
+      tagEl.textContent = "";
+    }
+  }
+
+  function refreshLabels() {
+    labels.forEach((item) => fillLabel(item));
+    placeLabels();
+  }
+
+  function cloudMetrics(group, width, height) {
+    group.getWorldPosition(scratch[0]);
+    const radius = group.userData.radius || 8;
+    const center = projectScreen(scratch[0], width, height, scratch[1]);
+    const cx = center.x;
+    const cy = center.y;
+    scratch[2].set(scratch[0].x + radius, scratch[0].y, scratch[0].z);
+    const rimX = projectScreen(scratch[2], width, height, scratch[1]);
+    scratch[2].set(scratch[0].x, scratch[0].y + radius * 0.72, scratch[0].z);
+    const rimY = projectScreen(scratch[2], width, height, scratch[1]);
+    const screenR = Math.max(
+      Math.hypot(rimX.x - cx, rimX.y - cy),
+      Math.hypot(rimY.x - cx, rimY.y - cy),
+    ) + 16;
+    let dirx = scratch[0].x;
+    let diry = scratch[0].y;
+    const dlen = Math.hypot(dirx, diry);
+    if (dlen < 1e-4) {
+      dirx = 0;
+      diry = -1;
+    } else {
+      dirx /= dlen;
+      diry /= dlen;
+    }
+    scratch[2].set(scratch[0].x + dirx, scratch[0].y + diry, scratch[0].z);
+    const further = projectScreen(scratch[2], width, height, scratch[1]);
+    let ux = further.x - cx;
+    let uy = further.y - cy;
+    const olen = Math.hypot(ux, uy) || 1;
+    ux /= olen;
+    uy /= olen;
+    return { cx, cy, screenR, ux, uy };
+  }
+
+  function clampBox(x, y, hw, hh, width, height, pad) {
+    const minX = pad + hw;
+    const maxX = Math.max(minX, width - pad - hw);
+    const minY = pad + hh;
+    const maxY = Math.max(minY, height - pad - hh);
+    return {
+      x: Math.min(maxX, Math.max(minX, x)),
+      y: Math.min(maxY, Math.max(minY, y)),
+    };
+  }
+
+  function scoreBox(box, item, clouds, placed, prefer) {
+    let penalty = 0;
+    placed.forEach((spot) => {
+      const ox = item.hw + spot.hw + 10 - Math.abs(box.x - spot.x);
+      const oy = item.hh + spot.hh + 8 - Math.abs(box.y - spot.y);
+      if (ox > 0 && oy > 0) penalty += ox * oy;
+    });
+    clouds.forEach((cloud) => {
+      const dx = Math.max(Math.abs(box.x - cloud.cx) - item.hw, 0);
+      const dy = Math.max(Math.abs(box.y - cloud.cy) - item.hh, 0);
+      // 全页取景下云团互相重叠。标签必须离开自己的星团，邻云只避开星核。
+      const avoid = cloud === item ? cloud.screenR + 6 : cloud.screenR * 0.42;
+      const intrusion = avoid - Math.hypot(dx, dy);
+      if (intrusion > 0) penalty += intrusion * intrusion;
+    });
+    return penalty * 6 + Math.hypot(box.x - item.cx, box.y - item.cy) * 0.08 - prefer * 24;
+  }
+
+  function appendLeader(svg, item, box) {
+    const vx = box.x - item.cx;
+    const vy = box.y - item.cy;
+    const vlen = Math.hypot(vx, vy) || 1;
+    const ux = vx / vlen;
+    const uy = vy / vlen;
+    const along = Math.min(item.hw / (Math.abs(ux) || 1e-4), item.hh / (Math.abs(uy) || 1e-4));
+    const x1 = box.x - ux * along;
+    const y1 = box.y - uy * along;
+    const x2 = item.cx + ux * item.screenR;
+    const y2 = item.cy + uy * item.screenR;
+    if (Math.hypot(x2 - x1, y2 - y1) < 8) return;
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", x1.toFixed(1));
+    line.setAttribute("y1", y1.toFixed(1));
+    line.setAttribute("x2", x2.toFixed(1));
+    line.setAttribute("y2", y2.toFixed(1));
+    svg.appendChild(line);
+  }
+
   function placeLabels() {
-    const width = canvas.clientWidth || 1;
-    const height = canvas.clientHeight || 1;
-    const marginX = Math.min(150, width * 0.16);
-    const marginY = Math.min(46, height * 0.08);
+    const width = canvas.clientWidth || 0;
+    const height = canvas.clientHeight || 0;
+    const svg = leaderSvg();
+    if (svg) {
+      svg.setAttribute("viewBox", `0 0 ${Math.max(1, width)} ${Math.max(1, height)}`);
+      svg.setAttribute("width", String(Math.max(1, width)));
+      svg.setAttribute("height", String(Math.max(1, height)));
+      svg.replaceChildren();
+    }
+    if (width < 40 || height < 40 || !labels.length) return;
+    const pad = 12;
+    const maxLabel = Math.max(96, width - pad * 2);
+    labels.forEach((item) => { item.el.style.maxWidth = `${maxLabel}px`; });
+    const clouds = labels.map((item) => {
+      const screen = cloudMetrics(item.group, width, height);
+      return {
+        ...item,
+        ...screen,
+        hw: Math.max(8, item.el.offsetWidth / 2),
+        hh: Math.max(8, item.el.offsetHeight / 2),
+      };
+    });
+    const midX = clouds.reduce((sum, cloud) => sum + cloud.cx, 0) / clouds.length;
+    const midY = clouds.reduce((sum, cloud) => sum + cloud.cy, 0) / clouds.length;
     const placed = [];
-    labels.forEach(({ el, group }) => {
-      const origin = group.position.clone();
-      const center = origin.clone().project(camera);
-      const cx = (center.x * 0.5 + 0.5) * width;
-      const cy = (-center.y * 0.5 + 0.5) * height;
-      const dir = origin.clone();
-      if (dir.lengthSq() < 1e-4) dir.set(0, -1, 0);
-      dir.normalize();
-      const outward = origin.clone().add(dir).project(camera);
-      const ox = (outward.x * 0.5 + 0.5) * width - cx;
-      const oy = (-outward.y * 0.5 + 0.5) * height - cy;
-      const olen = Math.hypot(ox, oy) || 1;
-      const ux = ox / olen;
-      const uy = oy / olen;
-      const candidates = [];
-      [54, 86, 118, 28].forEach((dist) => {
-        candidates.push([cx + ux * dist, cy + uy * dist]);
-        candidates.push([cx - uy * dist, cy + ux * dist]);
-        candidates.push([cx + uy * dist * 0.8, cy - ux * dist * 0.8]);
-      });
-      candidates.push([cx, cy + 36], [cx, cy - 36]);
+    clouds.slice().sort((a, b) => (
+      Math.hypot(b.cx - midX, b.cy - midY) - Math.hypot(a.cx - midX, a.cy - midY)
+    )).forEach((item) => {
+      const base = Math.atan2(item.uy, item.ux);
       let best = null;
-      candidates.forEach(([x, y]) => {
-        if (x < marginX || y < marginY || x > width - marginX || y > height - marginY) return;
-        let crowd = 0;
-        placed.forEach((spot) => {
-          crowd += Math.max(0, 108 - Math.hypot(x - spot[0], y - spot[1]));
-        });
-        const edge = Math.min(x - marginX, width - marginX - x, y - marginY, height - marginY - y);
-        const score = crowd * 4 - edge;
-        if (!best || score < best.score) best = { x, y, score };
-      });
-      if (!best) {
-        best = {
-          x: Math.min(width - marginX, Math.max(marginX, cx)),
-          y: Math.min(height - marginY, Math.max(marginY, cy)),
-        };
+      const consider = (x, y, prefer) => {
+        const box = clampBox(x, y, item.hw, item.hh, width, height, pad);
+        const score = scoreBox(box, item, clouds, placed, prefer);
+        if (!best || score < best.score) best = { x: box.x, y: box.y, score };
+      };
+      for (let i = 0; i < 24; i += 1) {
+        const delta = (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 12);
+        const ang = base + delta;
+        const ux = Math.cos(ang);
+        const uy = Math.sin(ang);
+        const support = item.hw * Math.abs(ux) + item.hh * Math.abs(uy);
+        const dist = item.screenR + 14 + support;
+        const prefer = ux * item.ux + uy * item.uy;
+        consider(item.cx + ux * dist, item.cy + uy * dist, prefer);
+        consider(item.cx + ux * (dist + 48), item.cy + uy * (dist + 48), prefer);
       }
-      placed.push([best.x, best.y]);
-      el.style.left = `${best.x}px`;
-      el.style.top = `${best.y}px`;
-      el.classList.toggle("lit", Boolean(recall && recall.expertName === group.userData.expertName));
+      consider(item.cx, pad + item.hh, 0.15);
+      consider(item.cx, height - pad - item.hh, 0.15);
+      consider(pad + item.hw, item.cy, 0.15);
+      consider(width - pad - item.hw, item.cy, 0.15);
+      const spanX = Math.max(1, width - pad * 2 - item.hw * 2);
+      const spanY = Math.max(1, height - pad * 2 - item.hh * 2);
+      for (let gy = 0; gy < 5; gy += 1) {
+        for (let gx = 0; gx < 4; gx += 1) {
+          consider(pad + item.hw + spanX * (gx / 3), pad + item.hh + spanY * (gy / 4), 0);
+        }
+      }
+      if (!best) best = clampBox(item.cx, item.cy, item.hw, item.hh, width, height, pad);
+      placed.push({ x: best.x, y: best.y, hw: item.hw, hh: item.hh });
+      item.el.style.left = `${best.x}px`;
+      item.el.style.top = `${best.y}px`;
+      item.el.dataset.cloud = `${item.cx.toFixed(1)},${item.cy.toFixed(1)},${item.screenR.toFixed(1)}`;
+      item.el.classList.toggle("lit", Boolean(recall && recall.expertName === item.group.userData.expertName));
+      if (svg) appendLeader(svg, item, best);
     });
   }
 
@@ -924,17 +1074,22 @@ export function createNebula(canvas, hooks) {
       el.className = `nebula-label${group.userData.fresh ? " fresh" : ""}`;
       const name = document.createElement("span");
       name.className = "name";
-      name.textContent = expert.display_name || expert.name;
       const meta = document.createElement("span");
       meta.className = "meta";
-      const count = window.i18n && window.i18n.t
-        ? window.i18n.t("nebula.count", { n: counts.get(expert.name) || 0 })
-        : String(counts.get(expert.name) || 0);
-      const badge = group.userData.fresh && window.i18n && window.i18n.t ? ` · ${window.i18n.t("nebula.new")}` : "";
-      meta.textContent = `${count}${badge}`;
-      el.append(name, meta);
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.hidden = true;
+      el.append(name, meta, tag);
+      const item = {
+        el,
+        group,
+        expert,
+        count: counts.get(expert.name) || 0,
+        fresh: Boolean(group.userData.fresh),
+      };
+      fillLabel(item);
       layer.appendChild(el);
-      labels.push({ el, group });
+      labels.push(item);
     });
 
     const freshGroups = [...expertClouds.values()].filter((group) => group.userData.fresh);
@@ -968,6 +1123,7 @@ export function createNebula(canvas, hooks) {
       radius: Math.max(12, sphere.radius * 0.9),
     };
     applyFrame(true);
+    placeLabels();
   }
 
   function applyFrame(immediate) {
@@ -978,7 +1134,9 @@ export function createNebula(canvas, hooks) {
     const aspect = Math.max(0.35, camera.aspect || 1);
     const distY = radius / Math.tan(fov / 2);
     const distX = radius / (Math.tan(fov / 2) * aspect);
-    const dist = Math.max(distY, distX) * 0.53;
+    // 全页星云保持原来的取景。对话侧栏改远一点，云团连同边距都落在视口里。
+    const page = Boolean(canvas.closest("#nebula-host"));
+    const dist = Math.max(distY, distX) * (page ? 0.53 : 1.4);
     camTarget.set(center.x, center.y, center.z + dist);
     if (immediate) {
       look.copy(lookTarget);
@@ -999,7 +1157,13 @@ export function createNebula(canvas, hooks) {
     bloomUniforms.uTexel.value.set(2.2 / bufferW, 2.2 / bufferH);
     camera.aspect = width / Math.max(1, height);
     camera.updateProjectionMatrix();
+    const page = Boolean(canvas.closest("#nebula-host"));
+    if (framedPage !== page) {
+      framedPage = page;
+      userMoved = false;
+    }
     if (!userMoved) applyFrame(true);
+    placeLabels();
   }
 
   function project(nodeId) {
@@ -1217,10 +1381,10 @@ export function createNebula(canvas, hooks) {
         mote.scale.setScalar(hot ? 1.05 : 0.5);
       });
     });
-    placeLabels();
     look.lerp(lookTarget, reduce ? 1 : 0.08);
     camera.position.lerp(camTarget, reduce ? 1 : 0.08);
     camera.lookAt(look);
+    placeLabels();
     renderer.setRenderTarget(sceneTarget);
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
@@ -1238,6 +1402,7 @@ export function createNebula(canvas, hooks) {
   return {
     setData,
     resize,
+    refreshLabels,
     highlight,
     screenPoint: project,
     setMode(next) {

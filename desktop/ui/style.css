@@ -508,17 +508,33 @@ textarea, input[type="text"], .fact input, .fact textarea {
   pointer-events: none;
   overflow: hidden;
 }
+.nebula-leaders {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.nebula-leaders line {
+  stroke: rgba(236, 228, 214, 0.38);
+  stroke-width: 1;
+  stroke-linecap: round;
+}
 .nebula-label {
   position: absolute;
+  z-index: 1;
   transform: translate(-50%, -50%);
-  text-align: center;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 0;
+  max-width: calc(100% - 24px);
+  text-align: left;
   color: rgba(236, 228, 214, 0.8);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 14px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
 }
 .nebula-label .name {
-  display: block;
-  max-width: 220px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--display);
@@ -526,19 +542,21 @@ textarea, input[type="text"], .fact input, .fact textarea {
   font-weight: 500;
   letter-spacing: 0.06em;
 }
-.nebula-label .meta {
-  display: block;
-  margin-top: 1px;
+.nebula-label .meta,
+.nebula-label .tag {
+  flex: none;
   font-family: var(--serif);
-  font-size: 12px;
-  letter-spacing: 0.06em;
-  color: rgba(214, 206, 192, 0.72);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: rgba(214, 206, 192, 0.78);
 }
+.nebula-label .tag { color: rgba(255, 228, 176, 0.96); }
 .nebula-label.fresh .name {
   color: rgba(255, 228, 176, 0.98);
   animation: nebula-shimmer 3.4s ease-in-out infinite;
 }
-.nebula-label.lit .name { color: rgba(255, 246, 226, 0.98); }
+.nebula-label.lit .name,
+.nebula-label.lit .meta { color: rgba(255, 246, 226, 0.98); }
 @keyframes nebula-shimmer {
   0%, 100% { opacity: 0.76; }
   50% { opacity: 1; text-shadow: 0 0 16px rgba(255, 214, 140, 0.9), 0 1px 2px rgba(0, 0, 0, 0.9); }

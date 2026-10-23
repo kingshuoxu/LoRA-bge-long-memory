@@ -916,6 +916,7 @@ function bindLanguage() {
     else if (state.view === "memory") loadMemory().catch(showError);
     else if (state.view === "nebula") openNebula().catch(showError);
     else if (state.view === "consolidate") renderStages();
+    if (state.nebula && state.nebula.refreshLabels) state.nebula.refreshLabels();
     if (state.recall && state.nebula && state.nebula.highlight) state.nebula.highlight(state.recall);
     refreshHealth().catch(() => {});
   });
