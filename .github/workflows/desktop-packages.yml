@@ -126,9 +126,20 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          script="$(find desktop/dist -type f \( -name 'e2e-check.sh' -o -name 'e2e-check.cmd' \) | head -n 1)"
+          # 安装包里 .sh 和 .cmd 都在。按系统选，不能拿 find 的第一项，
+          # 否则 macOS 会选中 .cmd 再去调用不存在的 cygpath。
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            name="e2e-check.cmd"
+          else
+            name="e2e-check.sh"
+          fi
+          script=""
+          for candidate in $(find desktop/dist -type f -name "$name"); do
+            script="$candidate"
+            break
+          done
           if [ -z "$script" ]; then
-            echo "packaged e2e-check was not found" >&2
+            echo "packaged $name was not found" >&2
             exit 1
           fi
           root="$(dirname "$script")"
@@ -139,8 +150,8 @@ jobs:
           home="${RUNNER_TEMP:-/tmp}/lora-e2e-home"
           rm -rf "$home"
           mkdir -p "$LORA_MEMORY_MODELS" "$home"
-          echo "running packaged training check from $root"
-          if [ "$(basename "$script")" = "e2e-check.cmd" ]; then
+          echo "running packaged training check from $root via $script"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
             win_script="$(cygpath -w "$script")"
             win_home="$(cygpath -w "$home")"
             win_models="$(cygpath -w "$LORA_MEMORY_MODELS")"
