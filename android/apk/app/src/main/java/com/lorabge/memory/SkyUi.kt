@@ -97,7 +97,8 @@ sealed class SkyEvent {
     data object NewChat : SkyEvent()
     data object ImportExperts : SkyEvent()
     data object SelfCheck : SkyEvent()
-    data object ToggleGpu : SkyEvent()
+    data class BackendMode(val mode: String) : SkyEvent()
+    data object ExportDiagnostics : SkyEvent()
 }
 
 fun skyText(lang: String, key: String): String {
@@ -127,7 +128,10 @@ fun skyText(lang: String, key: String): String {
         "recall" to "刚才路由到这里",
         "import" to "导入已推送的专家",
         "selfCheck" to "路由自检",
-        "gpu" to "切换 CPU / GPU",
+        "backendAuto" to "自动",
+        "backendGpu" to "强制 GPU",
+        "backendCpu" to "强制 CPU",
+        "exportDiag" to "导出诊断",
     )
     val en = mapOf(
         "chat" to "Chat",
@@ -155,7 +159,10 @@ fun skyText(lang: String, key: String): String {
         "recall" to "Last route landed here",
         "import" to "Import experts",
         "selfCheck" to "Route check",
-        "gpu" to "CPU / GPU",
+        "backendAuto" to "Auto",
+        "backendGpu" to "Force GPU",
+        "backendCpu" to "Force CPU",
+        "exportDiag" to "Export diagnostics",
     )
     return (if (lang == "en") en else zh)[key] ?: key
 }
@@ -412,9 +419,14 @@ private fun NebulaPane(state: SkyState) {
 private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(skyText(state.lang, "backendAuto"), color = Accent, modifier = Modifier.clickable { onEvent(SkyEvent.BackendMode("auto")) })
+            Text(skyText(state.lang, "backendGpu"), color = Gold, modifier = Modifier.clickable { onEvent(SkyEvent.BackendMode("gpu")) })
+            Text(skyText(state.lang, "backendCpu"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.BackendMode("cpu")) })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
             Text(skyText(state.lang, "import"), color = Accent, modifier = Modifier.clickable { onEvent(SkyEvent.ImportExperts) })
             Text(skyText(state.lang, "selfCheck"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.SelfCheck) })
-            Text(skyText(state.lang, "gpu"), color = Gold, modifier = Modifier.clickable { onEvent(SkyEvent.ToggleGpu) })
+            Text(skyText(state.lang, "exportDiag"), color = Gold, modifier = Modifier.clickable { onEvent(SkyEvent.ExportDiagnostics) })
         }
         if (state.note.isNotEmpty()) {
             Text(state.note, color = Muted, modifier = Modifier.padding(vertical = 6.dp))

@@ -1,0 +1,124 @@
+diff --git a/examples/training/finetune-lora.cpp b/examples/training/finetune-lora.cpp
+index 40430d1a7..2a325bc4e 100644
+--- a/examples/training/finetune-lora.cpp
++++ b/examples/training/finetune-lora.cpp
+@@ -267,6 +267,7 @@ static void print_lora_usage() {
+     printf("\nTraining Options:\n");
+     printf("  --num-epochs N             Number of training epochs (default: 1)\n");
+     printf("  --assistant-loss-only      Use JSON dataset format with masked loss (ChatML/conversation format)\n");
++    printf("  --grad-accum N             Dataset rows per AdamW step (default: 16)\n");
+     printf("                             Only computes loss on assistant responses, not system/user prompts\n");
+     printf("  --chat-template PATH  Optional Jinja chat template to render JSON dataset (matches HF apply_chat_template)\n");
+     printf("  --learning-rate F          AdamW learning rate (default: 1e-5)\n");
+@@ -505,6 +506,7 @@ struct finetune_params {
+     bool auto_resume = false;
+     std::string chat_template_path;
+     bool assistant_loss_only = false;
++    int32_t grad_accum = 16;
+     uint32_t lora_seed = 42;
+ };
+ 
+@@ -528,6 +530,10 @@ static bool parse_finetune_args(int& argc, char** argv, finetune_params& ft_para
+             ft_params.assistant_loss_only = true;
+             remove_arg_single(i);
+             i--;
++        } else if (strcmp(argv[i], "--grad-accum") == 0 && i + 1 < argc) {
++            ft_params.grad_accum = std::atoi(argv[i + 1]);
++            remove_arg_pair(i);
++            i--;
+         }
+     }
+ 
+@@ -822,6 +828,11 @@ int main(int argc, char ** argv) {
+ 
+     LOG_INF("Training split: datapoints=%lld, batches_per_epoch=%lld\n",
+         (long long) total_datapoints, (long long) training_batches_per_epoch);
++    if (ft_params.grad_accum < 1) {
++        LOG_ERR("--grad-accum must be >= 1, got %d\n", ft_params.grad_accum);
++        return 1;
++    }
++    LOG_INF("Grad accumulation: %d dataset rows per AdamW step\n", ft_params.grad_accum);
+     LOG_INF("Optimizer: adamw scheduler=%s lr=%.4e wd=%.4e total_steps=%lld\n",
+             lora_lr_scheduler_type_to_cstr(lr_scheduler.schedule), lr_scheduler.lr_init,
+             lr_scheduler.weight_decay, (long long) lr_scheduler.total_steps);
+@@ -880,6 +891,7 @@ int main(int argc, char ** argv) {
+     lopt_params.checkpoint_path      = checkpoint_loaded ? optimizer_checkpoint_path.c_str() : nullptr;
+     lopt_params.load_optimizer_state = checkpoint_loaded;
+     lopt_params.assistant_loss_only  = ft_params.assistant_loss_only;
++    lopt_params.grad_accum           = ft_params.grad_accum;
+ 
+     llama_opt_init(ctx.get(), model.get(), lopt_params);
+ 
+diff --git a/include/llama.h b/include/llama.h
+index bb07f6d4e..3b4b3f04c 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -1424,6 +1424,10 @@ extern "C" {
+         bool load_optimizer_state;          // whether to load optimizer state from checkpoint_path
+ 
+         bool assistant_loss_only;
++
++        // Average this many dataset rows before one AdamW step.
++        // 1 updates on every row. The memory recipe uses 16, matching FactDataset's batch size.
++        int32_t grad_accum;
+     };
+ 
+     LLAMA_API struct llama_opt_params llama_opt_default_params(void);
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index b8e0444df..29bea6baa 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2111,7 +2111,8 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
+         GGML_OPT_LOSS_TYPE_CROSS_ENTROPY_MASKED : GGML_OPT_LOSS_TYPE_CROSS_ENTROPY;
+ 
+     ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), opt_loss_type);
+-    opt_params.opt_period      = n_batch / n_ubatch;
++    const uint32_t samples_per_step = lopt_params.grad_accum > 0 ? (uint32_t) lopt_params.grad_accum : 1;
++    opt_params.opt_period      = (n_batch / n_ubatch) * samples_per_step;
+     opt_params.get_opt_pars    = lopt_params.get_opt_pars;
+     opt_params.get_opt_pars_ud = lopt_params.get_opt_pars_ud;
+     opt_params.optimizer       = lopt_params.optimizer_type;
+@@ -3154,6 +3155,7 @@ struct llama_opt_params llama_opt_default_params(void) {
+         /*checkpoint_path      =*/ nullptr,
+         /*load_optimizer_state =*/ false,
+         /*assistant_loss_only  =*/ false,
++        /*grad_accum           =*/ 1,
+     };
+ }
+ 
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index e2cca66e4..dba8f37fa 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -661,8 +661,11 @@ struct llm_tokenizer_wpm_session {
+     llm_tokenizer_wpm_session(const llama_vocab & vocab) : vocab(vocab) {}
+ 
+     void tokenize(const std::string & text, std::vector<llama_token> & output) {
+-        // normalize and split by whitespace
+-        std::vector<std::string> words = preprocess(text);
++        // bert-bge-cased matches HuggingFace BertTokenizer(do_lower_case=false).
++        // The default WPM path lowercases, which turns "CEO" into "ceo" while
++        // bge-small-zh-v1.5 keeps the uppercase word and emits UNK.
++        const bool do_lower = vocab.get_tokenizer_pre() != "bert-bge-cased";
++        std::vector<std::string> words = preprocess(text, do_lower);
+         // bos token prepended already
+ 
+         // find the longest tokens that form the words
+@@ -707,7 +710,7 @@ struct llm_tokenizer_wpm_session {
+     }
+ 
+     // TODO: reduce string copies by using cpts_offs array
+-    static std::vector<std::string> preprocess(const std::string & text)  {
++    static std::vector<std::string> preprocess(const std::string & text, bool do_lower)  {
+         const std::vector<uint32_t> cpts_nfd = unicode_cpts_normalize_nfd(unicode_cpts_from_utf8(text));
+         std::vector<std::string> words(1, "");
+ 
+@@ -726,7 +729,7 @@ struct llm_tokenizer_wpm_session {
+                 continue;
+             }
+ 
+-            const std::string s = unicode_cpt_to_utf8(unicode_tolower(cpt));
++            const std::string s = unicode_cpt_to_utf8(do_lower ? unicode_tolower(cpt) : cpt);
+             if (flags.is_punctuation || ( cpt < 0x7F && flags.is_symbol ) || is_chinese_char(cpt)) {
+                 if (words.back().size()) {  // finish previous word if any
+                     words.emplace_back();

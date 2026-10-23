@@ -1,6 +1,7 @@
 package com.lorabge.memory
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -11,15 +12,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : ComponentActivity() {
     private val notifyPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -39,7 +43,7 @@ class MainActivity : ComponentActivity() {
                 SetupScreen(onFinished = { ready = true })
                 return@setContent
             }
-            PhoneApp(store, engine, onTrain = {
+            PhoneApp(store, engine, probeOnStart = !benchmark, onTrain = {
                 if (Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED
@@ -49,8 +53,24 @@ class MainActivity : ComponentActivity() {
                 startForegroundService(Intent(this, TrainService::class.java))
             }, onCancel = {
                 startService(Intent(this, TrainService::class.java).setAction(TrainService.ACTION_CANCEL))
+            }, onExport = {
+                shareDiagnostics(engine.diagnostics())
             })
         }
+    }
+
+    private fun shareDiagnostics(text: String) {
+        val file = File(cacheDir, "lorabge-diagnostics.txt")
+        file.writeText(text)
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+        send.putExtra(Intent.EXTRA_STREAM, uri)
+        send.putExtra(Intent.EXTRA_TEXT, text)
+        send.clipData = ClipData.newRawUri("diagnostics", uri)
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val chooser = Intent.createChooser(send, "导出诊断")
+        chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(chooser)
     }
 
     private fun startBenchmark(store: MemoryStore) {
@@ -73,10 +93,35 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun PhoneApp(store: MemoryStore, engine: Engine, onTrain: () -> Unit, onCancel: () -> Unit) {
+private fun PhoneApp(
+    store: MemoryStore,
+    engine: Engine,
+    probeOnStart: Boolean,
+    onTrain: () -> Unit,
+    onCancel: () -> Unit,
+    onExport: () -> Unit,
+) {
     var lang by remember { mutableStateOf("zh") }
     var tab by remember { mutableStateOf(SkyTab.Chat) }
-    var tick by remember { mutableStateOf(0) }
+    var tick by remember { mutableIntStateOf(0) }
+    var probeGen by remember { mutableIntStateOf(if (probeOnStart) 1 else 0) }
+    LaunchedEffect(probeGen) {
+        if (probeGen == 0) return@LaunchedEffect
+        val running = AtomicBoolean(true)
+        Thread {
+            try {
+                engine.ensureBackend()
+            } catch (_: Throwable) {
+            } finally {
+                running.set(false)
+            }
+        }.start()
+        while (running.get()) {
+            delay(700)
+            tick++
+        }
+        tick++
+    }
     var draft by remember { mutableStateOf("") }
     var currentId by remember { mutableStateOf(store.listConversations().firstOrNull()?.id) }
     var pending by remember { mutableStateOf<PendingCorrection?>(null) }
@@ -119,7 +164,8 @@ private fun PhoneApp(store: MemoryStore, engine: Engine, onTrain: () -> Unit, on
         force = force,
         ready = (if (lang == "en") "base " else "基座 ") +
             (if (engine.baseModel() != null) "ok" else "—") +
-            " · bge " + (if (engine.bgeModel() != null) "ok" else "—"),
+            " · bge " + (if (engine.bgeModel() != null) "ok" else "—") +
+            " · " + engine.backendLabel(lang),
         note = note,
     )
     SkyFrame(state) { event ->
@@ -147,7 +193,7 @@ private fun PhoneApp(store: MemoryStore, engine: Engine, onTrain: () -> Unit, on
                 }
                 val expert = if (hit.fired) hit.expert else null
                 val reply = try {
-                    engine.answer(text, expert, ngl = if (File(store.root, "use_gpu").exists()) 99 else 0)
+                    engine.answer(text, expert)
                 } catch (ex: Throwable) {
                     "生成失败: ${ex.message}"
                 }
@@ -216,11 +262,13 @@ private fun PhoneApp(store: MemoryStore, engine: Engine, onTrain: () -> Unit, on
                     ex.message ?: "check"
                 }
             }
-            SkyEvent.ToggleGpu -> {
-                val gpu = File(store.root, "use_gpu")
-                if (gpu.exists()) gpu.delete() else gpu.writeText("1")
-                note = if (gpu.exists()) "Vulkan" else "CPU"
+            is SkyEvent.BackendMode -> {
+                engine.setBackendMode(event.mode)
+                note = engine.backendLabel(lang) + " · " + DeviceTune.explain(engine.backendRecord())
+                if (event.mode == "auto") probeGen++
+                tick++
             }
+            SkyEvent.ExportDiagnostics -> onExport()
         }
     }
 }

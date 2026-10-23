@@ -43,7 +43,8 @@ jobs:
           sudo apt-get install -y -qq glslc libvulkan-dev
           sh android/qvac/build_android.sh
           test -f android/apk/app/src/main/jniLibs/arm64-v8a/libggml-vulkan.so
-          echo "Vulkan/Adreno libllama is in the APK"
+          test -f android/apk/app/src/main/jniLibs/arm64-v8a/libggml-cpu.so
+          echo "Vulkan and dotprod/i8mm CPU libllama are in the APK"
 
       - uses: gradle/actions/setup-gradle@v4
 

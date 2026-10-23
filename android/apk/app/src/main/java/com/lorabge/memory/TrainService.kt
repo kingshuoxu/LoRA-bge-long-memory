@@ -117,12 +117,12 @@ class TrainService : Service() {
             val log = File(store.trainDir, "train.log")
             val telemetry = File(store.trainDir, "telemetry.tsv")
             telemetry.writeText("wall_s\trss_kb\tthermal\tbattery\n")
-            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+            val threads = PhoneFacts.threads()
             val proc = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .apply {
                     environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
-                    // OpenBLAS 按编译时的 8 线程封顶。小米 15 的 8 个 Oryon 都是性能核。
+                    // 只占超大核和大核。天玑 9400 的 1+3+4 是 4 线程，小米 15 两档 Oryon 仍是 8。
                     environment()["OPENBLAS_NUM_THREADS"] = threads.toString()
                     environment()["OMP_NUM_THREADS"] = "1"
                 }
@@ -245,7 +245,7 @@ class TrainService : Service() {
         var primaryOk = 0
         for (fact in trained) {
             val pair = fact.qa.firstOrNull() ?: continue
-            val answer = engine.answer(pair.first, job.getString("expert"), 0)
+            val answer = engine.answer(pair.first, job.getString("expert"))
             val ok = answer.contains(fact.value.removeSuffix("年"))
             if (ok) primaryOk++
             primaryHits.put(JSONObject().put("q", pair.first).put("gold", fact.value).put("answer", answer).put("hit", ok))
@@ -255,7 +255,7 @@ class TrainService : Service() {
         var heldOk = 0
         for (i in 0 until held.length()) {
             val row = held.getJSONObject(i)
-            val answer = engine.answer(row.getString("q"), job.getString("expert"), 0)
+            val answer = engine.answer(row.getString("q"), job.getString("expert"))
             val gold = row.getString("a")
             val ok = answer.contains(gold.removeSuffix("年"))
             if (ok) heldOk++
@@ -293,7 +293,9 @@ class TrainService : Service() {
                 }
             }
         }
+        val facts = PhoneFacts.collect(engine, packageManager.getPackageInfo(packageName, 0).versionName ?: "")
         report
+            .put("device", DeviceTune.deviceJson(facts))
             .put("wall_s", (System.currentTimeMillis() - startedMs) / 1000)
             .put("peak_rss_kb", peakRss)
             .put("max_thermal_millic", maxThermal)

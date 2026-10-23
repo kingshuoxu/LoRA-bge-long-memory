@@ -1,5 +1,6 @@
 #!/bin/sh
-# 在已打开 USB 调试的小米 15 上安装 APK,跑一次真实巩固训练,并打印耗时、内存、温度和回忆。
+# 在已打开 USB 调试的手机上安装 APK,跑一次真实巩固训练,并打印耗时、内存、温度和回忆。
+# 输出里的 benchmark.json 带 device:厂商、型号、SoC、GPU、后端和线程,不假设是哪一块芯片。
 # 用法: 手机连上电脑后执行
 #   sh android/phone/run_device_benchmark.sh
 # 需要本机已有 Qwen2.5-0.5B-Instruct 的 safetensors,以及 f16 对话基座和 bge。

@@ -94,7 +94,9 @@ x86 OpenBLAS 和这份 arm64 OpenBLAS 的第 1 步 loss 都是 **4.07324**,梯�
 
 四个 epoch 的逐步 loss 从 5.35 收到 0.0009,中间有两步回到 0.22 和 0.12。贪心解码的原问和留出复述都答对了取值。弃权是路由,不是把 LoRA 强行挂上再生成。
 
-小米 15 上的墙钟还没量到。纯 C++ 时,450 行研究批次在这台 Xeon 上要数小时;换成 OpenBLAS 之后,巩固这 32 条在这台机器上是几分钟。手机用同一份 ARMv8 库,8 个性能核。真机数字用 `android/phone/run_device_benchmark.sh`,它会装 APK、推模型、跑这 4 条事实,并打印墙钟、峰值 RSS、热区温度和上面三项回忆。把整段输出贴回来即可。
+小米 15 上的墙钟还没量到。纯 C++ 时,450 行研究批次在这台 Xeon 上要数小时;换成 OpenBLAS 之后,巩固这 32 条在这台机器上是几分钟。线程数按 cpufreq 只计大核和超大核:小米 15 两档 Oryon 是 8,天玑 9400 的 1+3+4 是 4。真机数字用 `android/phone/run_device_benchmark.sh`,它会装 APK、推模型、跑这 4 条事实,并打印墙钟、峰值 RSS、热区温度、SoC、GPU、后端和上面三项回忆。把整段输出贴回来即可。没有电脑时,记忆库里的「导出诊断」会打开分享。
+
+对话和嵌入先试 Vulkan。短解码和一条 bge 嵌入要跟 CPU 一致,否则记住 CPU。`libggml-cpu.so` 用 `armv8.7-a+dotprod+i8mm` 编译。强制 GPU / 强制 CPU 在记忆库里。
 
 只装 APK、没有电脑时,第一次打开会按清单自己下载。清单在预发布标签 `android-v0.1.0` 的 `manifest.json`,也打进了那次发布的 APK。镜像顺序是 ModelScope、hf-mirror.com、huggingface.co、GitHub Release。带大小写补丁的 bge 和五个专家只从这次发布的文件取。下载可以暂停,断了用 HTTP Range 续上,下完对 SHA256,空间不够会先停。下完会导入专家并做路由自检。
 

@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.TimeUnit
 
 class Engine(private val context: Context, private val store: MemoryStore) {
     private val nativeDir = context.applicationInfo.nativeLibraryDir
@@ -55,7 +56,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         )
     }
 
-    fun answer(question: String, expert: String?, ngl: Int): String {
+    fun answer(question: String, expert: String?): String {
         val cli = tool("libllama-cli.so") ?: return "没有 llama-cli。请安装带 QVAC 二进制的 APK。"
         val base = baseModel() ?: return "还没有基座。把 GGUF 推到 ${modelsDir().absolutePath}/base.gguf"
         val template = File(store.root, "qwen25_chat_template.jinja")
@@ -64,13 +65,16 @@ class Engine(private val context: Context, private val store: MemoryStore) {
                 template.writeBytes(input.readBytes())
             }
         }
+        val threads = PhoneFacts.threads()
         val cmd = mutableListOf(
             cli.absolutePath, "-m", base.absolutePath,
             "--jinja", "--chat-template-file", template.absolutePath,
             "-sys", "你是助手。",
             "-p", question + " 请简短回答。",
             "--temp", "0", "--top-k", "1", "--top-p", "1", "--min-p", "0",
-            "-n", "40", "--single-turn", "-ngl", ngl.toString(), "--no-warmup", "-c", "512",
+            "-n", "40", "--single-turn", "-ngl", DeviceTune.ngl(backendRecord()).toString(),
+            "-t", threads.toString(), "-tb", threads.toString(),
+            "--no-warmup", "-c", "512",
         )
         if (expert != null) {
             val weight = File(store.expertsDir, "$expert/adapter.gguf")
@@ -80,9 +84,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             }
         }
         val output = runTool(cmd, File(context.cacheDir, "gen"))
-        val mark = "assistant\n"
-        if (!output.contains(mark)) return output.lineSequence().lastOrNull { it.isNotBlank() } ?: "没有生成"
-        return output.substringAfterLast(mark).replace("[end of text]", "").trim()
+        return DeviceTune.extractReply(output).ifBlank { "没有生成" }
     }
 
     fun embedTexts(texts: List<String>): List<FloatArray> {
@@ -214,11 +216,13 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     private fun embed(bin: File, model: File, texts: List<String>): List<FloatArray> {
         val work = File(context.cacheDir, "emb").apply { mkdirs() }
         File(work, "prompts.txt").writeText(texts.joinToString("\n") { it.replace("\n", " ") } + "\n")
-        val ngl = if (File(store.root, "use_gpu").exists()) "99" else "0"
+        val threads = PhoneFacts.threads().toString()
         val output = runTool(
             listOf(
                 bin.absolutePath, "-m", model.absolutePath, "-f", File(work, "prompts.txt").absolutePath,
-                "--pooling", "mean", "--embd-normalize", "2", "-c", "128", "-ngl", ngl,
+                "--pooling", "mean", "--embd-normalize", "2", "-c", "128",
+                "-ngl", DeviceTune.ngl(backendRecord()).toString(),
+                "-t", threads, "-tb", threads,
                 "--embd-output-format", "array",
             ),
             work,
@@ -235,18 +239,156 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         return (0 until parsed.length()).map { floatRow(parsed.getJSONArray(it)) }
     }
 
+    fun backendRecord(): BackendRecord {
+        val version = appVersion()
+        val file = backendFile()
+        if (!file.exists()) return DeviceTune.defaultRecord(version)
+        return DeviceTune.parseRecord(file.readText(), version)
+    }
+
+    fun backendLabel(lang: String): String = DeviceTune.label(backendRecord(), lang)
+
+    fun setBackendMode(mode: String) {
+        val current = backendRecord()
+        val vulkan = tool("libggml-vulkan.so") != null
+        val reason = when {
+            mode == "gpu" && !vulkan -> "no_vulkan"
+            mode == "cpu" -> current.reason
+            else -> current.reason
+        }
+        val probe = if (mode == "gpu" && !vulkan) "cpu" else current.probe
+        writeBackend(current.copy(mode = mode, probe = probe, reason = reason, checking = false))
+    }
+
+    fun ensureBackend() {
+        val version = appVersion()
+        val current = backendRecord()
+        if (current.mode != "auto") {
+            setBackendMode(current.mode)
+            return
+        }
+        if (current.probed && current.version == version && current.reason != "no_model") return
+        writeBackend(current.copy(checking = true, reason = "checking", version = version))
+        val vulkan = tool("libggml-vulkan.so") != null && tool("libggml-cpu.so") != null
+        val ready = baseModel() != null && bgeModel() != null && binariesReady()
+        val gpuChat = if (vulkan && ready) probeChat(99) else ToolRun(2, "")
+        val cpuChat = if (vulkan && ready && gpuChat.code == 0) probeChat(0) else ToolRun(1, "")
+        val gpuEmbed = if (vulkan && ready && gpuChat.code == 0 && DeviceTune.chatMatch(cpuChat.text, gpuChat.text)) {
+            probeEmbed(99)
+        } else {
+            null
+        }
+        val cpuEmbed = if (gpuEmbed != null && gpuEmbed.code == 0) probeEmbed(0) else null
+        val decided = DeviceTune.decide(
+            mode = "auto",
+            vulkanPresent = vulkan,
+            modelsReady = ready,
+            gpuChatStatus = if (!vulkan || !ready) 0 else gpuChat.code,
+            cpuReply = cpuChat.text,
+            gpuReply = gpuChat.text,
+            gpuEmbedStatus = gpuEmbed?.code ?: if (!vulkan || !ready || gpuChat.code != 0) 0 else 1,
+            cpuVec = cpuEmbed?.vector,
+            gpuVec = gpuEmbed?.vector,
+            version = version,
+        )
+        if (backendRecord().mode != "auto") return
+        writeBackend(decided)
+    }
+
+    fun diagnostics(): String {
+        val version = appVersion()
+        return DeviceTune.renderDiagnostics(PhoneFacts.collect(this, version))
+    }
+
+    private fun probeChat(ngl: Int): ToolRun {
+        val cli = tool("libllama-cli.so") ?: return ToolRun(1, "")
+        val base = baseModel() ?: return ToolRun(1, "")
+        val threads = PhoneFacts.threads().toString()
+        val result = runToolTimed(
+            listOf(
+                cli.absolutePath, "-m", base.absolutePath,
+                "-p", DeviceTune.PROBE_PROMPT,
+                "--temp", "0", "--top-k", "1", "--top-p", "1", "--min-p", "0",
+                "-n", "8", "-ngl", ngl.toString(), "-t", threads, "-tb", threads,
+                "--no-warmup", "-c", "64", "--single-turn",
+            ),
+            File(context.cacheDir, "probe-chat-$ngl"),
+            180,
+        )
+        return ToolRun(result.code, DeviceTune.extractReply(result.text))
+    }
+
+    private fun probeEmbed(ngl: Int): ToolRun {
+        return try {
+            val embedder = tool("libllama-embedding.so") ?: return ToolRun(1, "")
+            val bge = bgeModel() ?: return ToolRun(1, "")
+            val work = File(context.cacheDir, "probe-emb-$ngl").apply { mkdirs() }
+            File(work, "prompts.txt").writeText("北京\n")
+            val threads = PhoneFacts.threads().toString()
+            val result = runToolTimed(
+                listOf(
+                    embedder.absolutePath, "-m", bge.absolutePath, "-f", File(work, "prompts.txt").absolutePath,
+                    "--pooling", "mean", "--embd-normalize", "2", "-c", "32",
+                    "-ngl", ngl.toString(), "-t", threads, "-tb", threads,
+                    "--embd-output-format", "array",
+                ),
+                work,
+                180,
+            )
+            if (result.code != 0) return ToolRun(result.code, "")
+            val start = result.text.indexOf('[')
+            if (start < 0) return ToolRun(1, "")
+            val parsed = JSONArray(result.text.substring(start).trim())
+            val row = if (parsed.length() > 0 && parsed.optJSONArray(0) != null) parsed.getJSONArray(0) else parsed
+            val out = FloatArray(row.length())
+            for (i in 0 until row.length()) out[i] = row.getDouble(i).toFloat()
+            ToolRun(0, "", out)
+        } catch (_: Throwable) {
+            ToolRun(1, "")
+        }
+    }
+
+    private fun appVersion(): String = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+    } catch (_: Throwable) {
+        ""
+    }
+
+    private fun backendFile(): File = File(context.filesDir, "setup/backend.json")
+
+    private fun writeBackend(record: BackendRecord) {
+        val file = backendFile()
+        file.parentFile?.mkdirs()
+        file.writeText(DeviceTune.writeRecord(record))
+    }
+
     private fun runTool(cmd: List<String>, work: File): String {
+        val result = runToolTimed(cmd, work, 180)
+        if (result.code != 0 && result.text.isBlank()) {
+            error(result.err.lineSequence().lastOrNull { it.isNotBlank() } ?: "exit ${result.code}")
+        }
+        return result.text.ifBlank { result.err }
+    }
+
+    private fun runToolTimed(cmd: List<String>, work: File, timeoutSec: Long): TimedRun {
         work.mkdirs()
         val proc = ProcessBuilder(cmd)
             .directory(work)
             .redirectErrorStream(false)
             .apply { environment()["LD_LIBRARY_PATH"] = nativeDir }
             .start()
-        val stdout = proc.inputStream.bufferedReader().readText()
-        val stderr = proc.errorStream.bufferedReader().readText()
-        val code = proc.waitFor()
-        if (code != 0 && stdout.isBlank()) error(stderr.lineSequence().lastOrNull { it.isNotBlank() } ?: "exit $code")
-        return stdout.ifBlank { stderr }
+        val out = StringBuilder()
+        val err = StringBuilder()
+        val stdout = Thread { out.append(proc.inputStream.bufferedReader().readText()) }
+        val stderr = Thread { err.append(proc.errorStream.bufferedReader().readText()) }
+        stdout.start()
+        stderr.start()
+        val finished = proc.waitFor(timeoutSec, TimeUnit.SECONDS)
+        if (!finished) proc.destroyForcibly()
+        stdout.join(2000)
+        stderr.join(2000)
+        val code = if (!finished) 2 else proc.exitValue()
+        return TimedRun(code, out.toString().ifBlank { "" }, err.toString())
     }
 
     companion object {
@@ -288,3 +430,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
 }
 
 data class RouteHit(val expert: String?, val fired: Boolean, val reason: String, val sim: Double)
+
+private data class ToolRun(val code: Int, val text: String, val vector: FloatArray? = null)
+
+private data class TimedRun(val code: Int, val text: String, val err: String)

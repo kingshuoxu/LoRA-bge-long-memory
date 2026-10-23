@@ -1,7 +1,8 @@
 #!/bin/sh
 # 用和桌面同一份 QVAC 源码编 Android arm64 的 libllama。
 # 仓库 tetherto/qvac-fabric-llm.cpp,提交 b73e75af5,再打上 bert-bge-cased 补丁,这样大写词不会被 WPM 折成小写。
-# 优先打开 Vulkan,小米 15 的 Adreno 830 走这条。着色器工具链编不过时退回 CPU,并在日志里写明。
+# Vulkan 和带 dotprod/i8mm 的 ggml-cpu 一起打进 APK。
+# 小米 15 的 Adreno 走 Vulkan。天玑 9400 的 Mali 若对不上 CPU,应用自己改走 CPU。
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")"/../.. && pwd)
 COMMIT=b73e75af5f2ab69c0e8984637c743c6a50ebc98d
@@ -53,13 +54,14 @@ build_one() {
     -DANDROID_ABI=arm64-v8a \
     -DANDROID_PLATFORM=android-29 \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_FLAGS="-march=armv8.7a" \
-    -DCMAKE_CXX_FLAGS="-march=armv8.7a $HPP_FLAG" \
+    -DCMAKE_C_FLAGS="-march=armv8.7-a" \
+    -DCMAKE_CXX_FLAGS="-march=armv8.7-a $HPP_FLAG" \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384" \
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,-z,max-page-size=16384" \
     -DGGML_OPENMP=OFF \
     -DGGML_LLAMAFILE=OFF \
     -DGGML_NATIVE=OFF \
+    -DGGML_CPU_ARM_ARCH=armv8.7-a+dotprod+i8mm \
     -DGGML_VULKAN="$vulkan" \
     -DLLAMA_CURL=OFF \
     -DLLAMA_BUILD_TESTS=OFF \
@@ -67,13 +69,8 @@ build_one() {
     -DLLAMA_BUILD_SERVER=OFF
   cmake --build "$dir" --target llama-cli llama-embedding -j"${JOBS:-4}"
 }
-if ! build_one ON; then
-  echo "Vulkan 没编过,改用 CPU。Adreno 后端这次没有放进 APK。" >&2
-  build_one OFF
-  echo "cpu" > "$SRC/build-android/BACKEND.txt"
-else
-  echo "vulkan" > "$SRC/build-android/BACKEND.txt"
-fi
+build_one ON
+echo "vulkan+cpu" > "$SRC/build-android/BACKEND.txt"
 BIN=$SRC/build-android/bin
 mkdir -p "$DEST"
 cp "$BIN/libllama.so" "$DEST/libllama.so"
@@ -95,5 +92,12 @@ if [ -n "$STRIP" ]; then
   done
 fi
 chmod 755 "$DEST"/libllama-cli.so "$DEST"/libllama-embedding.so
+test -f "$DEST/libggml-cpu.so"
+test -f "$DEST/libggml-vulkan.so"
+OBJDUMP=$(find "$NDK/toolchains/llvm/prebuilt" -name llvm-objdump | head -1)
+test -n "$OBJDUMP"
+"$OBJDUMP" -d "$DEST/libggml-cpu.so" | grep -m1 -E 'sdot|usdot' >/dev/null
+"$OBJDUMP" -d "$DEST/libggml-cpu.so" | grep -m1 smmla >/dev/null
+echo "libggml-cpu.so 含 sdot 和 smmla"
 echo "后端 $(cat "$SRC/build-android/BACKEND.txt")"
 ls -lh "$DEST"/libllama.so "$DEST"/libggml*.so "$DEST"/libllama-cli.so "$DEST"/libllama-embedding.so
