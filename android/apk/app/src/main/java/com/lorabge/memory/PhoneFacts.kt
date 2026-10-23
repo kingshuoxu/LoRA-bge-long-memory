@@ -107,6 +107,15 @@ object PhoneFacts {
             cpuLib = engine.tool("libggml-cpu.so") != null,
             base = engine.baseModel() != null,
             bge = engine.bgeModel() != null,
+            gpuPrefillTps = record.gpuPrefillTps,
+            gpuDecodeTps = record.gpuDecodeTps,
+            cpuPrefillTps = record.cpuPrefillTps,
+            cpuDecodeTps = record.cpuDecodeTps,
+            vkName = record.vkName,
+            vkDriver = record.vkDriver,
+            vkDriverVersion = record.vkDriverVersion,
+            vkSubgroup = record.vkSubgroup,
+            vkFlags = record.vkFlags,
         )
     }
 

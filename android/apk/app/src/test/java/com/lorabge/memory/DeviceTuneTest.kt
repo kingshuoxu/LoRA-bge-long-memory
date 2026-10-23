@@ -122,6 +122,8 @@ class DeviceTuneTest {
         assertTrue(text.contains("Mali-G925-Immortalis"))
         assertTrue(text.contains("后端: cpu"))
         assertTrue(text.contains("线程: 4"))
+        assertTrue(text.contains("GPU 解码 tok/s: 未测"))
+        assertTrue(text.contains("Vulkan 子组: 未知"))
         val json = DeviceTune.deviceJson(
             DiagnosticFacts(
                 "t", "vivo", "V2413", "MT6991", "Mali-G925", "15", "0.1.1",
@@ -131,5 +133,94 @@ class DeviceTuneTest {
         assertEquals("MT6991", json.getString("soc"))
         assertEquals("Mali-G925", json.getString("gpu"))
         assertEquals(4, json.getInt("threads"))
+        assertEquals(0.0, json.getDouble("gpu_decode_tps"), 0.0)
+    }
+
+    @Test
+    fun maliUsesGpuOnlyWhenFaster() {
+        val vec = floatArrayOf(1f, 0f)
+        val slower = DeviceTune.decide(
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
+            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 12.0, cpuDecodeTps = 20.0,
+        )
+        assertEquals("cpu", slower.probe)
+        assertEquals("gpu_slower", slower.reason)
+        assertEquals(0, DeviceTune.ngl(slower))
+
+        val faster = DeviceTune.decide(
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
+            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0,
+        )
+        assertEquals("vulkan", faster.probe)
+        assertEquals("matched_faster", faster.reason)
+        assertEquals(99, DeviceTune.ngl(faster))
+
+        val unknown = DeviceTune.decide(
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
+            mali = true, gpuSpeedStatus = -1, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0,
+        )
+        assertEquals("speed_unknown", unknown.reason)
+    }
+
+    @Test
+    fun adrenoKeepsGpuWhenItIsSlower() {
+        val vec = floatArrayOf(1f, 0f)
+        val chosen = DeviceTune.decide(
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
+            mali = false, gpuSpeedStatus = 0, gpuDecodeTps = 5.0, cpuDecodeTps = 30.0,
+        )
+        assertEquals("vulkan", chosen.probe)
+        assertEquals("matched", chosen.reason)
+    }
+
+    @Test
+    fun logKeepsPrefillAndDecodeApart() {
+        val log = """
+            ggml_vulkan: caps name="Mali-G925-Immortalis MC12" driver="Mali" driver_info="v1.r47p0" driver_version=92274688 vendor=0x13b5 subgroup=16 fp16=1 bf16=0 coopmat=0 coopmat2=0 int_dot=1 uma=1 max_alloc=2147483648 max_buffer=1073741824 suballoc=268435456 storage_buffers=24 wg_invocations=1024 wg=64x64 mali=1
+            I common_perf_print: prompt eval time =     120.00 ms /    40 tokens (    3.00 ms per token,   333.30 tokens per second)
+            I common_perf_print:        eval time =      80.00 ms /    16 runs   (    5.00 ms per token,   200.00 tokens per second)
+        """.trimIndent()
+        val tps = DeviceTune.parseTps(log)
+        assertEquals(333.3, tps.first, 0.01)
+        assertEquals(200.0, tps.second, 0.01)
+        val caps = DeviceTune.parseVulkanCaps(log)
+        assertEquals("Mali-G925-Immortalis MC12", caps.name)
+        assertEquals("v1.r47p0", caps.driverInfo)
+        assertEquals(92274688L, caps.driverVersion)
+        assertEquals(0x13B5L, caps.vendor)
+        assertEquals(16, caps.subgroup)
+        assertEquals(1, caps.fp16)
+        assertEquals(0, caps.bf16)
+        assertEquals(0, caps.coopmat)
+        assertEquals(268435456L, caps.suballoc)
+        assertTrue(DeviceTune.looksLikeMali(caps, "Adreno"))
+        assertFalse(DeviceTune.looksLikeMali(VulkanCaps(name = "Adreno (TM) 830", vendor = 0x5143), "Adreno (TM) 830"))
+        val text = DeviceTune.renderDiagnostics(
+            DiagnosticFacts(
+                "t", "vivo", "V2413", "MT6991", "Mali-G925", "15", "0.1.1",
+                "vulkan", "auto", "matched_faster", 4, listOf(3_620_000L), true, true, true, true,
+                gpuPrefillTps = 333.3, gpuDecodeTps = 200.0, cpuPrefillTps = 80.0, cpuDecodeTps = 40.0,
+                vkName = caps.name, vkDriver = caps.driver, vkDriverVersion = caps.versionText(),
+                vkSubgroup = caps.subgroup, vkFlags = caps.flags(),
+            ),
+        )
+        assertTrue(text.contains("GPU 预填充 tok/s: 333.3"))
+        assertTrue(text.contains("GPU 解码 tok/s: 200.0"))
+        assertTrue(text.contains("CPU 解码 tok/s: 40.0"))
+        assertTrue(text.contains("Vulkan 设备: Mali-G925-Immortalis MC12"))
+        assertTrue(text.contains("Vulkan 子组: 16"))
+        assertTrue(text.contains("fp16=1"))
+        assertTrue(text.contains("bf16=0"))
+        assertTrue(text.contains("coopmat=0"))
+        val json = DeviceTune.deviceJson(
+            DiagnosticFacts(
+                "t", "vivo", "V2413", "MT6991", "Mali-G925", "15", "0.1.1",
+                "vulkan", "auto", "matched_faster", 4, emptyList(), true, true, true, true,
+                gpuDecodeTps = 200.0, vkName = caps.name, vkSubgroup = 16, vkFlags = caps.flags(),
+            ),
+        )
+        assertEquals(200.0, json.getDouble("gpu_decode_tps"), 0.01)
+        assertEquals(16, json.getInt("vk_subgroup"))
+        assertEquals("Mali-G925-Immortalis MC12", json.getString("vk_name"))
     }
 }

@@ -262,37 +262,82 @@ class Engine(private val context: Context, private val store: MemoryStore) {
 
     fun ensureBackend() {
         val version = appVersion()
+        val stamp = DeviceTune.probeStamp(version)
         val current = backendRecord()
         if (current.mode != "auto") {
             setBackendMode(current.mode)
             return
         }
-        if (current.probed && current.version == version && current.reason != "no_model") return
-        writeBackend(current.copy(checking = true, reason = "checking", version = version))
+        if (current.probed && current.version == stamp && current.reason != "no_model") return
+        writeBackend(current.copy(checking = true, reason = "checking", version = stamp))
         val vulkan = tool("libggml-vulkan.so") != null && tool("libggml-cpu.so") != null
         val ready = baseModel() != null && bgeModel() != null && binariesReady()
-        val gpuChat = if (vulkan && ready) probeChat(99) else ToolRun(2, "")
-        val cpuChat = if (vulkan && ready && gpuChat.code == 0) probeChat(0) else ToolRun(1, "")
-        val gpuEmbed = if (vulkan && ready && gpuChat.code == 0 && DeviceTune.chatMatch(cpuChat.text, gpuChat.text)) {
-            probeEmbed(99)
-        } else {
-            null
-        }
+        val gpuChat = if (vulkan && ready) probeChat(99) else TimedRun(2, "", "")
+        val cpuChat = if (vulkan && ready && gpuChat.code == 0) probeChat(0) else TimedRun(1, "", "")
+        val gpuReply = DeviceTune.extractReply(gpuChat.text)
+        val cpuReply = DeviceTune.extractReply(cpuChat.text)
+        val chatOk = gpuChat.code == 0 && DeviceTune.chatMatch(cpuReply, gpuReply)
+        val gpuEmbed = if (vulkan && ready && chatOk) probeEmbed(99) else null
         val cpuEmbed = if (gpuEmbed != null && gpuEmbed.code == 0) probeEmbed(0) else null
+        val gpuVec = gpuEmbed?.vector
+        val cpuVec = cpuEmbed?.vector
+        val embedOk = gpuVec != null && cpuVec != null && DeviceTune.vectorsMatch(cpuVec, gpuVec)
+        val caps = DeviceTune.parseVulkanCaps(gpuChat.err)
+        val mali = DeviceTune.looksLikeMali(caps, PhoneFacts.glRenderer())
+        var gpuPrefill = DeviceTune.parseTps(gpuChat.err).first
+        var gpuDecode = DeviceTune.parseTps(gpuChat.err).second
+        var cpuPrefill = DeviceTune.parseTps(cpuChat.err).first
+        var cpuDecode = DeviceTune.parseTps(cpuChat.err).second
+        var gpuSpeedStatus = -1
+        if (mali && chatOk && embedOk) {
+            val gpuSpeed = probeSpeed(99)
+            gpuSpeedStatus = gpuSpeed.code
+            if (gpuSpeed.code == 0) {
+                val parsed = DeviceTune.parseTps(gpuSpeed.err)
+                if (parsed.first > 0.0) gpuPrefill = parsed.first
+                if (parsed.second > 0.0) gpuDecode = parsed.second
+                val cpuSpeed = probeSpeed(0)
+                if (cpuSpeed.code == 0) {
+                    val parsedCpu = DeviceTune.parseTps(cpuSpeed.err)
+                    if (parsedCpu.first > 0.0) cpuPrefill = parsedCpu.first
+                    if (parsedCpu.second > 0.0) cpuDecode = parsedCpu.second
+                    else gpuSpeedStatus = -1
+                } else {
+                    cpuDecode = 0.0
+                    gpuSpeedStatus = -1
+                }
+            }
+        }
         val decided = DeviceTune.decide(
             mode = "auto",
             vulkanPresent = vulkan,
             modelsReady = ready,
             gpuChatStatus = if (!vulkan || !ready) 0 else gpuChat.code,
-            cpuReply = cpuChat.text,
-            gpuReply = gpuChat.text,
+            cpuReply = cpuReply,
+            gpuReply = gpuReply,
             gpuEmbedStatus = gpuEmbed?.code ?: if (!vulkan || !ready || gpuChat.code != 0) 0 else 1,
             cpuVec = cpuEmbed?.vector,
             gpuVec = gpuEmbed?.vector,
-            version = version,
+            version = stamp,
+            mali = mali,
+            gpuSpeedStatus = if (mali && chatOk && embedOk) gpuSpeedStatus else 0,
+            gpuDecodeTps = gpuDecode,
+            cpuDecodeTps = cpuDecode,
         )
         if (backendRecord().mode != "auto") return
-        writeBackend(decided)
+        writeBackend(
+            decided.copy(
+                gpuPrefillTps = gpuPrefill,
+                gpuDecodeTps = gpuDecode,
+                cpuPrefillTps = cpuPrefill,
+                cpuDecodeTps = cpuDecode,
+                vkName = caps.name,
+                vkDriver = caps.driver,
+                vkDriverVersion = caps.versionText(),
+                vkSubgroup = caps.subgroup,
+                vkFlags = caps.flags(),
+            ),
+        )
     }
 
     fun diagnostics(): String {
@@ -300,11 +345,11 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         return DeviceTune.renderDiagnostics(PhoneFacts.collect(this, version))
     }
 
-    private fun probeChat(ngl: Int): ToolRun {
-        val cli = tool("libllama-cli.so") ?: return ToolRun(1, "")
-        val base = baseModel() ?: return ToolRun(1, "")
+    private fun probeChat(ngl: Int): TimedRun {
+        val cli = tool("libllama-cli.so") ?: return TimedRun(1, "", "")
+        val base = baseModel() ?: return TimedRun(1, "", "")
         val threads = PhoneFacts.threads().toString()
-        val result = runToolTimed(
+        return runToolTimed(
             listOf(
                 cli.absolutePath, "-m", base.absolutePath,
                 "-p", DeviceTune.PROBE_PROMPT,
@@ -315,7 +360,23 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             File(context.cacheDir, "probe-chat-$ngl"),
             180,
         )
-        return ToolRun(result.code, DeviceTune.extractReply(result.text))
+    }
+
+    private fun probeSpeed(ngl: Int): TimedRun {
+        val cli = tool("libllama-cli.so") ?: return TimedRun(1, "", "")
+        val base = baseModel() ?: return TimedRun(1, "", "")
+        val threads = PhoneFacts.threads().toString()
+        return runToolTimed(
+            listOf(
+                cli.absolutePath, "-m", base.absolutePath,
+                "-p", DeviceTune.SPEED_PROMPT,
+                "--temp", "0", "--top-k", "1", "--top-p", "1", "--min-p", "0",
+                "-n", "16", "-ngl", ngl.toString(), "-t", threads, "-tb", threads,
+                "-c", "256", "--single-turn",
+            ),
+            File(context.cacheDir, "probe-speed-$ngl"),
+            180,
+        )
     }
 
     private fun probeEmbed(ngl: Int): ToolRun {

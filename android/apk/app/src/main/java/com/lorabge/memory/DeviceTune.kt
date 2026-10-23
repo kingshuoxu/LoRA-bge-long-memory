@@ -2,6 +2,7 @@ package com.lorabge.memory
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import kotlin.math.sqrt
 
 /**
@@ -10,6 +11,7 @@ import kotlin.math.sqrt
  */
 object DeviceTune {
     const val PROBE_PROMPT = "1+1="
+    const val SPEED_PROMPT = "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog."
     private const val BIG_FRACTION_NUM = 3
     private const val BIG_FRACTION_DEN = 4
 
@@ -56,6 +58,61 @@ object DeviceTune {
 
     fun vectorsMatch(cpu: FloatArray, gpu: FloatArray): Boolean = cosine(cpu, gpu) >= 0.99
 
+    // 0.1.1 曾经把对不上的 Mali 记成 CPU。策略改了之后要用新的戳,否则手机不会再测。
+    fun probeStamp(version: String) = "$version+mali1"
+
+    fun parseTps(log: String): Pair<Double, Double> {
+        val clean = log.replace(Regex("\u001B\\[[0-9;]*m"), "")
+        var prefill = 0.0
+        var decode = 0.0
+        val num = Regex("([0-9]*\\.?[0-9]+)\\s+tokens per second")
+        for (line in clean.lineSequence()) {
+            val match = num.find(line) ?: continue
+            val value = match.groupValues[1].toDoubleOrNull() ?: continue
+            if (!value.isFinite() || value < 0.0) continue
+            if (line.contains("prompt eval time")) {
+                prefill = value
+            } else if (line.contains("eval time")) {
+                decode = value
+            }
+        }
+        return prefill to decode
+    }
+
+    fun parseVulkanCaps(log: String): VulkanCaps {
+        val clean = log.replace(Regex("\u001B\\[[0-9;]*m"), "")
+        val line = clean.lineSequence().lastOrNull { it.contains("ggml_vulkan: caps ") } ?: return VulkanCaps()
+        fun quoted(key: String) = Regex("""$key="([^"]*)"""").find(line)?.groupValues?.get(1).orEmpty()
+        fun integer(key: String) = Regex("""(?:^|\s)$key=([0-9]+)""").find(line)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        fun hex(key: String) = Regex("""$key=0x([0-9a-fA-F]+)""").find(line)?.groupValues?.get(1)?.toLongOrNull(16) ?: 0L
+        return VulkanCaps(
+            name = quoted("name"),
+            driver = quoted("driver"),
+            driverInfo = quoted("driver_info"),
+            driverVersion = integer("driver_version"),
+            vendor = hex("vendor"),
+            subgroup = integer("subgroup").toInt(),
+            fp16 = integer("fp16").toInt(),
+            bf16 = integer("bf16").toInt(),
+            coopmat = integer("coopmat").toInt(),
+            coopmat2 = integer("coopmat2").toInt(),
+            intDot = integer("int_dot").toInt(),
+            uma = integer("uma").toInt(),
+            maxAlloc = integer("max_alloc"),
+            maxBuffer = integer("max_buffer"),
+            suballoc = integer("suballoc"),
+            storageBuffers = integer("storage_buffers").toInt(),
+            wgInvocations = integer("wg_invocations").toInt(),
+            mali = integer("mali").toInt(),
+        )
+    }
+
+    fun looksLikeMali(caps: VulkanCaps, glRenderer: String): Boolean {
+        if (caps.mali == 1 || caps.vendor == 0x13B5L) return true
+        val blob = (caps.name + " " + glRenderer).lowercase()
+        return blob.contains("mali") || blob.contains("immortalis")
+    }
+
     fun defaultRecord(version: String) = BackendRecord(
         mode = "auto",
         probe = "cpu",
@@ -75,6 +132,15 @@ object DeviceTune {
                 probed = obj.optBoolean("probed"),
                 version = obj.optString("version"),
                 checking = obj.optBoolean("checking"),
+                gpuPrefillTps = obj.optDouble("gpu_prefill_tps", 0.0),
+                gpuDecodeTps = obj.optDouble("gpu_decode_tps", 0.0),
+                cpuPrefillTps = obj.optDouble("cpu_prefill_tps", 0.0),
+                cpuDecodeTps = obj.optDouble("cpu_decode_tps", 0.0),
+                vkName = obj.optString("vk_name"),
+                vkDriver = obj.optString("vk_driver"),
+                vkDriverVersion = obj.optString("vk_driver_version"),
+                vkSubgroup = obj.optInt("vk_subgroup"),
+                vkFlags = obj.optString("vk_flags"),
             )
         } catch (_: Throwable) {
             defaultRecord(version)
@@ -89,6 +155,15 @@ object DeviceTune {
             .put("probed", record.probed)
             .put("version", record.version)
             .put("checking", record.checking)
+            .put("gpu_prefill_tps", record.gpuPrefillTps)
+            .put("gpu_decode_tps", record.gpuDecodeTps)
+            .put("cpu_prefill_tps", record.cpuPrefillTps)
+            .put("cpu_decode_tps", record.cpuDecodeTps)
+            .put("vk_name", record.vkName)
+            .put("vk_driver", record.vkDriver)
+            .put("vk_driver_version", record.vkDriverVersion)
+            .put("vk_subgroup", record.vkSubgroup)
+            .put("vk_flags", record.vkFlags)
             .toString()
     }
 
@@ -113,7 +188,9 @@ object DeviceTune {
 
     /**
      * 自动模式：Vulkan 对话和嵌入都要跟 CPU 对上，否则记住 CPU。
+     * Mali 还要短解码比 CPU 快。Adreno 只看对不对，不看快慢。
      * 强制 GPU 仍走 Vulkan，除非包里没有那份库。
+     * gpuSpeedStatus：0 测完，1 进程失败，2 超时，负数表示没测到。
      */
     fun decide(
         mode: String,
@@ -126,6 +203,10 @@ object DeviceTune {
         cpuVec: FloatArray?,
         gpuVec: FloatArray?,
         version: String,
+        mali: Boolean = false,
+        gpuSpeedStatus: Int = 0,
+        gpuDecodeTps: Double = 0.0,
+        cpuDecodeTps: Double = 0.0,
     ): BackendRecord {
         if (mode == "cpu") {
             return BackendRecord("cpu", "cpu", "forced", true, version, false)
@@ -157,7 +238,28 @@ object DeviceTune {
         if (!vectorsMatch(cpuVec, gpuVec)) {
             return BackendRecord("auto", "cpu", "embed_mismatch", true, version, false)
         }
+        if (mali) {
+            if (gpuSpeedStatus == 2) {
+                return BackendRecord("auto", "cpu", "speed_timeout", true, version, false)
+            }
+            if (gpuSpeedStatus != 0) {
+                val reason = if (gpuSpeedStatus < 0) "speed_unknown" else "speed_exit"
+                return BackendRecord("auto", "cpu", reason, true, version, false)
+            }
+            if (gpuDecodeTps <= 0.0 || cpuDecodeTps <= 0.0) {
+                return BackendRecord("auto", "cpu", "speed_unknown", true, version, false)
+            }
+            if (gpuDecodeTps <= cpuDecodeTps) {
+                return BackendRecord("auto", "cpu", "gpu_slower", true, version, false)
+            }
+            return BackendRecord("auto", "vulkan", "matched_faster", true, version, false)
+        }
         return BackendRecord("auto", "vulkan", "matched", true, version, false)
+    }
+
+    private fun tpsText(value: Double): String {
+        if (value <= 0.0 || !value.isFinite()) return "未测"
+        return "%.1f".format(Locale.US, value)
     }
 
     fun renderDiagnostics(facts: DiagnosticFacts): String {
@@ -180,6 +282,14 @@ object DeviceTune {
             appendLine("CPU 库: ${if (facts.cpuLib) "有" else "无"}")
             appendLine("基座: ${if (facts.base) "有" else "无"}")
             appendLine("bge: ${if (facts.bge) "有" else "无"}")
+            appendLine("GPU 预填充 tok/s: ${tpsText(facts.gpuPrefillTps)}")
+            appendLine("GPU 解码 tok/s: ${tpsText(facts.gpuDecodeTps)}")
+            appendLine("CPU 预填充 tok/s: ${tpsText(facts.cpuPrefillTps)}")
+            appendLine("CPU 解码 tok/s: ${tpsText(facts.cpuDecodeTps)}")
+            appendLine("Vulkan 设备: ${facts.vkName.ifBlank { "未知" }}")
+            appendLine("Vulkan 驱动: ${facts.vkDriverVersion.ifBlank { "未知" }}")
+            appendLine("Vulkan 子组: ${if (facts.vkSubgroup > 0) facts.vkSubgroup.toString() else "未知"}")
+            appendLine("Vulkan 特性: ${facts.vkFlags.ifBlank { "未知" }}")
         }
     }
 
@@ -198,6 +308,15 @@ object DeviceTune {
             .put("reason", facts.reason)
             .put("threads", facts.threads)
             .put("freqs_khz", freqs)
+            .put("gpu_prefill_tps", facts.gpuPrefillTps)
+            .put("gpu_decode_tps", facts.gpuDecodeTps)
+            .put("cpu_prefill_tps", facts.cpuPrefillTps)
+            .put("cpu_decode_tps", facts.cpuDecodeTps)
+            .put("vk_name", facts.vkName)
+            .put("vk_driver", facts.vkDriver)
+            .put("vk_driver_version", facts.vkDriverVersion)
+            .put("vk_subgroup", facts.vkSubgroup)
+            .put("vk_flags", facts.vkFlags)
     }
 }
 
@@ -208,7 +327,47 @@ data class BackendRecord(
     val probed: Boolean,
     val version: String,
     val checking: Boolean,
+    val gpuPrefillTps: Double = 0.0,
+    val gpuDecodeTps: Double = 0.0,
+    val cpuPrefillTps: Double = 0.0,
+    val cpuDecodeTps: Double = 0.0,
+    val vkName: String = "",
+    val vkDriver: String = "",
+    val vkDriverVersion: String = "",
+    val vkSubgroup: Int = 0,
+    val vkFlags: String = "",
 )
+
+data class VulkanCaps(
+    val name: String = "",
+    val driver: String = "",
+    val driverInfo: String = "",
+    val driverVersion: Long = 0,
+    val vendor: Long = 0,
+    val subgroup: Int = 0,
+    val fp16: Int = -1,
+    val bf16: Int = -1,
+    val coopmat: Int = -1,
+    val coopmat2: Int = -1,
+    val intDot: Int = -1,
+    val uma: Int = -1,
+    val maxAlloc: Long = 0,
+    val maxBuffer: Long = 0,
+    val suballoc: Long = 0,
+    val storageBuffers: Int = 0,
+    val wgInvocations: Int = 0,
+    val mali: Int = 0,
+) {
+    fun versionText(): String {
+        val info = driverInfo.ifBlank { driver }
+        return if (driverVersion > 0) "$info ($driverVersion)" else info
+    }
+
+    fun flags(): String {
+        if (vendor == 0L && name.isEmpty()) return ""
+        return "fp16=$fp16 bf16=$bf16 coopmat=$coopmat coopmat2=$coopmat2 int_dot=$intDot uma=$uma max_alloc=$maxAlloc max_buffer=$maxBuffer suballoc=$suballoc storage_buffers=$storageBuffers wg_invocations=$wgInvocations"
+    }
+}
 
 data class DiagnosticFacts(
     val whenIso: String,
@@ -227,4 +386,13 @@ data class DiagnosticFacts(
     val cpuLib: Boolean,
     val base: Boolean,
     val bge: Boolean,
+    val gpuPrefillTps: Double = 0.0,
+    val gpuDecodeTps: Double = 0.0,
+    val cpuPrefillTps: Double = 0.0,
+    val cpuDecodeTps: Double = 0.0,
+    val vkName: String = "",
+    val vkDriver: String = "",
+    val vkDriverVersion: String = "",
+    val vkSubgroup: Int = 0,
+    val vkFlags: String = "",
 )

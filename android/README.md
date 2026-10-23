@@ -57,9 +57,11 @@ sh android/phone/push_adb.sh
 5. 训完,记忆库和星云里出现新的 `expert_`。再开一个新对话,问刚才写入的那句,应挂到这个新专家。
 6. 点删除,索引会重写,再问这句不应再挂它。
 
-记忆库可以选择自动、强制 GPU 或强制 CPU。自动时,模型下完会用一句很短的解码和一条嵌入跟 CPU 对一下。Vulkan 起不来、进程崩了,或者结果对不上,就记住 CPU,下次不再试。页顶能看到当前是 Vulkan、CPU 还是检测中。小米 15 的 Adreno 830 一般留在 Vulkan。vivo X200 Pro 的 Mali-G925 对不上时走 CPU。训练始终在 CPU 上,OpenBLAS 只占 cpufreq 里的大核和超大核:小米 15 两档 Oryon 是 8 线程,天玑 9400 的 1+3+4 是 4 线程。
+记忆库可以选择自动、强制 GPU 或强制 CPU。自动时,模型下完会用一句很短的解码和一条嵌入跟 CPU 对一下。Vulkan 起不来、进程崩了,或者结果对不上,就记住 CPU,下次不再试。页顶能看到当前是 Vulkan、CPU 还是检测中。小米 15 的 Adreno 830 只看结果是否一致,路径和以前一样。vivo X200 Pro 的 Mali-G925(厂商号 0x13B5)会关掉 cooperative matrix 和 bf16,保留 fp16 存储和运算,tile 按 16 宽子组来排,不再把子组抬到 32。自动模式在 Mali 上还要短解码比 CPU 快,才留下 GPU。训练始终在 CPU 上,OpenBLAS 只占 cpufreq 里的大核和超大核:小米 15 两档 Oryon 是 8 线程,天玑 9400 的 1+3+4 是 4 线程。
 
-记忆库的「导出诊断」写成一份文本,并打开系统分享。里面有厂商、型号、SoC、GPU、后端、线程数和各核最高频率。基准模式写的 `benchmark.json` 里也有同样的 `device` 字段。
+llama.cpp 的 OpenCL 后端是按 Adreno 的 `cl_qcom` 写的,没有 Mali 路径,这份包不加 OpenCL。MediaTek NeuroPilot 也没有能直接跑这份 llama.cpp 的后端,没有接上。
+
+记忆库的「导出诊断」写成一份文本,并打开系统分享。里面有厂商、型号、SoC、GPU、后端、线程数、各核最高频率,以及 GPU 和 CPU 的预填充、解码 tok/s,还有 Vulkan 设备名、驱动版本、子组宽度和特性。基准模式写的 `benchmark.json` 里的 `device` 字段相同。
 
 训练用 APK 里的 `libtrain-mft.so`(MobileFineTuner,FFN LoRA,OpenBLAS ARMv8,学习率 5e-4,4 个 epoch,微批 1、梯度累加 8)。研究批次 `batch_0` 在桌面上按这个更新规则跑完是 49/50。应用里一次巩固大约是 4 条事实、32 条样本、每个 epoch 4 步;这台 Xeon 上大约 7 分钟,原问 4/4,留出复述 4/4,没写过的问题 2/2 弃权。真机用:
 

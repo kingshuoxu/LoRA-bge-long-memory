@@ -75,7 +75,7 @@ jobs:
           NOTES=$(cat << EOF
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
 
-          模型和清单仍用 android-v0.1.0 里的文件,没有重新转换。这份包在 Mali 上会拿 Vulkan 的短输出和 CPU 对一下,对不上就改走带 dotprod/i8mm 的 CPU。
+          模型和清单仍用 android-v0.1.0 里的文件,没有重新转换。Mali 上 Vulkan 会按 ARM 厂商号关掉 coopmat 和 bf16、保留 fp16,并且只有短解码对得上而且比 CPU 快才留在 GPU。对不上或更慢就改走带 dotprod/i8mm 的 CPU。Adreno 的路径不变。
 
           - APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/app-debug.apk
           - 清单: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json

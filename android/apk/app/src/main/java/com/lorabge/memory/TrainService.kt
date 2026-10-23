@@ -293,6 +293,7 @@ class TrainService : Service() {
                 }
             }
         }
+        engine.ensureBackend()
         val facts = PhoneFacts.collect(engine, packageManager.getPackageInfo(packageName, 0).versionName ?: "")
         report
             .put("device", DeviceTune.deviceJson(facts))

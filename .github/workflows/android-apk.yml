@@ -46,6 +46,16 @@ jobs:
           test -f android/apk/app/src/main/jniLibs/arm64-v8a/libggml-cpu.so
           echo "Vulkan and dotprod/i8mm CPU libllama are in the APK"
 
+      - name: Note software Vulkan
+        run: |
+          sudo apt-get install -y -qq mesa-vulkan-drivers vulkan-tools || true
+          vulkaninfo --summary > /tmp/vulkaninfo.txt || true
+          if grep -Ei 'llvmpipe|lavapipe' /tmp/vulkaninfo.txt; then
+            echo "Software Vulkan is installed. A full CPU-versus-Vulkan llama compare is not run here: the phone binary is arm64 and this job has no GGUF. The Mali branch is covered by android/qvac/test_mali_policy.cpp."
+          else
+            echo "No lavapipe/llvmpipe ICD. The Mali branch is covered by android/qvac/test_mali_policy.cpp, which build_android.sh already ran."
+          fi
+
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests and signed debug APK
