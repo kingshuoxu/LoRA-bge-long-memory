@@ -30,10 +30,15 @@ jobs:
       - name: Python packages
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers numpy safetensors
+          pip install transformers numpy safetensors sentencepiece
 
       - name: Build GGUF, expert bundle and manifest
         run: sh android/scripts/build_phone_assets.sh
+
+      - name: Free disk before native builds
+        run: |
+          pip uninstall -y torch >/dev/null || true
+          df -h /
 
       - uses: actions/setup-java@v4
         with:

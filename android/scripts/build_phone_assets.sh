@@ -55,7 +55,16 @@ from pathlib import Path
 pointer = Path("experts/expert_0/adapter_model.safetensors").read_bytes()[:20]
 if pointer.startswith(b"version https://git-lfs"):
     raise SystemExit("专家权重还是 Git LFS 指针。先 git lfs pull --include 'experts/**'")
+qwen = Path("models/Qwen2.5-0.5B-Instruct/model.safetensors").stat().st_size
+bge = Path("models/bge-small-zh-v1.5/model.safetensors").stat().st_size
+if qwen < 100_000_000 or bge < 10_000_000:
+    raise SystemExit(f"权重不完整: qwen {qwen} bge {bge}")
 PY
+# Qwen2 先尝试 sentencepiece,没有 tokenizer.model 再退回 vocab.json。
+# 没装这个包时,缺模块的异常盖住了「文件不存在」,转换会直接停。
+if ! python3 -c "import sentencepiece" >/dev/null 2>&1; then
+  pip install sentencepiece
+fi
 sh android/scripts/convert_base.sh
 sh android/scripts/convert_bge.sh
 python android/scripts/convert_experts.py
@@ -142,3 +151,7 @@ PY
 python3 android/scripts/write_setup_manifest.py /tmp/setup-plan.json "$STAGE/manifest.json"
 cp "$STAGE/manifest.json" android/apk/app/src/main/assets/setup_manifest.json
 echo "清单已写入 assets,发布文件在 $STAGE"
+# 后面还要编 OpenBLAS 和 Vulkan。源权重、中间 GGUF 和 llama.cpp 树不再需要。
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  rm -rf "$QWEN" "$BGE" "$GGUF" "$BUNDLE" "${LLAMA_CPP:-/tmp/llama.cpp-b7349}"
+fi
