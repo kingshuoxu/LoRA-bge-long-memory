@@ -1,8 +1,28 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("app.cash.paparazzi") version "1.3.5"
+}
+
+// 和 AppUpdate.versionCodeOf 同一条规则：主版本 * 1000000 + 次版本 * 1000 + 修订。
+fun releaseVersionCode(versionName: String): Int {
+    val parts = versionName.split(".")
+    return parts[0].toInt() * 1_000_000 + parts[1].toInt() * 1_000 + parts[2].toInt()
+}
+
+val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.3"
+val skipNative = findProperty("lorabge.skipNative") == "true"
+val keystoreB64 = System.getenv("ANDROID_KEYSTORE_B64").orEmpty()
+val signingStore = if (keystoreB64.isNotBlank()) {
+    val out = layout.buildDirectory.file("ci-keystore.jks").get().asFile
+    out.parentFile.mkdirs()
+    out.writeBytes(Base64.getDecoder().decode(keystoreB64))
+    out
+} else {
+    rootProject.file("keystore/debug-test-only.jks")
 }
 
 android {
@@ -14,25 +34,38 @@ android {
         applicationId = "com.lorabge.memory"
         minSdk = 29
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.1.3"
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
+        versionName = appVersion
+        versionCode = releaseVersionCode(appVersion)
+        if (!skipNative) {
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
+            externalNativeBuild {
+                cmake {
+                    cppFlags += "-std=c++17"
+                }
             }
         }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("stable") {
+            storeFile = signingStore
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASS") ?: "lorabge-test-only"
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "lorabge-test"
+            keyPassword = System.getenv("ANDROID_KEY_PASS") ?: "lorabge-test-only"
+        }
+    }
+
     buildTypes {
         debug {
             isDebuggable = true
+            signingConfig = signingConfigs.getByName("stable")
         }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stable")
         }
     }
 
@@ -46,15 +79,20 @@ android {
     buildFeatures {
         compose = true
     }
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+    if (!skipNative) {
+        externalNativeBuild {
+            cmake {
+                path = file("src/main/cpp/CMakeLists.txt")
+                version = "3.22.1"
+            }
         }
     }
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            if (skipNative) {
+                excludes += setOf("**/*.so")
+            }
         }
     }
 }

@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -60,7 +60,111 @@ jobs:
 
       - name: Unit tests and signed debug APK
         working-directory: android/apk
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
         run: chmod +x ./gradlew && ./gradlew testDebugUnitTest assembleDebug --no-daemon --stacktrace
+
+      - name: Write the update manifest
+        run: |
+          set -eu
+          TAG=android-v0.1.3
+          STAGE=android/out/release
+          mkdir -p "$STAGE"
+          APK=android/apk/app/build/outputs/apk/debug/app-debug.apk
+          cp "$APK" "$STAGE/app-debug.apk"
+          cp android/apk/app/src/main/assets/setup_manifest.json "$STAGE/manifest.json"
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          AAPT=$(find "$SDK/build-tools" -path '*/aapt' | sort | tail -1)
+          BADGING=$("$AAPT" dump badging "$STAGE/app-debug.apk")
+          python3 - "$TAG" "$STAGE" "$BADGING" << 'PY'
+          import hashlib, json, pathlib, sys
+          tag, stage, badging = sys.argv[1:]
+          name = tag.removeprefix("android-v")
+          major, minor, patch = (int(part) for part in name.split("."))
+          code = major * 1_000_000 + minor * 1_000 + patch
+          assert f"versionCode='{code}'" in badging, badging
+          assert f"versionName='{name}'" in badging, badging
+          assert "native-code: 'arm64-v8a'" in badging, badging
+          apk = pathlib.Path(stage) / "app-debug.apk"
+          digest = hashlib.sha256(apk.read_bytes()).hexdigest()
+          payload = {
+              "versionName": name,
+              "versionCode": code,
+              "sha256": digest,
+              "size": apk.stat().st_size,
+              "apk": "app-debug.apk",
+          }
+          (pathlib.Path(stage) / "update.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          (pathlib.Path(stage) / "SHA256SUMS").write_text(f"{digest}  app-debug.apk\n", encoding="utf-8")
+          print(payload)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release-apk
+          path: |
+            android/out/release/app-debug.apk
+            android/out/release/manifest.json
+            android/out/release/update.json
+            android/out/release/SHA256SUMS
+          if-no-files-found: error
+
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install emulator pieces
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq unzip libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
+          test -n "$CMDLINE"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' 24333f8a63b6825ea9c5514f83c2829b004d1fee d56f5187479451eabf01fb78af6dfcb131a6481e > "$SDK/licenses/android-sdk-license"
+          "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;aosp_atd;x86_64"
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; else echo "没有 /dev/kvm" >&2; exit 1; fi
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Upgrade from the previous version keeps data
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: sh android/scripts/upgrade_preserve.sh
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: upgrade-logs
+          path: android/out/upgrade/emulator.log
+          if-no-files-found: ignore
+
+  publish:
+    needs: [build, upgrade]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release-apk
+          path: android/out/release
 
       - name: Publish pre-release
         env:
@@ -69,24 +173,39 @@ jobs:
           set -eu
           TAG=android-v0.1.3
           STAGE=android/out/release
-          mkdir -p "$STAGE"
-          cp android/apk/app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-debug.apk"
-          cp android/apk/app/src/main/assets/setup_manifest.json "$STAGE/manifest.json"
+          python3 - << 'PY'
+          import hashlib, json, pathlib
+          stage = pathlib.Path("android/out/release")
+          meta = json.loads((stage / "update.json").read_text())
+          apk = (stage / "app-debug.apk").read_bytes()
+          digest = hashlib.sha256(apk).hexdigest()
+          assert meta["versionName"] == "0.1.3"
+          assert meta["versionCode"] == 1003
+          assert meta["sha256"] == digest
+          assert meta["size"] == len(apk)
+          sums = (stage / "SHA256SUMS").read_text().split()
+          assert sums[0] == digest and sums[1] == "app-debug.apk"
+          PY
           NOTES=$(cat << EOF
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
 
+          从这一版起，安装包用同一把测试钥匙签名。设置里的「检查更新」会读 android-v* 发布和 update.json（GitHub，失败再试 ghproxy），按 versionCode 比较，下载 APK 可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。
+
+          0.1.2 和更早的包是每次 CI 一把新的调试钥匙，签不上这一版。已经装过那些包的手机要先卸一次。卸载会清掉应用私有目录和 Android/data 里的模型、专家、对话和设置，下次打开会按 0.1.0 的清单重新下载。卸完装上这一版之后，以后的版本可以在应用里直接更新，不用再卸。
+
           模型和清单仍用 android-v0.1.0 里的文件,没有重新转换。对话、嵌入、路由和 GPU 自检跑在单独的 :llm 进程里,训练在 :train。原生崩溃不会把界面打回桌面;会记下信号和阶段,这块驱动记成坏后端,同一条请求改走 CPU 再试一次。Mali 在这次独立自检对上并且比 CPU 快之前,自动模式保持 CPU。Adreno 仍只看结果是否一致。
 
-          界面和桌面客户端对齐:底栏四个页面,齿轮进设置(后端、Wi-Fi、清单、语言、导出诊断、空间、版本)。设置是不透的全屏。星云在手机上是能看清的粒子云,专家名字和事实卡能读,链接很淡,开场把所有专家放进画面。对话里的记忆备注加大了间距;图形后端改走 CPU 只弹出一次。巩固页顶部是阶段星座,抽出的事实是卡片。下载总量用 KB/MB/GB,刚开始不会显示「剩余 0 秒」。
+          界面和桌面客户端对齐:底栏四个页面,齿轮进设置(后端、Wi-Fi、清单、语言、导出诊断、检查更新、空间、版本)。设置是不透的全屏。星云在手机上是能看清的粒子云,专家名字和事实卡能读,链接很淡,开场把所有专家放进画面。对话里的记忆备注加大了间距;图形后端改走 CPU 只弹出一次。巩固页顶部是阶段星座,抽出的事实是卡片。下载总量用 KB/MB/GB,刚开始不会显示「剩余 0 秒」。
 
-          0.1.2 的进程隔离还在:星云复用桌面的 WebGL 银河和粒子云,可以缩放、点开事实、跳回来源对话,回忆时高亮。标题下不再放调试状态。
+          0.1.2 的进程隔离还在。
 
           - APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/app-debug.apk
           - 清单: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json
+          - 更新说明: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/update.json
 
-          这是预发布,不合并到 main。
+          这是预发布,不合并到 main。签名是仓库里的测试钥匙,不是上架密钥。
           EOF
           )
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.3" --notes "$NOTES"
-          gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" --clobber
+          gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS" --clobber

@@ -115,6 +115,34 @@ private fun PhoneApp(
     var tick by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf("") }
+    var updatePhase by remember { mutableStateOf("") }
+    var updateVersion by remember { mutableStateOf("") }
+    var updateNotes by remember { mutableStateOf("") }
+    var updateMessage by remember { mutableStateOf("") }
+    var updateOffer by remember { mutableStateOf<UpdateOffer?>(null) }
+    var updateBusy by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val packageVersion = remember {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode.toInt() else @Suppress("DEPRECATION") info.versionCode
+    }
+    LaunchedEffect(packageVersion) {
+        val langNow = lang
+        Thread {
+            val offer = try {
+                lookupUpdate(packageVersion, ::bytesOfText)
+            } catch (_: Throwable) {
+                null
+            }
+            if (offer != null && updatePhase.isBlank()) {
+                updateOffer = offer
+                updateVersion = offer.versionName
+                updateNotes = offer.notes.trim()
+                updatePhase = "available"
+                updateMessage = if (langNow == "en") "Version ${offer.versionName}" else "版本 ${offer.versionName}"
+            }
+        }.start()
+    }
     var probeGen by remember { mutableIntStateOf(if (probeOnStart) 1 else 0) }
     LaunchedEffect(probeGen) {
         if (probeGen == 0) return@LaunchedEffect
@@ -136,7 +164,6 @@ private fun PhoneApp(
         }
         tick++
     }
-    val context = androidx.compose.ui.platform.LocalContext.current
     var settingsOpen by remember { mutableStateOf(false) }
     var drawerOpen by remember { mutableStateOf(false) }
     var wifiOnly by remember { mutableStateOf(FetchService.wifiOnly(context)) }
@@ -208,6 +235,10 @@ private fun PhoneApp(
         recallJson = recallJson,
         recallBanner = recallBanner,
         liveNebula = true,
+        updatePhase = updatePhase,
+        updateVersion = updateVersion,
+        updateNotes = updateNotes,
+        updateMessage = updateMessage,
     )
     SkyFrame(state) { event ->
         when (event) {
@@ -364,6 +395,67 @@ private fun PhoneApp(
             }
             SkyEvent.DismissToast -> toast = ""
             SkyEvent.ExportDiagnostics -> onExport()
+            SkyEvent.DismissUpdate -> {
+                updatePhase = ""
+                updateMessage = ""
+            }
+            SkyEvent.CheckUpdate -> {
+                if (updateBusy) return@SkyFrame
+                val langNow = lang
+                updatePhase = "downloading"
+                updateMessage = if (langNow == "en") "Checking" else "正在检查"
+                Thread {
+                    try {
+                        val offer = lookupUpdate(packageVersion, ::bytesOfText)
+                        if (offer == null) {
+                            updateOffer = null
+                            updatePhase = "latest"
+                            updateVersion = ""
+                            updateNotes = ""
+                            updateMessage = ""
+                        } else {
+                            updateOffer = offer
+                            updateVersion = offer.versionName
+                            updateNotes = offer.notes.trim()
+                            updatePhase = "available"
+                            updateMessage = if (langNow == "en") "Version ${offer.versionName}" else "版本 ${offer.versionName}"
+                        }
+                    } catch (ex: Throwable) {
+                        updatePhase = "error"
+                        updateMessage = ex.message ?: if (langNow == "en") "Couldn't check" else "检查失败"
+                    }
+                }.start()
+            }
+            SkyEvent.StartUpdate -> {
+                val offer = updateOffer ?: return@SkyFrame
+                val langNow = lang
+                if (UpdateInstaller.needsUnknownSources(context)) {
+                    updatePhase = "need_permission"
+                    updateMessage = ""
+                    context.startActivity(UpdateInstaller.unknownSourcesIntent(context))
+                    return@SkyFrame
+                }
+                if (updateBusy) return@SkyFrame
+                updateBusy = true
+                updatePhase = "downloading"
+                Thread {
+                    try {
+                        val file = downloadUpdate(context.filesDir, offer, RemoteOpener { url, offset -> httpOpen(url, offset) }) { snap ->
+                            updateMessage = snap.message.ifBlank {
+                                if (langNow == "en") "Downloading" else "正在下载"
+                            }
+                        }
+                        UpdateInstaller.install(context, file)
+                        updatePhase = "installing"
+                        updateMessage = ""
+                    } catch (ex: Throwable) {
+                        updatePhase = "error"
+                        updateMessage = ex.message ?: if (langNow == "en") "Update failed" else "更新失败"
+                    } finally {
+                        updateBusy = false
+                    }
+                }.start()
+            }
         }
     }
 }

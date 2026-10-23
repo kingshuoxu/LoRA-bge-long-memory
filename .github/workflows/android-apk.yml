@@ -60,6 +60,11 @@ jobs:
 
       - name: Unit tests and signed debug APK
         working-directory: android/apk
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
         run: chmod +x ./gradlew && ./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4
@@ -67,3 +72,47 @@ jobs:
           name: lorabge-memory-arm64-debug
           path: android/apk/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install emulator pieces
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq unzip libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
+          test -n "$CMDLINE"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' 24333f8a63b6825ea9c5514f83c2829b004d1fee d56f5187479451eabf01fb78af6dfcb131a6481e > "$SDK/licenses/android-sdk-license"
+          "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;aosp_atd;x86_64"
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; else echo "没有 /dev/kvm" >&2; exit 1; fi
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Upgrade from the previous version keeps data
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: sh android/scripts/upgrade_preserve.sh
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: upgrade-logs
+          path: android/out/upgrade/emulator.log
+          if-no-files-found: ignore

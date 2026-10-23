@@ -129,11 +129,13 @@ System image must match the host architecture.
 
 ## CI
 
-工作流 `.github/workflows/android-apk.yml`,名字 `Android APK`。在 `android/**` 或该工作流文件的 push / pull request 上跑。宿主已带 Android SDK,不再用 `android-actions/setup-android`(它会去装已经废弃的 `tools` 包)。步骤是装 SDK 35、NDK `27.2.12479018`、CMake 3.22.1、glslc,按 `android/trainer/build_android.sh` 编 OpenBLAS ARMv8 和 `libtrain-mft.so`,再按 `android/qvac/build_android.sh` 从 `tetherto/qvac-fabric-llm.cpp` 的 `b73e75af5` 加大小写补丁编 `libllama.so`(先试 Vulkan,着色器失败才退回 CPU),然后 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest`。单元测试里有 Paparazzi 截图。产物名 **`lorabge-memory-arm64-debug`**,里面是签名调试 APK `app-debug.apk`。调试签名是 Android Gradle 的默认 debug keystore,不是上架用的发布签名。
+工作流 `.github/workflows/android-apk.yml`,名字 `Android APK`。在 `android/**` 或该工作流文件的 push / pull request 上跑。宿主已带 Android SDK,不再用 `android-actions/setup-android`(它会去装已经废弃的 `tools` 包)。步骤是装 SDK 35、NDK `27.2.12479018`、CMake 3.22.1、glslc,按 `android/trainer/build_android.sh` 编 OpenBLAS ARMv8 和 `libtrain-mft.so`,再按 `android/qvac/build_android.sh` 从 `tetherto/qvac-fabric-llm.cpp` 的 `b73e75af5` 加大小写补丁编 `libllama.so`(先试 Vulkan,着色器失败才退回 CPU),然后 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest`。单元测试里有 Paparazzi 截图。产物名 **`lorabge-memory-arm64-debug`**,里面是签名调试 APK `app-debug.apk`。
+
+签名不再用每次 CI 新生成的 `~/.android/debug.keystore`。Gradle 默认用仓库里的测试钥匙 `android/apk/keystore/debug-test-only.jks`(别名 `lorabge-test`,密码写在该目录的 README,标明只给测试)。四个仓库 Secret `ANDROID_KEYSTORE_B64`、`ANDROID_KEYSTORE_PASS`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASS` 都有值时改用那把钥匙。自动化账号不能写入 Secrets。换钥匙会再改一次签名。`versionCode` 由版本名算出来:主版本 * 1000000 + 次版本 * 1000 + 修订,所以 0.1.3 是 1003,高于已发布 0.1.2 的手写 versionCode 4。
 
 上一版下载 `29fe08c` zip、GEMM 仍是纯 C++ 的绿运行:[Android APK 39895706987](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895706987)(push `61d2b0c`),同一提交的 pull request 运行 [39895710520](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895710520)。本提交改为现场编 OpenBLAS 和 Vulkan `libllama`,运行 URL 写在 PR 描述里。产物名仍是 **`lorabge-memory-arm64-debug`**。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`,LOAD 对齐 `0x4000`,并链进 `cblas_sgemm`。
 
-模拟器没有放进 CI,arm64 镜像在 x86 宿主上是指令翻译,容易超时。
+另有一个 `upgrade` 任务跑 `android/scripts/upgrade_preserve.sh`:在 x86_64 的 `aosp_atd` 模拟器上,用同一把钥匙安装 versionName 0.1.2(versionCode 1002,不含原生库),写入记忆、模型和 `shared_prefs`,再 `adb install -r` 0.1.3(1003),断言三样都还在。arm64 镜像在 x86 宿主上仍然起不来,所以这个测试不装正式的 arm64 APK,也不拿已发布的 0.1.2(那份签名不同,覆盖安装会失败)。发布工作流要等这个任务通过才上传 `android-v0.1.3`。这台云主机的嵌套 KVM 在 `KVM_CREATE_VCPU` 时会报 `kvm_spurious_fault`,本地起不来这个模拟器,所以覆盖安装的结果以 CI 的 `upgrade` 任务为准。
 
 这次运行的 URL 写在文末和 PR 描述里。
 
@@ -143,7 +145,7 @@ System image must match the host architecture.
 2. **bge 的大写拉丁字母,桌面和手机现在走同一份补丁。** 桌面 12 条余弦最低 0.999998。APK 不再用 `29fe08c` 那个 zip,而是 QVAC `b73e75af5` 加 `wpm-cased.patch`。路由对照 11687/11687 仍是修之前的问句向量加 PyTorch 键,当时没有改判。没有改走 ONNX。
 3. **训练源码对齐了,GEMM 目标不同。** 两边都是 MobileFineTuner `086b1a027fe708d5eaca89b1ec2bf1a876fb80de` 加 `mft-ffn-lora.patch`,都是 OpenBLAS、微批 1、累加 8。桌面打分是 x86 OpenBLAS;手机是 ARMv8 NEON。第 1 步 loss 已经对齐到 4.07324。对话和嵌入都是 QVAC `b73e75af5` 加大小写补丁;手机多一个 Vulkan 后端给 Adreno。`--val-split` 不再参与手机训练。
 4. **界面按 PR #4 的桌面客户端对齐。** 底栏是对话、星云、巩固、记忆库。右上角齿轮进设置(后端、Wi-Fi、清单、语言、导出诊断、空间和版本),标题下不再放「基座 ok」这类调试状态。对话是气泡、输入栏里的发送图标、顶栏一个新对话,对话列表在抽屉里。星云把桌面的 WebGL 银河和粒子云放进 WebView,双指缩放,点专家展开事实星,点事实看属性、取值、来源对话和闸门分;回忆时高亮并写出相似度。专家名字用实体。0.1.2 起对话、嵌入、路由和 GPU 自检在 `:llm`,训练在 `:train`,Mali 要等这次独立自检对上并且更快才用 GPU。0.1.3 把设置改成不透的全屏,星云在手机比例下能看出粒子云和专家名字,巩固页用阶段星座和事实卡片,图形后端改走 CPU 时只提示一次,下载剩余时间不会显示 0 秒。模拟器在这台机器上起不来。对话、设置、下载、巩固的设备尺寸截图用 Paparazzi,星云用同一套页面在无头 Chrome 里截。
-5. **官方模拟器拒绝在这台 x86_64 上启动 arm64 镜像。** 见上面的 FATAL。APK 冒烟要等小米 15,或者一台本身就是 arm64 的模拟器宿主。
+5. **官方模拟器拒绝在这台 x86_64 上启动 arm64 镜像。** 见上面的 FATAL。对话、Vulkan 和训练时长仍要真机。覆盖安装用 x86_64 的 `aosp_atd` 测数据还在不在,不代替 arm64 冒烟。
 
 ## 核对记录
 
@@ -151,5 +153,5 @@ System image must match the host architecture.
 - `export_phone_bundle.py` 写出 5 个专家、事实向量 2250 行。这个目录在 `android/out/`,不入库。
 - `qemu-aarch64-static` 跑静态 arm64 路由:实体问句挂上 `expert_0`,理由 `entity`。
 - 本地 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` 通过。`MemoryStoreTest` 3 项 0 失败。签名调试 APK 只含 arm64-v8a,里面有 `libmemoryroute.so`、三条 QVAC 命令(改名为 `libllama-*.so`)和 ggml / vulkan 的 so。
-- 模拟器没有把这个 APK 装上去,原因见上一节。
+- 模拟器没有装过带 arm64 原生库的正式 APK,原因见上一节。`upgrade_preserve.sh` 用去掉原生库的同签名包,在 x86_64 模拟器上验证 `adb install -r` 留下记忆、模型和设置。
 - CI 运行 URL 在 PR 描述里。产物名 `lorabge-memory-arm64-debug`。

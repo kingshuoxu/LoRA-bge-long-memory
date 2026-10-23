@@ -144,6 +144,40 @@ class ModelFetchTest {
     }
 
     @Test
+    fun unchangedShaDoesNotOpenTheNetwork() {
+        val payload = "abcdefgh".toByteArray()
+        val manifest = manifestOf(payload, listOf("http://mirror/a"))
+        val root = tempRoot()
+        File(root, "models").mkdirs()
+        File(root, "models/base.gguf").writeBytes(payload)
+        var opened = false
+        val fetch = ModelFetch(root, RemoteOpener { _, _ ->
+            opened = true
+            RemoteBody(200, payload.size.toLong(), ByteArrayInputStream(payload))
+        })
+        assertEquals("done", fetch.download(manifest) {})
+        assertFalse(opened)
+        assertEquals("abcdefgh", File(root, "models/base.gguf").readText())
+    }
+
+    @Test
+    fun changedShaDownloadsAgain() {
+        val payload = "abcdefgh".toByteArray()
+        val manifest = manifestOf(payload, listOf("http://mirror/a"))
+        val root = tempRoot()
+        File(root, "models").mkdirs()
+        File(root, "models/base.gguf").writeBytes("stale!!!".toByteArray())
+        var opened = false
+        val fetch = ModelFetch(root, RemoteOpener { _, _ ->
+            opened = true
+            RemoteBody(200, payload.size.toLong(), ByteArrayInputStream(payload))
+        })
+        assertEquals("done", fetch.download(manifest) {})
+        assertTrue(opened)
+        assertEquals("abcdefgh", File(root, "models/base.gguf").readText())
+    }
+
+    @Test
     fun manifestKeepsMirrorOrder() {
         val parsed = parseManifest(
             """

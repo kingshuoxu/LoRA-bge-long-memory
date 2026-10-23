@@ -29,6 +29,12 @@ cd android/apk && ./gradlew assembleDebug
 
 手机浏览器打开预发布里的 `app-debug.apk` 直接安装。第一次打开会自己下载对话基座、bge、训练用的 safetensors 和五个专家,装好就可以用,中间不用电脑。下载页能看到每个文件的进度、速度和当前镜像,可以暂停再继续,也可以只在 Wi-Fi 下下载。清单地址可以改成自己的 URL。
 
+0.1.3 起每一份 CI 包用同一把钥匙签名,钥匙在 `android/apk/keystore/debug-test-only.jks`,密码写在旁边的说明里,只给测试,不是上架密钥。打开应用,或在设置里点「检查更新」,会读最新的 `android-v*` 发布和同目录的 `update.json`。GitHub 连不上时改走 `ghproxy.net` 和 `mirror.ghproxy.com`。`versionCode` 按 `主版本 * 1000000 + 次版本 * 1000 + 修订` 递增,0.1.3 是 1003。有新版本就给出说明,下载 APK 可以续传,对上 SHA256 之后用系统安装器覆盖安装。第一次要在系统里允许本应用「安装未知来源应用」。
+
+已经装过 0.1.2 或更早的手机,签名对不上,要先卸一次。卸载会清掉应用内部目录和 `Android/data/com.lorabge.memory/` 里的模型、专家、对话和设置。模型下次打开会按 `android-v0.1.0` 的清单重新下载。卸完装上 0.1.3 之后,以后的版本在应用里更新,这些数据都留着。清单里某个文件的 SHA256 变了才重新下那个文件。
+
+仓库自动化写不了 GitHub Secrets。若要换成私钥,不要把 keystore 提交进 git,在自己的电脑上执行 `android/apk/keystore/README.md` 里的 `gh secret set`。四个 Secret 一旦设上,签名就换成那把钥匙,已经装了测试钥匙包的手机要再卸一次。在决定换钥匙之前不要设置它们。
+
 镜像按这个顺序试,失败就换下一个:ModelScope、hf-mirror.com、huggingface.co,最后才是 GitHub Release。带 `bert-bge-cased` 的 bge 和五个专家只在这次发布的文件里。官方 f16 只有在字节和我们转换的那份完全一样时才会排在基座前面。
 
 电脑上的 adb 仍然可以用,但不是必须的。手机开开发者选项和 USB 调试,数据线连上电脑,`adb devices` 能看到设备。然后:

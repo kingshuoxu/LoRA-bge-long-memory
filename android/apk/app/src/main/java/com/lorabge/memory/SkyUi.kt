@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -133,6 +134,10 @@ data class SkyState(
     val recallJson: String = "",
     val recallBanner: String = "",
     val liveNebula: Boolean = false,
+    val updatePhase: String = "",
+    val updateVersion: String = "",
+    val updateNotes: String = "",
+    val updateMessage: String = "",
 )
 
 sealed class SkyEvent {
@@ -162,6 +167,9 @@ sealed class SkyEvent {
     data object ApplyManifest : SkyEvent()
     data object ClearModels : SkyEvent()
     data object DismissToast : SkyEvent()
+    data object CheckUpdate : SkyEvent()
+    data object StartUpdate : SkyEvent()
+    data object DismissUpdate : SkyEvent()
 }
 
 fun skyText(lang: String, key: String): String {
@@ -236,6 +244,12 @@ fun skyText(lang: String, key: String): String {
         "stage.done" to "完成",
         "stage.pending" to "说出一条事实后，会显示在这里",
         "factWrite" to "写入这条事实",
+        "checkUpdate" to "检查更新",
+        "updateReady" to "可以更新",
+        "updateDownload" to "下载并安装",
+        "updateLatest" to "已是最新版本",
+        "updatePermission" to "请允许本应用安装未知来源应用，只需这一次。打开开关后回到这里再点下载并安装。",
+        "updateInstalling" to "请在系统界面确认安装。模型和对话会保留。",
     )
     val en = mapOf(
         "chat" to "Chat",
@@ -308,6 +322,12 @@ fun skyText(lang: String, key: String): String {
         "stage.done" to "Done",
         "stage.pending" to "A new fact shows up here",
         "factWrite" to "Write this fact",
+        "checkUpdate" to "Check for updates",
+        "updateReady" to "Update available",
+        "updateDownload" to "Download and install",
+        "updateLatest" to "Already up to date",
+        "updatePermission" to "Allow this app to install unknown apps, just once. Turn the switch on, come back, and tap download and install.",
+        "updateInstalling" to "Confirm the install. Models and chats stay.",
     )
     return (if (lang == "en") en else zh)[key] ?: key
 }
@@ -370,7 +390,10 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     BottomNav(state, nav, onEvent)
                 }
             }
-            if (state.toast.isNotBlank() && !state.settingsOpen) {
+            if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
+                UpdateCard(state, onEvent, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = nav + 76.dp))
+            }
+            if (state.toast.isNotBlank() && !state.settingsOpen && state.updatePhase.isBlank()) {
                 val toastBottom = when {
                     keyboard -> ime + 76.dp
                     else -> nav + 72.dp
@@ -527,6 +550,65 @@ private fun SettingsPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) 
             },
         )
         Text("${skyText(state.lang, "about")} · ${skyText(state.lang, "appName")} ${state.versionName}", color = Muted)
+        Text(
+            skyText(state.lang, "checkUpdate"),
+            color = Gold,
+            fontSize = 16.sp,
+            modifier = Modifier.clickable { onEvent(SkyEvent.CheckUpdate) }.padding(vertical = 6.dp),
+        )
+        if (state.updatePhase == "latest") {
+            Text(skyText(state.lang, "updateLatest"), color = Ink, fontSize = 14.sp)
+        }
+        if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
+            Text(state.updateMessage.ifBlank { skyText(state.lang, "updateReady") }, color = Ink, fontSize = 14.sp)
+        }
+    }
+}
+
+@Composable
+private fun UpdateCard(state: SkyState, onEvent: (SkyEvent) -> Unit, modifier: Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(Color(0xF210141C), RoundedCornerShape(18.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${skyText(state.lang, "updateReady")} ${state.updateVersion}".trim(),
+                color = Gold,
+                fontSize = 16.sp,
+            )
+            SkyIcon("close", Accent, Modifier.size(24.dp).clickable { onEvent(SkyEvent.DismissUpdate) })
+        }
+        if (state.updateNotes.isNotBlank()) {
+            Text(
+                state.updateNotes,
+                color = Ink,
+                fontSize = 14.sp,
+                modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()),
+            )
+        }
+        if (state.updateMessage.isNotBlank()) {
+            Text(state.updateMessage, color = Ink, fontSize = 14.sp)
+        }
+        val action = when (state.updatePhase) {
+            "need_permission" -> skyText(state.lang, "updatePermission")
+            "installing" -> skyText(state.lang, "updateInstalling")
+            else -> ""
+        }
+        if (action.isNotBlank() && state.updateMessage.isBlank()) {
+            Text(action, color = Ink, fontSize = 14.sp)
+        }
+        if (state.updatePhase == "available" || state.updatePhase == "need_permission" || state.updatePhase == "error") {
+            Text(
+                skyText(state.lang, "updateDownload"),
+                color = Accent2,
+                fontSize = 16.sp,
+                modifier = Modifier.clickable { onEvent(SkyEvent.StartUpdate) }.padding(vertical = 4.dp),
+            )
+        }
     }
 }
 
