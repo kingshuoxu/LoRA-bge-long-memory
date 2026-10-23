@@ -16,6 +16,7 @@ mkdir -p "$OUTDIR"
   --output_gguf "$OUTDIR/adapter.gguf" \
   --epochs "${EPOCHS:-4}" \
   --batch_size "${BATCH:-1}" \
+  --grad_accum_steps "${GRAD_ACCUM:-8}" \
   --lr "${LR:-5e-4}" \
   --max_grad_norm 1.0 \
   --lora_r 32 --lora_alpha 64 --lora_dropout 0 \

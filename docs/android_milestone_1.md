@@ -11,12 +11,13 @@
 | 官方 Qwen2.5-0.5B-Instruct Q8_0 + expert_0 的 f16 LoRA | **45/50**。错的五条都是产品编号:b0-022 温巴希克-373→格克尔-771,b0-026 格索姆-667→格索姆-670,b0-030 辛达菲萨-873→菲希菲克-894,b0-031 克洛佩雷-830→克洛雷-830,b0-049 布纳辛-470→布纳德-870 |
 | 本地 f16 基座 + 同一份 LoRA | **50/50** |
 | bge GGUF,均值池化 + L2,文本里没有大写拉丁字母 | 余弦 min 0.999998,8869 条 |
-| bge GGUF,文本里有大写字母(主要是 CEO) | 余弦可以掉到 0.845。llama.cpp 的 WordPiece 会把拉丁字母转成小写,这个分词器 `do_lower_case` 是 false |
-| llama.cpp 问句向量 + PyTorch 路由键,11687 条 | **11687/11687** 和 `scripts/router.py` 的决定一致。大写字母的余弦差没有改路由 |
+| bge,带大写拉丁字母,桌面 QVAC 嵌入器 | 12 条最低余弦 **0.999998**。`CEO` 编成 `[CLS] [UNK] [SEP]`,和 `do_lower_case=false` 一致 |
+| bge,APK 里的 `libllama.so` | **还没修。** Adreno zip 的二进制里没有 `bert-bge-cased` 分支,WPM 仍会把拉丁字母转成小写 |
+| llama.cpp 问句向量 + PyTorch 路由键,11687 条 | **11687/11687** 和 `scripts/router.py` 的决定一致。这是小写化还在的时候量的,大写余弦差没有改判 |
 | C++ 路由的字符串逻辑(相似度 0.99 / 0 / 拉开差距 / 删掉 expert_4) | 和 Python 一致,同一批 11687 条 |
 | QVAC 能否加载 Qwen2 并做 LoRA 反向传播 | 能。`general.architecture=qwen2` 的 Q8_0 跑过前向和反向 |
 
-bge 转换钉在 llama.cpp b7349(`4df6e859e92dac52536f735785bb9e0a3bc63e2b`)。b7349 不认识 bge-small-zh-v1.5 的分词器指纹 `56a3532a4cda32cf10d09834e0cdeee45c407d750b868651e44e2eebdcc721ed`,`convert_bge.sh` 把它补成和英文 bge 相同的 `bert-bge`。空的 `sentencepiece.bpe.model` 要删掉,否则转换器会把模型认成 BPE。
+bge 转换钉在 llama.cpp b7349(`4df6e859e92dac52536f735785bb9e0a3bc63e2b`)。b7349 不认识 bge-small-zh-v1.5 的分词器指纹 `56a3532a4cda32cf10d09834e0cdeee45c407d750b868651e44e2eebdcc721ed`,`convert_bge.sh` 把 GGUF 的 `tokenizer.ggml.pre` 写成 `bert-bge-cased`。空的 `sentencepiece.bpe.model` 要删掉,否则转换器会把模型认成 BPE。b7349 自己的 WPM 不看这个 pre 字符串,默认仍把码点转成小写。桌面能对上 PyTorch 的那个 `llama-embedding` 来自 QVAC 提交 `b73e75af5`,另外加了一段本地补丁:只有 pre 是 `bert-bge-cased` 时不做小写。2026-10-22 重新量过 12 条,含 `CEO`、`NASA`、`iPhone`、`Beijing`。和 PyTorch mean-pool + L2 的余弦最低 0.999998,最高也在 0.999999。`The CEO of the company lives in Beijing.` 和全小写那句,PyTorch 自己的余弦是 0.836,这就是以前写的「可以掉到 0.845」。llama 对大小写原文仍是 0.999999。`CEO` 的 id 是 100(`UNK`),`ceo` 是 8371。APK 从 zip 拷进的 `libllama.so`(sha256 `3a09dad897f97b85c87374c7b40d1c51377a900c5a3f88e60c9d4059fc758b32`)里搜不到 `bert-bge-cased`,手机嵌入器还是小写那条路径。只改 GGUF 元数据修不到手机。
 
 路由程序是 `android/router/memory_route.cpp`。实体优先、边界守卫、bge 的 τ=0.6、事实闸 τ=0.622、掩码「某」、值掩码「某值」,和 `fact_gate.json` 里 `use_paraphrases` / `use_reranker` 都关闭的设定一致。
 
@@ -51,11 +52,26 @@ batch_0 的 450 条样本(50 条陈述句 + 每条 8 个 QA)跑了 12 个 epoch�
 
 第 4 个 epoch 的两处未中:b0-000 标准答案 1978,生成 1979;b0-015 标准答案缪希希-565,生成缪希希-504。第 11、12 个 epoch 平均 loss 升到 0.55 和 0.82,答案开始重复字符,所以应用和脚本默认停在 4 个 epoch,不再跑满 12。
 
+同一份第 4 个 epoch 的 fp32 权重,再用训练器自己的贪心解码打了一遍(safetensors 升到 fp32,不经过 f16 GGUF,`gen_new=12`,碰到 `151645` 停)。50 条里中了 **48** 条,错的还是这两题,答案也一样。训练和这条解码用的是同一种精度。f16 GGUF 对话链也是 48/50,错的是同两题。
+
+这条 48/50 的优化轨迹是 **batch 8、OpenBLAS、4 核、seed 42、打乱**,一个 epoch 57 次更新。把 batch 改成 1、每次样本都更新(1800 次 Adam,学习率仍是 5e-4)时,第 1 个 epoch 的平均 loss 是 2.32,贪心解码 **0/50**,50 条答案都塌成 `-3-3-3` 这种重复。第 2 个 epoch 前 270 步的平均 loss 升到 3.06,没有往下走。纯 C++ 和 OpenBLAS 在 batch 1 的前三步上 loss 还对齐(4.07324、3.367、0.759),所以这不是 GEMM 舍入,是更新次数太多。
+
+APK 和 Termux 因此改成 `--batch_size 1 --grad_accum_steps 8`:内存仍按一条样本走,每 8 条才做一次 Adam,一个 epoch 回到 57 次更新。这和打出 48/50 的那次还差两点:梯度是 8 个「单条平均」再平均,不是 8 条放进同一个 batch 后按 token 加权;手机 GEMM 仍是纯 C++。`libtrain-mft.so` 本来就认 `--grad_accum_steps`,这次只改了调用参数。
+
 把第 4 个 epoch 的适配器强制挂在 20 条常识题上是 10/20,基座单独是 17/20。路由不会这么挂:这 20 句里没有 batch_0 的实体,和 50 条陈述句的 bge 余弦最高 0.429,低于 τ=0.6。对话走基座,常识题维持基座那一档。
 
 陈述句在仓库里是整句 loss,QA 只在答案上。QVAC 一次运行只能开一种 assistant-only,`prepare_train_jsonl.py` 把陈述句包成「请记下这句话。」,让两类样本进同一次训练。这和 `FactDataset` 不是同一条 loss,差在这里。
 
-桌面 4 核上,2e-5 的探针大约 3 秒一步,一个 epoch 约 24 分钟。12 个 epoch 量级是数小时,还没算手机上的热降频。
+桌面这台 4 核 Xeon 上,fp32、序列长 40,计时如下。骁龙 8 Elite 还没有墙钟数字。
+
+| 路径 | 一步 | 4 个 epoch | 峰值内存 |
+|---|---|---|---|
+| batch 8,OpenBLAS,4 线程。这是打出 48/50 的那次 | 前 228 步平均 28.4 秒 | 6472 秒(1.80 小时) | 分配器峰值 5753 MB,稳态约 2102 MB |
+| batch 1,OpenBLAS,4 线程。和 APK 的 batch、学习率、epoch 相同,GEMM 不同 | 热身后大约 3.3 秒 | 1800 步,大约 1.6 小时 | 峰值 RSS 3.95 GB,稳态约 2.6 GB |
+| batch 1,纯 C++ GEMM(`USE_BLAS=OFF`)。和 APK 同一类内核,但是 x86_64,不是 arm64 | 第 2 步 11.9 秒,第 3 步 11.4 秒 | 若按 1800 次更新,在这台机器上大约 5.9 小时;累加 8 之后是 228 次更新 | 峰值 RSS 3.74 GB |
+| batch 1、累加 8,OpenBLAS,4 线程。这是 APK 现在的更新次数 | 第 2 步 29.1 秒,第 3 步 29.0 秒 | 228 步,大约 1.8 小时 | 跑起来时 RSS 约 2.6 GB |
+
+手机上的一步会落在这台机器的纯 C++ 数字附近,再乘上 Oryon 单核和这颗 vCPU 的差距,以及热降频。没有在 arm64 上跑过训练进程:那个二进制的解释器是 `/system/bin/linker64`,这台机器的 `qemu-aarch64-static` 带不动 bionic。
 
 ## arm64 冒烟(不是手机)
 
@@ -78,7 +94,7 @@ System image must match the host architecture.
 
 - 插入 f16 基座后,用应用问 batch_0 的第一问,确认还是 50/50 里的那种回答,尤其是上面五条产品编号。
 - 专家页打开 Vulkan 再问一句,确认 Adreno 830 上 `-ngl 99` 能出字。失败就拨回 CPU。
-- 插电、熄屏,或勾选立即训练,把一条审过的事实训完 12 个 epoch。看通知、`telemetry.tsv`(RSS、热区、电量)、检查点能不能续上、取消能不能停。
+- 插电、熄屏,或勾选立即训练,把审过的事实训完 4 个 epoch。看通知、`telemetry.tsv`(RSS、热区、电量)、检查点能不能续上、取消能不能停。桌面上纯 C++、batch 1 的一步大约 12 秒,整批大约数小时,真机以 `telemetry.tsv` 为准。
 - 训完开新对话,确认新专家被挂上;删掉之后不再挂。
 - 用 Termux 路径时,对一下 `telemetry.log` 里的 RSS 是不是训练进程,而不是采样脚本自己。
 
@@ -88,7 +104,7 @@ System image must match the host architecture.
 
 工作流 `.github/workflows/android-apk.yml`,名字 `Android APK`。在 `android/**` 或该工作流文件的 push / pull request 上跑。宿主已带 Android SDK,不再用 `android-actions/setup-android`(它会去装已经废弃的 `tools` 包)。步骤是装 SDK 35、NDK `27.2.12479018`、CMake 3.22.1,按 `android/trainer/build_android.sh` 编出 `libtrain-mft.so`,下载 Adreno zip 并校验 sha256,然后 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest`。产物名 **`lorabge-memory-arm64-debug`**,里面是签名调试 APK `app-debug.apk`。调试签名是 Android Gradle 的默认 debug keystore,不是上架用的发布签名。
 
-绿的一次运行:[Android APK 39837168967](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39837168967)。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`。
+绿的一次运行:[Android APK 39868513636](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39868513636)(push `a8c7d64`,默认 4 个 epoch)。同一提交的 pull request 运行 [39868518100](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39868518100) 也是绿的。产物名 **`lorabge-memory-arm64-debug`**。上一趟绿的是 [39837168967](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39837168967)。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`。
 
 模拟器没有放进 CI,arm64 镜像在 x86 宿主上是指令翻译,容易超时。
 
@@ -96,10 +112,10 @@ System image must match the host architecture.
 
 ## 阻塞
 
-1. **QVAC 的梯度是错的,已经换掉。** MobileFineTuner 同一份 C++ 在桌面把 batch_0 训到第 4 个 epoch 是 **48/50**。跑满 12 个 epoch 会掉到 22/50。常识题不挂这个适配器:实体对不上,余弦最高 0.429。
-2. **bge 的大写拉丁字母。** 纯中文余弦是 1.0;带 CEO 这类大写时 llama.cpp 会小写化。用 PyTorch 键、llama 问句时,11687 条路由没有因此改判。事实闸是否改判见文末。没有改走 ONNX。
-3. **手机命令行和桌面 b7349 不是同一次构建。** 手机包短提交 `29fe08c`,完整哈希在 ggml-org/llama.cpp、tetherto/qvac-fabric-llm.cpp、qvac-fabric-llm-finetune 上都没有对上。桌面能用的旗标不要假设手机二进制全都认;`--val-split` 在桌面 b7349 上会被拒绝。
-4. **桌面客户端还没有提交目录格式。** 应用按本文和 `docs/client_store.md` 实现。JSON 字段跟仓库的 `router.jsonl` / `fact_memory.json` 对齐,GGUF 和 float32 是附加文件。
+1. **QVAC 的梯度是错的,已经换掉。** MobileFineTuner 在桌面用 batch 8 把 batch_0 训到第 4 个 epoch 是 **48/50**(fp32 贪心和 f16 GGUF 都是这个数,错的是同两题)。batch 1、不累加,第 1 个 epoch 是 **0/50**。调用已改成累加 8 步。跑满 12 个 epoch 会掉到 22/50。常识题不挂这个适配器:实体对不上,余弦最高 0.429。
+2. **bge 的大写拉丁字母,桌面嵌入器修了,APK 里的还没有。** 桌面那次 12 条余弦最低 0.999998。APK 的 `libllama.so` 仍是 zip 里的小写 WPM。路由对照 11687/11687 用的是修之前的问句向量加 PyTorch 键,当时没有改判。没有改走 ONNX。
+3. **手机命令行和桌面不是同一次构建。** 训练两边都是 MobileFineTuner `086b1a027fe708d5eaca89b1ec2bf1a876fb80de` 加 `mft-ffn-lora.patch`。桌面打分链 OpenBLAS、batch 8;APK 是 NDK 27、`USE_BLAS=OFF`、batch 1。对话和嵌入:桌面 QVAC `b73e75af5` 加本地大小写补丁;手机 zip 短提交 `29fe08c`,完整哈希对不上 ggml-org/llama.cpp 或 qvac 的公开提交。`--val-split` 在桌面 b7349 上会被拒绝,手机训练已经不走那条命令。
+4. **界面还不是 PR #4 那套深空。** APK 是 Material3 三个文字页:对话、整理、专家。能聊天、把勾选的对话收成一条事实、后台训练、状态行里看到 loss、取消、删专家。没有银河背景、衬线字、星云、中英切换,也不能在对话里改一条事实再重训。桌面客户端在 PR #4(`cursor/desktop-client-dae6`)。
 5. **官方模拟器拒绝在这台 x86_64 上启动 arm64 镜像。** 见上面的 FATAL。APK 冒烟要等小米 15,或者一台本身就是 arm64 的模拟器宿主。
 
 ## 核对记录

@@ -108,6 +108,8 @@ class TrainService : Service() {
                 "--output_gguf", adapter.absolutePath,
                 "--epochs", job.optInt("epochs", 4).toString(),
                 "--batch_size", "1",
+                // 8 次微批再更新一次,等效 batch 8。batch 1 直接更新时第 1 个 epoch 是 0/50,答案塌成重复字符。
+                "--grad_accum_steps", "8",
                 "--lr", job.optString("lr", "5e-4"),
                 "--max_grad_norm", "1.0",
                 "--lora_r", rank.toString(),
