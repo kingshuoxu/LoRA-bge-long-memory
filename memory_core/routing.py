@@ -62,21 +62,11 @@ def _base(sim: float, expert: str | None, reason: str, entity_pass: bool, fact_p
 
 
 def _entity_hit(entity: str, text: str) -> int:
-    """命中时返回用来比长短的长度。拉丁名忽略大小写和称谓。"""
-    if entity == "我":
-        from memory_core.fact_span import entity_mentioned
+    """命中时返回用来比长短的长度。名字必须整段对上，多出来的字不算。"""
+    from memory_core.fact_span import entity_mentioned
 
-        return 1 if entity_mentioned("我", text) else 0
-    if len(entity) >= 2 and entity in text:
-        return len(entity)
-    ensure_scripts_path()
-    from router import entity_key
-
-    key = entity_key(entity)
-    if not key or any("\u4e00" <= char <= "\u9fff" for char in key):
-        return 0
-    if key in text.casefold():
-        return len(key)
+    if entity_mentioned(entity, text):
+        return max(len(entity), 1)
     return 0
 
 
@@ -115,7 +105,12 @@ def _guard(expert: ExpertRecord, text: str) -> bool:
     found = extract_query_entity(text)
     if not found:
         return False
-    return any(found.startswith(entity) and len(found) > len(entity) for entity in _canonical_entities(expert))
+    from memory_core.fact_span import name_extends
+
+    return any(
+        found.startswith(entity) and len(found) > len(entity) and not name_extends(entity, found)
+        for entity in _canonical_entities(expert)
+    )
 
 
 def _legacy_decision(text: str, pool: list[ExpertRecord], sims: dict[str, float], tau: float) -> RouteDecision:

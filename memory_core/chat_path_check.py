@@ -50,6 +50,8 @@ def _teach(service: MemoryService, conversations: list[dict]) -> list[str]:
 def _score_language(service: MemoryService, spec: dict, language: str) -> dict:
     ids = _teach(service, spec[language])
     preview = service.preview_consolidation(ids)
+    if "uncovered" not in preview:
+        raise RuntimeError("预览没有返回未覆盖的句子")
     selected = [fact for fact in preview["facts"] if fact.get("selected")]
     planted = [value for convo in spec[language] for value, _rel in convo["facts"]]
     found = sum(1 for value in planted if _covered(value, selected))
@@ -88,6 +90,25 @@ def _score_language(service: MemoryService, spec: dict, language: str) -> dict:
             ok = answer.casefold().startswith(head)
         yes_hits += int(ok)
         yes_rows.append({"q": question, "answer": answer, "ok": ok})
+    open_hits = 0
+    open_rows = []
+    for question, gold in spec.get(f"{language}_open", []):
+        result = _ask(service, fresh["id"], question)
+        answer = result["assistant"]["content"]
+        reason = result["route"].get("reason")
+        ok = reason == "entity_overview" and _norm(gold) in _norm(answer) and result["route"].get("label") != "基座"
+        open_hits += int(ok)
+        open_rows.append({"q": question, "answer": answer, "ok": ok, "reason": reason})
+    near_hits = 0
+    near_rows = []
+    for question, forbidden in spec.get(f"{language}_near", []):
+        result = _ask(service, fresh["id"], question)
+        answer = result["assistant"]["content"]
+        reason = result["route"].get("reason")
+        leaked = _norm(forbidden) in _norm(answer)
+        ok = (not leaked) and reason in {"entity_clarify", "entity_grounded"}
+        near_hits += int(ok)
+        near_rows.append({"q": question, "answer": answer, "ok": ok, "reason": reason})
     abstain_hits = 0
     wrong = 0
     stored_values = [_norm(value) for value in planted]
@@ -111,8 +132,16 @@ def _score_language(service: MemoryService, spec: dict, language: str) -> dict:
         "abstain_hits": abstain_hits,
         "abstain_total": len(spec[f"{language}_abstain"]),
         "wrong_attribute": wrong,
+        "open": f"{open_hits}/{len(spec.get(f'{language}_open', []))}",
+        "open_hits": open_hits,
+        "open_total": len(spec.get(f"{language}_open", [])),
+        "near": f"{near_hits}/{len(spec.get(f'{language}_near', []))}",
+        "near_hits": near_hits,
+        "near_total": len(spec.get(f"{language}_near", [])),
         "rows": recall_rows,
         "yes_rows": yes_rows,
+        "open_rows": open_rows,
+        "near_rows": near_rows,
         "message": status.get("message"),
     }
 
@@ -145,6 +174,10 @@ def run_chat_path(service: MemoryService, spec: dict | None = None) -> dict:
     print("CHAT_PATH_RECALL_ZH", zh["recall"], flush=True)
     print("CHAT_PATH_RECALL_EN", en["recall"], flush=True)
     print("CHAT_PATH_YES", f"{zh['yes_hits'] + en['yes_hits']}/{zh['yes_total'] + en['yes_total']}", flush=True)
+    print("CHAT_PATH_YES_ZH", zh["yes"], flush=True)
+    print("CHAT_PATH_YES_EN", en["yes"], flush=True)
+    print("CHAT_PATH_OPEN", f"{zh['open_hits'] + en['open_hits']}/{zh['open_total'] + en['open_total']}", flush=True)
+    print("CHAT_PATH_NEAR", f"{zh['near_hits'] + en['near_hits']}/{zh['near_total'] + en['near_total']}", flush=True)
     print("CHAT_PATH_ABSTAIN", f"{zh['abstain_hits'] + en['abstain_hits']}/{zh['abstain_total'] + en['abstain_total']}", flush=True)
     print("CHAT_PATH_WRONG_ATTRIBUTE", zh["wrong_attribute"] + en["wrong_attribute"], flush=True)
     print("CHAT_PATH_FALSE_CORRECTION", false_corrections, flush=True)
@@ -153,10 +186,26 @@ def run_chat_path(service: MemoryService, spec: dict | None = None) -> dict:
     en_rate = en["recall_hits"] / en["recall_total"]
     yes_total = zh["yes_total"] + en["yes_total"]
     yes_rate = (zh["yes_hits"] + en["yes_hits"]) / yes_total if yes_total else 1
+    zh_yes_rate = zh["yes_hits"] / zh["yes_total"] if zh["yes_total"] else 1
+    en_yes_rate = en["yes_hits"] / en["yes_total"] if en["yes_total"] else 1
     abstain_total = zh["abstain_total"] + en["abstain_total"]
     abstain_rate = (zh["abstain_hits"] + en["abstain_hits"]) / abstain_total if abstain_total else 1
-    if zh_rate < 0.90 or en_rate < 0.85 or yes_rate < 0.90 or abstain_rate < 0.95:
-        raise RuntimeError(f"对话路径没有达到目标：{report['zh']['recall']} {report['en']['recall']} yes {yes_rate:.2f} abstain {abstain_rate:.2f}")
+    open_bad = (zh["open_total"] - zh["open_hits"]) + (en["open_total"] - en["open_hits"])
+    near_bad = (zh["near_total"] - zh["near_hits"]) + (en["near_total"] - en["near_hits"])
+    from memory_core.extract import uncovered_claims
+
+    if not uncovered_claims(
+        "北窗茶舍养了一只狗，名字叫阿黄。",
+        [{"entity": "北窗茶舍", "value": "狗", "statement": "北窗茶舍养了一只狗。"}],
+    ):
+        raise RuntimeError("部分抽取没有标出可以手动补上的句子")
+    if zh_rate < 0.90 or en_rate < 0.85 or zh_yes_rate < 0.90 or en_yes_rate < 0.90 or yes_rate < 0.90 or abstain_rate < 0.95:
+        raise RuntimeError(
+            f"对话路径没有达到目标：{report['zh']['recall']} {report['en']['recall']} "
+            f"yes zh {zh_yes_rate:.2f} en {en_yes_rate:.2f} abstain {abstain_rate:.2f}"
+        )
+    if open_bad or near_bad:
+        raise RuntimeError(f"开放题或近似名字没有守住：open {open_bad} near {near_bad}")
     if zh["wrong_attribute"] or en["wrong_attribute"] or false_corrections or general_fired:
         raise RuntimeError("对话路径出现了错属性、误纠正或常识题激活")
     return report

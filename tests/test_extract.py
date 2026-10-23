@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from memory_core.extract import entailed, expand_training_fact, pattern_extract
+from memory_core.extract import entailed, expand_training_fact, pattern_extract, refresh_stored_fact, uncovered_claims
 from memory_core.prompts import with_brief
 
 TURNS = [
@@ -141,6 +141,56 @@ class ExtractTests(unittest.TestCase):
 
     def test_hallucinated_value_dropped(self):
         self.assertFalse(entailed({"entity": "沈星河", "value": "不存在的取值"}, "沈星河的猫的名字是云朵。"))
+
+    def test_comma_name_possessive_and_color_frames(self):
+        dog = pattern_extract("北窗茶舍养了一只狗，名字叫阿黄。")[0]
+        self.assertEqual(dog["entity"], "北窗茶舍")
+        self.assertEqual(dog["attr"], "狗的名字")
+        self.assertEqual(dog["value"], "阿黄")
+        flagship = pattern_extract("Northwind Press' flagship product is linen notebooks.")[0]
+        self.assertEqual(flagship["entity"], "Northwind Press")
+        self.assertEqual(flagship["attr"], "flagship product")
+        self.assertEqual(flagship["value"], "linen notebooks")
+        cat = pattern_extract("Northwind Press has an office cat named Miso.")[0]
+        self.assertEqual(cat["entity"], "Northwind Press")
+        self.assertEqual(cat["attr"], "office cat's name")
+        self.assertEqual(cat["value"], "Miso")
+        car = pattern_extract("周衡的汽车是珍珠白的。")[0]
+        self.assertEqual(car["attr"], "汽车颜色")
+        self.assertEqual(car["value"], "珍珠白的")
+        self.assertEqual(pattern_extract("周衡的汽车是酒红。")[0]["attr"], "汽车颜色")
+
+    def test_partial_sentence_stays_uncovered_for_manual_add(self):
+        sentence = "北窗茶舍养了一只狗，名字叫阿黄。"
+        weak = [{"entity": "北窗茶舍", "value": "狗", "statement": "北窗茶舍养了一只狗。"}]
+        missing = uncovered_claims(sentence, weak)
+        self.assertTrue(any("阿黄" in item for item in missing), missing)
+        covered = uncovered_claims(sentence, [{"entity": "北窗茶舍", "value": "阿黄", "statement": sentence}])
+        self.assertEqual(covered, [])
+        ui = Path(__file__).resolve().parents[1] / "desktop" / "ui"
+        app = (ui / "app.js").read_text(encoding="utf-8")
+        self.assertIn("preview.uncovered", app)
+        self.assertIn("data-add-manual", app)
+        self.assertIn("fact.uncovered", (ui / "i18n.js").read_text(encoding="utf-8"))
+
+    def test_old_statement_gains_the_property(self):
+        refreshed = refresh_stored_fact({
+            "entity": "周衡",
+            "attr": "鹦鹉",
+            "value": "小翠",
+            "statement": "周衡的鹦鹉叫小翠。",
+        })
+        self.assertEqual(refreshed["entity"], "周衡")
+        self.assertEqual(refreshed["attr"], "鹦鹉的名字")
+        self.assertEqual(refreshed["value"], "小翠")
+        kept = refresh_stored_fact({
+            "entity": "塔佐巴洛",
+            "attr": "事实",
+            "value": "1978",
+            "statement": "塔佐巴洛公司成立于1978年。",
+        })
+        self.assertEqual(kept["entity"], "塔佐巴洛")
+        self.assertIn("1978", kept["value"])
 
 
 if __name__ == "__main__":

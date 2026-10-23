@@ -158,6 +158,31 @@ def _display_name(entities: list[str], fallback: str) -> str:
     return shown
 
 
+def _facts_from_legacy_list(rows: list) -> list[dict]:
+    """旧的事实列表保留原来的实体名，属性按现在的句式补齐。"""
+    from memory_core.extract import refresh_stored_fact
+
+    facts = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        entity = str(row.get("entity") or "").strip()
+        value = str(row.get("value") or "").strip()
+        if not entity or not value:
+            continue
+        statement = str(row.get("statement") or "").strip()
+        questions = row.get("questions") if isinstance(row.get("questions"), list) else []
+        facts.append(refresh_stored_fact({
+            "entity": entity,
+            "attr": str(row.get("attr") or "事实"),
+            "value": value,
+            "statement": statement or f"{entity}的事实是{value}。",
+            "question": questions[0] if questions else "",
+            "answer": value,
+        }))
+    return facts
+
+
 def load_record(experts_dir: Path, entry: dict, writable: bool) -> ExpertRecord | None:
     ensure_scripts_path()
     from router import extract_entities_from_key_texts
@@ -177,11 +202,27 @@ def load_record(experts_dir: Path, entry: dict, writable: bool) -> ExpertRecord 
     loaded = json.loads(memory_path.read_text(encoding="utf-8")) if memory_path.is_file() else None
     # 研究评测把事实写成列表。那份文件留给 eval，桌面仍按 key_texts 走最大相似度。
     if isinstance(loaded, dict):
-        fact_memory = loaded
+        from memory_core.extract import refresh_stored_fact
+
+        fact_memory = dict(loaded)
+        fact_memory["facts"] = [
+            refresh_stored_fact(fact) if isinstance(fact, dict) else fact
+            for fact in loaded.get("facts") or []
+        ]
         explicit = True
         entities = [str(item) for item in fact_memory.get("entities", []) if str(item).strip()]
         sources = list(fact_memory.get("source_conversations") or [])
         display = fact_memory.get("display_name") or _display_name(entities, name)
+    elif isinstance(loaded, list):
+        # 0.1.x 和研究评测把事实写成列表。转成可回答的事实，名册仍只用来做旧路由。
+        # 对不上已保存的事实时提示重新巩固，不把多出来的实体写进守卫。
+        facts = _facts_from_legacy_list(loaded)
+        texts_path = directory / "key_texts.json"
+        texts = json.loads(texts_path.read_text(encoding="utf-8")) if texts_path.is_file() else []
+        entities = extract_entities_from_key_texts(texts)
+        if facts:
+            fact_memory = {"facts": facts, "entities": list(entities), "legacy": True}
+        display = _display_name(entities, name)
     else:
         texts_path = directory / "key_texts.json"
         texts = json.loads(texts_path.read_text(encoding="utf-8")) if texts_path.is_file() else []

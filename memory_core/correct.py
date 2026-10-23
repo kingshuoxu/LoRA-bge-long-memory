@@ -583,6 +583,9 @@ def reissue_training_fact(fact: dict, new_value: str) -> dict:
         "statement": statement,
         "question": swap(str(fact.get("question") or "")),
     }
+    from memory_core.extract import refresh_stored_fact
+
+    fresh = refresh_stored_fact(fresh)
     item = expand_training_fact(fresh)
     seen = {str(qa.get("q") or "") for qa in item.get("qa") or []}
     for qa in fact.get("qa") or []:

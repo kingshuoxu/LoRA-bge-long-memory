@@ -99,9 +99,19 @@ def _heads_in(text: str, heads: list[str]) -> bool:
     if not heads:
         return False
     if any(has_cjk(head) for head in heads):
-        return all(head in text for head in heads)
+        return all(_cjk_head_in(head, text) for head in heads)
     lowered = text.casefold()
     return all(re.search(r"\b" + re.escape(head) + r"\b", lowered) for head in heads)
+
+
+def _cjk_head_in(head: str, text: str) -> bool:
+    """「主打产品」对得上「主打什么产品」。问句可以在属性名中间插一个疑问词。"""
+    if head in text:
+        return True
+    if not head:
+        return False
+    gap = r"(?:什么|哪|多少|几)?"
+    return re.search(gap.join(re.escape(char) for char in head), text) is not None
 
 
 def _query_properties(query: str) -> set[str]:
@@ -763,6 +773,14 @@ def guessed_value(query: str) -> str | None:
     founded = re.search(r"\b(?:founded|established|started|born)\s+in\s+(.+)$", text, re.IGNORECASE)
     if founded:
         return founded.group(1).strip(" ?.!")
+    did_found = re.match(r"^(?:did|do|does)\s+(.+?)\s+found\b", text, re.IGNORECASE)
+    if did_found:
+        return did_found.group(1).strip(" ?.!")
+    copula = re.match(r"^(?:is|was)\s+.+?\s+an?\s+(.+)$", text, re.IGNORECASE)
+    if copula and not re.search(r"'s|’s", text):
+        value = copula.group(1).strip(" ?.!")
+        if value and value.casefold() not in {"what", "which", "who"}:
+            return value
     based = re.search(r"\b(?:based|headquartered|located)\s+in\s+(.+)$", text, re.IGNORECASE)
     if based:
         return based.group(1).strip(" ?.!")

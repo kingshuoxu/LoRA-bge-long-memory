@@ -55,11 +55,86 @@ def _entity_surfaces(name: str) -> list[str]:
     return surfaces
 
 
+# 名字后面可以接的语法字。紧挨着的另一个汉字（兰、科）会把名字延长成另一个实体。
+# 名字紧挨着这些字，仍是同一个人或同一家机构。
+# 「公司」的「公」、「总部」的「总」、「相关」的「相」都算语法，不是另一个名字。
+# 多出来的名字音节（兰、科）不在这里，所以「沈若衡兰」「星禾科技」里的短名对不上。
+_GRAMMAR = frozenset(
+    "的是叫吗呢吧啊呀在住有养会做从来去和与也还最现目正已不没家这那开骑弹玩"
+    "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本"
+    "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
+    "老总主靠自居公相年手电邮职生习股我"
+)
+
+
 def _mentions_self(query: str) -> bool:
     """「我」只认「我的」或后面不再接汉字。避免「我们」「告诉我」误命中用户。"""
     if "我的" in query:
         return True
     return bool(re.search(r"我(?![\u4e00-\u9fff])", query))
+
+
+def name_bounded(name: str, query: str) -> bool:
+    """名字整段对上才算点名。后面多一个汉字，或英文名后再加一个大写词，都不是同一个名字。"""
+    if not name or not query:
+        return False
+    if has_cjk(name):
+        start = 0
+        while True:
+            index = query.find(name, start)
+            if index < 0:
+                return False
+            end = index + len(name)
+            before = query[index - 1] if index else ""
+            after = query[end] if end < len(query) else ""
+            before_ok = not before or not has_cjk(before) or before in _GRAMMAR
+            after_ok = not after or not has_cjk(after) or after in _GRAMMAR
+            if before_ok and after_ok:
+                return True
+            start = index + 1
+    pattern = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])", re.IGNORECASE)
+    for match in pattern.finditer(query):
+        rest = query[match.end():]
+        if re.match(r"^(?:'s|’s|'|’)?\s+[A-Z]", rest):
+            continue
+        return True
+    return False
+
+
+def name_extends(entity: str, found: str) -> bool:
+    """抽出的名字比已存实体更长，而且多出来的是名字而不是「的 / 那辆」。"""
+    if not entity or not found.startswith(entity) or len(found) == len(entity):
+        return False
+    extra = found[len(entity):]
+    if extra and has_cjk(extra[0]) and extra[0] not in _GRAMMAR:
+        return True
+    return bool(re.match(r"\s*[A-Z]", extra))
+
+
+def near_miss_span(name: str, query: str) -> str | None:
+    """问句里的名字包着已存实体，但多出来的部分不是语法字。"""
+    if not name or not query or name_bounded(name, query):
+        return None
+    if has_cjk(name):
+        start = 0
+        while True:
+            index = query.find(name, start)
+            if index < 0:
+                return None
+            begin = index
+            while begin > 0 and has_cjk(query[begin - 1]) and query[begin - 1] not in _GRAMMAR:
+                begin -= 1
+            end = index + len(name)
+            while end < len(query) and has_cjk(query[end]) and query[end] not in _GRAMMAR:
+                end += 1
+            if begin != index or end != index + len(name):
+                return query[begin:end]
+            start = index + 1
+    pattern = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"\s+[A-Z][A-Za-z0-9]+\b")
+    found = pattern.search(query)
+    if found:
+        return found.group(0)
+    return None
 
 
 def entity_mentioned(name: str, query: str) -> bool:
@@ -68,17 +143,15 @@ def entity_mentioned(name: str, query: str) -> bool:
         return False
     if name == "我":
         return _mentions_self(query)
-    if name in query:
+    if name_bounded(name, query):
         return True
     ensure_scripts_path()
     from router import entity_key
 
     key = entity_key(name)
-    if not key:
+    if not key or key == name:
         return False
-    if has_cjk(key):
-        return key in query
-    return key in query.casefold()
+    return name_bounded(key, query)
 
 
 def semantic_tau(gate: dict | None) -> float:

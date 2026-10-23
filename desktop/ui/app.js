@@ -213,13 +213,19 @@ function renderFeed(trace) {
     $("stage-feed").innerHTML = `<article class="event"><strong>${esc(t("feed.failed"))}</strong><div class="muted">${esc(tx(trace.error))}</div></article>`;
     return;
   }
-  if (!shown.length && !recall.length) {
+  const uncovered = (state.preview && state.preview.uncovered) || [];
+  const warnings = uncovered.map((item) => `<article class="event warn"><strong>${esc(t("fact.uncovered", { sentence: item.sentence }))}</strong><div><button type="button" data-add-manual="${esc(item.sentence)}">${esc(t("fact.addManual"))}</button></div></article>`);
+  if (!shown.length && !recall.length && !warnings.length) {
     $("stage-feed").innerHTML = `<div class="empty">${esc(t("empty.feed"))}</div>`;
     return;
   }
   const rows = shown.map((event) => {
     if (event.stage === "select") return `<article class="event"><strong>${esc(t("feed.selected"))}</strong><div>${esc(event.title || event.conversation_id || "")}</div><div class="muted">${esc(event.chars == null ? "" : t("feed.chars", { n: event.chars }))}</div></article>`;
     if (event.stage === "extract") {
+      if (event.uncovered) {
+        const lines = (event.sentences || []).map((sentence) => `<div>${esc(t("fact.uncovered", { sentence }))} <button type="button" data-add-manual="${esc(sentence)}">${esc(t("fact.addManual"))}</button></div>`).join("");
+        return `<article class="event warn"><strong>${esc(event.detail || t("fact.uncovered", { sentence: "" }))}</strong>${lines}</article>`;
+      }
       const note = event.duplicate ? t("feed.duplicate") : (advancedOn() ? tx(event.note || event.how || "") : "");
       return `<article class="event"><strong>${esc(event.statement || t("feed.extracted"))}</strong><div class="muted">${esc([event.entity, event.attr, event.value].filter(Boolean).join(" · "))} ${esc(note)}</div></article>`;
     }
@@ -241,7 +247,8 @@ function renderFeed(trace) {
   (trace.saved_facts || []).forEach((fact) => {
     rows.push(`<article class="event"><strong>${esc(fact.statement || "")}</strong><div class="muted">${esc([fact.entity, fact.attr, fact.value].filter(Boolean).join(" · "))}</div></article>`);
   });
-  $("stage-feed").innerHTML = rows.join("");
+  $("stage-feed").innerHTML = warnings.join("") + rows.join("");
+  bindManualAdds($("stage-feed"));
 }
 
 function renderLoss(trace) {

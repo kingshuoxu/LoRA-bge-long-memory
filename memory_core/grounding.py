@@ -72,7 +72,7 @@ def _de_topic(text: str, entity: str) -> str:
         chunk = re.sub(r"不+$", "", chunk)
         return chunk.strip("的")
     matched = re.search(
-        re.escape(entity) + r"(?:'s|’s)\s+([A-Za-z][\w' -]{0,48})",
+        re.escape(entity) + r"(?:'s|’s|'|’)\s+([A-Za-z][\w' -]{0,48})",
         text,
         re.IGNORECASE,
     )
@@ -124,9 +124,17 @@ def open_entity_question(text: str, entity: str) -> bool:
     name = re.escape(entity)
     patterns = (
         rf"\btell me about {name}\b",
+        rf"\btell me everything about {name}\b",
+        rf"\beverything about {name}\b",
+        rf"\ball about {name}\b",
         rf"\bwhat do you know about {name}\b",
         rf"\bwhat can you tell me about {name}\b",
         rf"\bwhat about {name}\b",
+        rf"\boverview of {name}\b",
+        rf"\bsummar(?:y|ize)(?: of)? {name}\b",
+        rf"\bdescribe {name}\b",
+        rf"\bwho is {name}\b",
+        rf"\bwhat is {name}\b",
     )
     return any(re.search(pattern, compact, re.IGNORECASE) for pattern in patterns)
 
@@ -276,7 +284,7 @@ def _topic_piece(text: str, entity: str) -> str:
         return rest[:12]
     rest = re.sub(r"\b(what|where|who|which|when|how|is|are|was|were|does|do|did|the|a|an|of|about)\b", " ", rest, flags=re.IGNORECASE)
     rest = re.sub(r"[^A-Za-z0-9' -]", " ", rest)
-    rest = re.sub(r"\s+", " ", rest).strip()
+    rest = re.sub(r"\s+", " ", rest).strip(" '\"")
     return rest[:48]
 
 
@@ -418,6 +426,29 @@ def _short_object(query: str, heads: list[str]) -> bool:
     return False
 
 
+def _answer_attr(fact: dict) -> str:
+    """问句对的是性质，旧事实可能只写下了事物名。
+
+    「汽车 / 珍珠白的」仍是颜色，「鹦鹉 / 叫小翠」仍是名字。
+    只看取值和原句的形态，不把某个词写死成属性。
+    """
+    from memory_core.extract import _EN_COLOR, _ZH_COLOR
+
+    attr = str(fact.get("attr") or "").strip()
+    value = str(fact.get("value") or fact.get("answer") or "").strip()
+    statement = str(fact.get("statement") or "")
+    if has_cjk(f"{attr}{value}{statement}"):
+        if "名" not in attr and value and re.search(r"叫" + re.escape(value), statement):
+            attr = f"{attr}的名字" if attr else "名字"
+        elif "名" not in attr and "色" not in attr and value and _ZH_COLOR.match(value):
+            attr = f"{attr}颜色" if attr else "颜色"
+        return attr
+    lowered = attr.casefold()
+    if value and _EN_COLOR.match(value) and "color" not in lowered and "colour" not in lowered:
+        attr = f"{attr} color" if attr else "color"
+    return attr
+
+
 def _pick_fact(query: str, facts: list[dict]) -> dict | None:
     from memory_core.paraphrase import _heads_in, _named_other_object, _object_heads, property_conflict
     from memory_core.relations import fact_relations, query_relations
@@ -425,7 +456,7 @@ def _pick_fact(query: str, facts: list[dict]) -> dict | None:
     asked = query_relations(query)
     ranked: list[tuple[int, dict]] = []
     for fact in facts:
-        attr = str(fact.get("attr") or "")
+        attr = _answer_attr(fact)
         statement = str(fact.get("statement") or "")
         have = fact_relations(attr, statement)
         if asked and not (asked & have):
@@ -465,6 +496,31 @@ def _pick_fact(query: str, facts: list[dict]) -> dict | None:
     return ranked[0][1]
 
 
+def _legacy_expert(expert: Any) -> bool:
+    memory = getattr(expert, "fact_memory", None) or {}
+    if isinstance(memory, dict) and memory.get("legacy"):
+        return True
+    return not getattr(expert, "explicit", True)
+
+
+def _legacy_reply(entity: str, text: str) -> str:
+    english = not has_cjk(text)
+    if english:
+        return (
+            f"{entity} is an older expert saved on disk. "
+            "This question does not line up with the stored facts. "
+            "Please consolidate it again. The base model will not fill it in."
+        )
+    return f"「{entity}」是旧版本留下的专家，这条问法对不上已保存的事实。请重新巩固，基座不会替它编。"
+
+
+def _clarify_reply(stored: str, span: str, text: str) -> str:
+    english = not has_cjk(text)
+    if english:
+        return f"I have {stored} stored, not {span}."
+    return f"记忆里有「{stored}」，没有「{span}」。"
+
+
 def resolve_stored_reply(
     content: str,
     experts: list[Any],
@@ -478,8 +534,20 @@ def resolve_stored_reply(
     from memory_core.correct import utterance_is_question
     from memory_core.paraphrase import is_polar, polar_reply_from_fact
 
+    from memory_core.fact_span import near_miss_span
+
     mentions = list(mentions or [])
     names = sorted(known_entity_names(content, experts), key=len, reverse=True)
+    if not names:
+        for expert in experts:
+            stored = list(getattr(expert, "entities", None) or [])
+            memory = getattr(expert, "fact_memory", None) or {}
+            if isinstance(memory, dict):
+                stored.extend(str(fact.get("entity") or "") for fact in memory.get("facts") or [] if isinstance(fact, dict))
+            for name in stored:
+                span = near_miss_span(name, content)
+                if span:
+                    return _clarify_reply(name, span, content), None, [], "entity_clarify"
     hinted = []
     for name in sorted(mentions, key=len, reverse=True):
         if name and name not in names and entity_mentioned(name, content):
@@ -495,19 +563,28 @@ def resolve_stored_reply(
     if expert is None:
         return abstain_reply(name, content), None, [], "entity_grounded"
     if open_entity_question(content, name):
-        return overview_reply(name, facts), expert, facts, "entity_overview"
+        if facts or not _legacy_expert(expert):
+            return overview_reply(name, facts), expert, facts, "entity_overview"
+        return _legacy_reply(name, content), expert, [], "legacy_retrain"
     fact = _pick_fact(content, facts)
     if is_polar(content):
         if fact is None:
-            return abstain_reply(name, content), expert, [], "entity_grounded"
+            return _unmatched(name, content, expert)
         reply = polar_reply_from_fact(content, fact)
         if not reply:
-            return abstain_reply(name, content), expert, [], "entity_grounded"
+            return _unmatched(name, content, expert)
         return reply, expert, [fact], "entity_first"
     if fact is not None:
         value = str(fact.get("value") or fact.get("answer") or "").strip()
         if value:
             return value, expert, [fact], "entity_first"
+    return _unmatched(name, content, expert)
+
+
+def _unmatched(name: str, content: str, expert: Any) -> tuple[str, Any, list[dict], str]:
+    """旧专家对不上时说明要重新巩固。新专家仍只说这个属性不在记忆里。"""
+    if expert is not None and _legacy_expert(expert):
+        return _legacy_reply(name, content), expert, [], "legacy_retrain"
     return abstain_reply(name, content), expert, [], "entity_grounded"
 
 

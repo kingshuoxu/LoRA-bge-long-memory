@@ -104,7 +104,7 @@ def _relations(text: str) -> set[str]:
     elif re.search(r"\bwhat does\b", low) and re.search(r"\bdo\b", low):
         found.add("occupation")
     if "origin" not in found and "occupation" not in found:
-        if re.search(r"\b(lives?|lived|address|residing)\b", low) or re.search(r"\bliving in\b", low):
+        if re.search(r"\b(lives?|lived|address|resid(?:e|es|ed|ing))\b", low) or re.search(r"\bliving in\b", low):
             found.add("residence")
     if re.search(r"\b(founded|established)\b", low):
         found.add("founding")
@@ -112,8 +112,16 @@ def _relations(text: str) -> set[str]:
         found.add("founding")
     if re.search(r"\b(headquarters|headquartered|based)\b", low):
         found.add("headquarters")
-    if re.search(r"\b(founder|founded by|who started|who founded)\b", low):
+    if re.search(r"\b(founder|founded by|who started|who founded)\b", low) or re.search(
+        r"\b(?:did|do|does)\s+.+\s+found\b", low
+    ):
         found.add("founder")
+    if (
+        re.match(r"^(?:is|was)\s+\S.+\s+an?\s+\S", low)
+        and not re.search(r"'s|’s", low)
+        and not re.search(r"\b(?:named|called|based|located|headquartered)\b", low)
+    ):
+        found.add("occupation")
     if re.search(r"\b(instrument|play|plays|playing)\b", low):
         found.add("instrument")
     if re.search(r"\b(name|named|called)\b", low):

@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import random
 
-SEED = 20261023
+SEED = 20261024
 
 _BLOCK = {
     "周晚宁", "陈拾光", "许知夏", "江澄月", "苏小北",
     "林晚舟", "顾清和", "沈星河", "顾云栖",
     "柏若岚", "星禾科技", "星禾",
+    "沈若衡", "澜汐生物", "澜汐",
+    "Maren Holst", "Cobalt Reef Instruments", "Sigrid Vale",
 }
 
 
@@ -45,7 +47,7 @@ def build(seed: int = SEED) -> dict:
     staff = rng.choice(["四十二人", "六十人", "八十五人"])
     cat = rng.choice(["年糕", "乌梅", "芝麻"])
 
-    en_person = _en_name(rng, ["Liora", "Maren", "Soren", "Willa"], ["Peck", "Adler", "Voss", "Keene"])
+    en_person = _en_name(rng, ["Liora", "Edith", "Soren", "Willa"], ["Peck", "Adler", "Voss", "Keene"])
     en_org = rng.choice(["Northglass Works", "Hollowreed Studio", "Paperlantern Lab"])
     en_city = rng.choice(["Ashmere", "Brindle", "Cairnholt"])
     en_town = rng.choice(["Port Sable", "Redwick", "Elmharbor"])
@@ -59,6 +61,7 @@ def build(seed: int = SEED) -> dict:
     en_product = rng.choice(["linen notebook", "ceramic filter", "hand mill"])
     en_cat = rng.choice(["Biscuit", "Miso", "Tinder"])
     en_staff = rng.choice(["36", "58", "74"])
+    car_color = rng.choice(["珍珠白", "墨黑", "藏青"])
 
     zh_person_sentences = [
         f"{person}的猫叫{pet}。",
@@ -66,14 +69,15 @@ def build(seed: int = SEED) -> dict:
         f"{person}的职业是{job}。",
         f"{person}最喜欢的花是{flower}。",
         f"{person}的家乡是{town}。",
-        f"{person}养了一只狗叫{dog}。",
+        f"{person}养了一只狗，名字叫{dog}。",
+        f"{person}的汽车是{car_color}。",
     ]
     zh_org_sentences = [
         f"{org}成立于{year}年。",
         f"{org}的总部在{hq}。",
         f"{org}的创始人是{founder}。",
         f"{org}的主打产品是{product}。",
-        f"{org}养了一只猫叫{cat}。",
+        f"{org}养了一只猫，名字叫{cat}。",
         f"{org}的员工人数是{staff}。",
     ]
     en_person_sentences = [
@@ -84,17 +88,18 @@ def build(seed: int = SEED) -> dict:
         f"{en_person}'s hometown is {en_town}.",
         f"{en_person}'s car is {en_color}.",
     ]
+    possessive = "'" if en_org.endswith(("s", "S")) else "'s"
     en_org_text = (
         f"{en_org} was founded in {en_year}. It is based in {en_base}. "
-        f"Its founder is {en_founder}. Its main product is {en_product}. "
-        f"The office cat is called {en_cat}. It has {en_staff} employees."
+        f"Its founder is {en_founder}. {en_org}{possessive} flagship product is {en_product}. "
+        f"{en_org} has an office cat named {en_cat}. It has {en_staff} employees."
     )
     return {
         "seed": seed,
         "zh": [
             {"title": person, "sentences": zh_person_sentences, "facts": [
                 (pet, "name"), (city, "residence"), (job, "occupation"),
-                (flower, "like"), (town, "origin"), (dog, "name"),
+                (flower, "like"), (town, "origin"), (dog, "name"), (car_color, "color"),
             ]},
             {"title": org, "sentences": zh_org_sentences, "facts": [
                 (year, "founding"), (hq, "headquarters"), (founder, "founder"),
@@ -119,12 +124,22 @@ def build(seed: int = SEED) -> dict:
             (f"{person}是在哪里长大的？", town),
             (f"{person}家的猫咪叫什么", pet),
             (f"{person}养的狗叫什么名字？", dog),
+            (f"{person}的汽车是什么颜色？", car_color),
+            (f"{person}开的车是什么颜色？", car_color),
             (f"{org}是哪一年创立的？", year),
             (f"{org}什么时候成立的？", year),
             (f"{org}总部设在哪个城市？", hq),
             (f"{org}是谁创办的？", founder),
             (f"{org}养的猫叫什么？", cat),
+            (f"{org}主打什么产品？", product),
             (f"{org}有多少员工？", staff),
+        ],
+        "zh_open": [
+            (f"介绍一下{person}", pet),
+            (f"告诉我{org}相关信息", product),
+        ],
+        "zh_near": [
+            (f"{person}兰的猫叫什么？", pet),
         ],
         "zh_yes": [
             (f"{person}住在{city}吗？", True, city),
@@ -141,6 +156,7 @@ def build(seed: int = SEED) -> dict:
             f"{org}的股票代码是多少？",
         ],
         "en_recall": [
+            (f"Where does {en_person} reside?", en_city),
             (f"Which town is {en_person} living in?", en_city),
             (f"What does {en_person} do for a living?", en_job),
             (f"What is {en_person}'s profession?", en_job),
@@ -152,6 +168,7 @@ def build(seed: int = SEED) -> dict:
             (f"Where is {en_org} based?", en_base),
             (f"Who is the founder of {en_org}?", en_founder),
             (f"What is {en_org}'s main product?", en_product),
+            (f"What is {en_org}{possessive} flagship product?", en_product),
             (f"What is the office cat at {en_org} called?", en_cat),
             (f"How many employees does {en_org} have?", en_staff),
         ],
@@ -160,6 +177,17 @@ def build(seed: int = SEED) -> dict:
             (f"Was {en_org} founded in 1901?", False, en_year),
             (f"Is {en_org} based in Paris?", False, en_base),
             (f"Is the {en_org} office cat named {en_cat}?", True, en_cat),
+            (f"Is {en_person} a {en_job}?", True, en_job),
+            (f"Is {en_person} a surgeon?", False, en_job),
+            (f"Did {en_founder} found {en_org}?", True, en_founder),
+            (f"Did Ada Lovelace found {en_org}?", False, en_founder),
+        ],
+        "en_open": [
+            (f"Give me an overview of {en_org}", en_product),
+            (f"Tell me everything about {en_person}", en_city),
+        ],
+        "en_near": [
+            (f"Who founded {en_org} Inc?", en_founder),
         ],
         "en_abstain": [
             f"How old is {en_person}'s parrot?",

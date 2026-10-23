@@ -202,6 +202,93 @@ class ReplyPolicyTests(unittest.TestCase):
         proposal = propose_from_records("昭澈的猫叫阿栗。", [shen], model=object(), tok=object(), device="cpu")
         self.assertIsNone(proposal)
 
+    def test_color_product_and_yes_no_use_the_stored_fact(self):
+        person = _Expert([
+            _fact("周衡", "汽车", "珍珠白的", "周衡的汽车是珍珠白的。"),
+            _fact("周衡", "自行车颜色", "朱红色", "周衡的自行车是朱红色的。"),
+            _fact("周衡", "鹦鹉", "小翠", "周衡的鹦鹉叫小翠。"),
+        ])
+        org = _Expert([
+            _fact("北窗茶舍", "主打产品", "陶瓷滤杯", "北窗茶舍的主打产品是陶瓷滤杯。"),
+            _fact("北窗茶舍", "狗的名字", "阿黄", "北窗茶舍养了一只狗，名字叫阿黄。"),
+        ])
+        ada = _Expert([
+            _fact("Ada Liu", "job", "conservator of manuscripts", "Ada Liu works as a conservator of manuscripts."),
+            _fact("Ada Liu", "where they live", "Ashmere", "Ada Liu lives in Ashmere."),
+        ])
+        press = _Expert([
+            _fact("Northwind Press", "founder", "Ida Okada", "Northwind Press was founded by Ida Okada."),
+            _fact("Northwind Press", "flagship product", "linen notebooks", "Northwind Press' flagship product is linen notebooks."),
+            _fact("Northwind Press", "office cat's name", "Miso", "Northwind Press has an office cat named Miso."),
+        ])
+        experts = [person, org, ada, press]
+
+        def reply(question):
+            resolved = resolve_stored_reply(question, experts, [])
+            self.assertIsNotNone(resolved, question)
+            return resolved
+
+        color = reply("周衡的汽车是什么颜色？")
+        self.assertIn("珍珠白", color[0])
+        self.assertEqual(color[3], "entity_first")
+        short = reply("周衡开的车是什么颜色？")
+        self.assertIn("珍珠白", short[0])
+        same = reply("周衡的车是什么颜色？")
+        self.assertIn("珍珠白", same[0])
+        self.assertNotIn("朱红", same[0])
+        cycle = _Expert([_fact("周衡", "自行车颜色", "朱红色", "周衡的自行车是朱红色的。")])
+        for question in ("周衡的车是什么颜色？", "周衡的单车是什么颜色？", "周衡开的车是什么颜色？"):
+            missed = resolve_stored_reply(question, [cycle], [])
+            self.assertIsNotNone(missed, question)
+            self.assertIn("不在记忆里", missed[0], (question, missed[0]))
+            self.assertNotIn("朱红", missed[0], question)
+        parrot = reply("周衡的鹦鹉叫什么？")
+        self.assertIn("小翠", parrot[0])
+        product = reply("北窗茶舍主打什么产品？")
+        self.assertIn("陶瓷滤杯", product[0])
+        self.assertNotIn("记住的是", product[0])
+        self.assertTrue(reply("北窗茶舍的狗叫阿黄吗？")[0].startswith("是"))
+        self.assertTrue(reply("北窗茶舍的狗是不是叫旺财？")[0].startswith("不是"))
+        self.assertTrue(reply("Is Ada Liu a conservator of manuscripts?")[0].casefold().startswith("yes"))
+        surgeon = reply("Is Ada Liu a surgeon?")
+        self.assertTrue(surgeon[0].casefold().startswith("no"))
+        self.assertIn("conservator of manuscripts", surgeon[0])
+        self.assertIn("Ashmere", reply("Where does Ada Liu reside?")[0])
+        self.assertTrue(reply("Did Ida Okada found Northwind Press?")[0].casefold().startswith("yes"))
+        stranger = reply("Did Ada Lovelace found Northwind Press?")
+        self.assertTrue(stranger[0].casefold().startswith("no"))
+        self.assertIn("Ida Okada", stranger[0])
+        self.assertTrue(reply("Is the Northwind Press office cat named Miso?")[0].casefold().startswith("yes"))
+        overview = reply("Give me an overview of Northwind Press")
+        self.assertEqual(overview[3], "entity_overview")
+        self.assertIn("linen notebooks", overview[0])
+        self.assertIn("not in memory", overview[0].casefold())
+        everything = reply("Tell me everything about Ada Liu")
+        self.assertEqual(everything[3], "entity_overview")
+        self.assertIn("Ashmere", everything[0])
+        near = reply("周衡兰的猫叫什么？")
+        self.assertEqual(near[3], "entity_clarify")
+        self.assertNotIn("小翠", near[0])
+        suffix = reply("Who founded Northwind Press Inc?")
+        self.assertEqual(suffix[3], "entity_clarify")
+        self.assertNotIn("Ida Okada", suffix[0])
+        self.assertNotIn("linen notebooks", suffix[0])
+
+    def test_old_expert_says_to_consolidate_again(self):
+        legacy = _Expert([
+            _fact("周衡", "鹦鹉的名字", "小翠", "周衡的鹦鹉叫小翠。"),
+        ])
+        legacy.explicit = False
+        legacy.fact_memory = {"facts": legacy.fact_memory["facts"], "legacy": True}
+        hit = resolve_stored_reply("周衡的鹦鹉叫什么？", [legacy], [])
+        self.assertIsNotNone(hit)
+        self.assertIn("小翠", hit[0])
+        missed = resolve_stored_reply("周衡的电话是多少？", [legacy], [])
+        self.assertIsNotNone(missed)
+        self.assertIn("重新巩固", missed[0])
+        self.assertNotIn("不在记忆里", missed[0])
+        self.assertEqual(missed[3], "legacy_retrain")
+
 
 if __name__ == "__main__":
     unittest.main()

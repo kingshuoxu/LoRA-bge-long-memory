@@ -471,12 +471,25 @@ class MemoryService:
             grounded = False
             gate_info = recall.get("fact_gate") or {}
             resolved = resolve_stored_reply(content, experts, load_mentions(self.home))
+            legacy_note = ""
             if resolved:
                 fact_answer, expert, facts, reason = resolved
-                if expert is not None:
+                use_lora = (
+                    reason == "legacy_retrain"
+                    and decision.fired
+                    and expert is not None
+                    and not getattr(expert, "explicit", True)
+                    and decision.expert == getattr(expert, "name", None)
+                )
+                if use_lora:
+                    legacy_note = fact_answer
+                    fact_answer = None
+                    recall["legacy_retrain"] = True
+                elif expert is not None and reason not in {"entity_clarify", "legacy_retrain"}:
                     mount_memory(decision, recall, expert, facts, reason)
                     grounded = True
                 else:
+                    grounded = True
                     decision.fired = False
                     decision.expert = None
                     decision.label = "基座"
@@ -516,6 +529,8 @@ class MemoryService:
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
+            if legacy_note:
+                answer = f"{answer}\n{legacy_note}"
             extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
             assistant = self.convos.add_message(
                 conv_id,
@@ -702,7 +717,8 @@ class MemoryService:
                         "stage": "extract",
                         "uncovered": True,
                         "count": len(uncovered),
-                        "detail": "有陈述句没有抽成事实",
+                        "sentences": [item["sentence"] for item in uncovered[:8]],
+                        "detail": "有陈述句没有抽成事实，可以手动补上",
                     })
                 _mark_stage(status, "gate", "active", detail="对照已有记忆和基座")
                 status["phase"] = "gate"

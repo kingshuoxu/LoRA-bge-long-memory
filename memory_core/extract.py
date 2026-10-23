@@ -79,12 +79,17 @@ def _normalize_value(value: str) -> str:
     return stripped or value
 
 
+_EN_COLOR_WORD = (
+    "red|blue|green|yellow|black|white|grey|gray|orange|purple|pink|brown|gold|silver|"
+    "beige|navy|teal|cyan|magenta|maroon|ivory|cream|vermilion|scarlet|crimson|azure|"
+    "indigo|violet|khaki|tan|olive|coral|turquoise|charcoal|burgundy|amber|lilac"
+)
 _EN_COLOR = re.compile(
-    r"^(?:red|blue|green|yellow|black|white|grey|gray|orange|purple|pink|brown|gold|silver|"
-    r"beige|navy|teal|cyan|magenta|maroon|ivory|cream|vermilion|scarlet|crimson|azure|"
-    r"indigo|violet|khaki|tan|olive|coral|turquoise|charcoal|burgundy|amber|lilac)$",
+    rf"^(?:(?:dark|light|deep|pale|navy|royal|sky|hot)\s+)?(?:{_EN_COLOR_WORD})$",
     re.IGNORECASE,
 )
+_ZH_COLOR = re.compile(r"^[\u4e00-\u9fff]{0,4}(?:白|红|绿|蓝|黑|黄|紫|灰|棕|粉|青|橙|金|银)色?的?$")
+_POSS = r"(?:'s|’s|'|’)"
 
 
 def _refine_attr(attr: str, value: str, how: str, raw: str) -> str:
@@ -94,7 +99,7 @@ def _refine_attr(attr: str, value: str, how: str, raw: str) -> str:
             attr = attr[0]
         if how == "叫" and "名" not in attr:
             attr = f"{attr}的名字"
-        if "色" in value and "色" not in attr:
+        if "名" not in attr and how != "叫" and "色" not in attr and ("色" in value or _ZH_COLOR.match(value)):
             attr = f"{attr}颜色"
         if any(mark in raw for mark in ("品牌", "牌子")) and "牌" not in attr:
             attr = f"{attr}品牌"
@@ -239,6 +244,13 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
             found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "在", sentence)
     if found is None:
         matched = re.match(
+            r"^(?P<entity>[\u4e00-\u9fffA-Za-z0-9]{1,16})(?:养了|有)(?:一[只条个位名匹头])?(?P<attr>[\u4e00-\u9fff]{1,8})[，,]\s*(?:它的|他的|她的)?(?:名字|名)?叫(?P<value>[^，。]{1,16})$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "叫", sentence)
+    if found is None:
+        matched = re.match(
             r"^(?P<entity>[\u4e00-\u9fffA-Za-z0-9]{1,16})(?:养了|有)(?:一[只条个位名匹头])?(?P<attr>[\u4e00-\u9fff]{1,8})叫(?P<value>[^，。]{1,16})$",
             sentence,
         )
@@ -250,21 +262,21 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
             found = _make_fact(parts[0], parts[1], parts[2], "于", sentence)
     if found is None:
         matched = re.match(
-            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is named (?P<value>.+)$",
+            rf"^(?P<entity>[A-Za-z][A-Za-z .'-]{{0,60}}?){_POSS} (?P<attr>[A-Za-z][A-Za-z' -]{{0,48}}?) is named (?P<value>.+)$",
             sentence,
         )
         if matched:
             found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "named", sentence)
     if found is None:
         matched = re.match(
-            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is called (?P<value>.+)$",
+            rf"^(?P<entity>[A-Za-z][A-Za-z .'-]{{0,60}}?){_POSS} (?P<attr>[A-Za-z][A-Za-z' -]{{0,48}}?) is called (?P<value>.+)$",
             sentence,
         )
         if matched:
             found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "called", sentence)
     if found is None:
         matched = re.match(
-            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is (?P<value>.+)$",
+            rf"^(?P<entity>[A-Za-z][A-Za-z .'-]{{0,60}}?){_POSS} (?P<attr>[A-Za-z][A-Za-z' -]{{0,48}}?) is (?P<value>.+)$",
             sentence,
         )
         if matched:
@@ -314,6 +326,14 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
         )
         if matched:
             found = _make_fact(matched.group("entity"), "job", matched.group("value"), "works", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Z][\w.'’ -]{1,60}?) has (?:an?|the) (?P<attr>[A-Za-z][\w' -]{0,40}?) (?:named|called) (?P<value>[A-Za-z][\w' -]{0,32})$",
+            sentence,
+            re.IGNORECASE,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "named", sentence)
     if found is None:
         matched = re.match(
             r"^(?P<entity>[A-Z][\w.'’ -]{1,60}?) has (?P<value>\d[\d,]*) (?P<attr>[A-Za-z][\w ]{0,32})$",
@@ -562,16 +582,75 @@ def _looks_like_claim(sentence: str) -> bool:
     )
 
 
+def _named_values(sentence: str) -> list[str]:
+    """句子里点名的取值。只抽到种类、没抽到这个名字，这句仍算没覆盖。"""
+    found = []
+    for pattern in (
+        r"(?:名字|名)叫([\u4e00-\u9fffA-Za-z0-9]{1,16})",
+        r"(?:名叫|叫做)([\u4e00-\u9fffA-Za-z0-9]{1,16})",
+        r"叫([\u4e00-\u9fffA-Za-z0-9]{1,16})",
+        r"\bnamed\s+([A-Za-z][\w'-]{0,32})",
+        r"\bcalled\s+([A-Za-z][\w'-]{0,32})",
+    ):
+        for match in re.finditer(pattern, sentence, re.IGNORECASE):
+            value = match.group(1).strip()
+            if value and value not in found:
+                found.append(value)
+    return found
+
+
 def _covers(sentence: str, fact: dict[str, Any]) -> bool:
     compact = re.sub(r"\s+", "", sentence)
     value = re.sub(r"\s+", "", str(fact.get("value") or ""))
     entity = re.sub(r"\s+", "", str(fact.get("entity") or ""))
     raw = re.sub(r"\s+", "", str(fact.get("raw") or fact.get("statement") or ""))
+    named = _named_values(sentence)
+    if named and not any(item and item in str(fact.get("value") or "") for item in named):
+        return False
     if value and entity and value in compact and entity in compact:
         return True
     if value and value in compact and raw and (compact in raw or raw in compact):
         return True
     return False
+
+
+def _values_overlap(left: str, right: str) -> bool:
+    a = re.sub(r"[\s的。\.年]", "", left or "").casefold()
+    b = re.sub(r"[\s的。\.年]", "", right or "").casefold()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 2 and short in long
+
+
+def refresh_stored_fact(fact: dict[str, Any]) -> dict[str, Any]:
+    """旧专家只存了事物名时，按现在的句式补上颜色、名字这类性质。
+
+    实体名保持文件里的写法。对不上原句的取值就不改。
+    """
+    statement = str(fact.get("statement") or "").strip()
+    if not statement:
+        return fact
+    parsed = pattern_extract(statement)
+    if not parsed:
+        return fact
+    new = parsed[0]
+    old_value = str(fact.get("value") or fact.get("answer") or "")
+    if not _values_overlap(old_value, str(new.get("value") or "")):
+        return fact
+    old_entity = str(fact.get("entity") or "").strip()
+    new_entity = str(new.get("entity") or "").strip()
+    if old_entity and new_entity and old_entity not in new_entity and new_entity not in old_entity:
+        if old_entity.casefold() != new_entity.casefold():
+            return fact
+    updated = dict(fact)
+    if new.get("attr"):
+        updated["attr"] = new["attr"]
+    if old_entity:
+        updated["entity"] = old_entity
+    return updated
 
 
 def uncovered_claims(text: str, facts: list[dict[str, Any]]) -> list[str]:
