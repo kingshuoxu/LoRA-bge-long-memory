@@ -142,7 +142,7 @@ System image must match the host architecture.
 1. **QVAC 的梯度是错的,已经换掉。** MobileFineTuner batch 8 第 4 个 epoch 是 **48/50**。APK 现在的调用是微批 1、累加 8。桌面上这套更新跑完 4 个 epoch,fp32 贪心和 f16 GGUF 都是 **49/50**(未中 b0-044)。不累加的 batch 1 第 1 个 epoch 是 **0/50**。跑满 12 个 epoch 会掉到 22/50。常识题不挂这个适配器:实体对不上,余弦最高 0.429。
 2. **bge 的大写拉丁字母,桌面和手机现在走同一份补丁。** 桌面 12 条余弦最低 0.999998。APK 不再用 `29fe08c` 那个 zip,而是 QVAC `b73e75af5` 加 `wpm-cased.patch`。路由对照 11687/11687 仍是修之前的问句向量加 PyTorch 键,当时没有改判。没有改走 ONNX。
 3. **训练源码对齐了,GEMM 目标不同。** 两边都是 MobileFineTuner `086b1a027fe708d5eaca89b1ec2bf1a876fb80de` 加 `mft-ffn-lora.patch`,都是 OpenBLAS、微批 1、累加 8。桌面打分是 x86 OpenBLAS;手机是 ARMv8 NEON。第 1 步 loss 已经对齐到 4.07324。对话和嵌入都是 QVAC `b73e75af5` 加大小写补丁;手机多一个 Vulkan 后端给 Adreno。`--val-split` 不再参与手机训练。
-4. **界面按 PR #4 补了深空。** 对话、巩固、星云、记忆库,银河背景,EB Garamond 加 Noto Serif SC,中英切换,巩固页是步数星座加损失曲线,星云用专家和事实,路由到的专家会亮。对话里说「不对,…」会先确认再重训。训练时星空停住。模拟器在这台机器上起不来,截图是 Paparazzi 渲染的,在 `android/apk/app/src/test/snapshots/images/`。
+4. **界面按 PR #4 补了深空。** 对话是普通的气泡和一条输入栏,记忆只在回复下用一行小字标出来。巩固和星云各自一页。状态栏和键盘用系统 insets,键盘上的发送键可以直接发出去。银河是淡淡的光带加星点。EB Garamond 加 Noto Serif SC,中英切换。0.1.2 起对话、嵌入、路由和 GPU 自检在 `:llm`,训练在 `:train`,Mali 要等这次独立自检对上并且更快才用 GPU。模拟器在这台机器上起不来,截图是 Paparazzi 渲染的,在 `android/apk/app/src/test/snapshots/images/`。
 5. **官方模拟器拒绝在这台 x86_64 上启动 arm64 镜像。** 见上面的 FATAL。APK 冒烟要等小米 15,或者一台本身就是 arm64 的模拟器宿主。
 
 ## 核对记录

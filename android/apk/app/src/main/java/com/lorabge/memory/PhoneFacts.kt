@@ -95,7 +95,7 @@ object PhoneFacts {
             manufacturer = Build.MANUFACTURER.orEmpty(),
             model = Build.MODEL.orEmpty(),
             soc = socName(),
-            gpu = glRenderer(),
+            gpu = record.glRenderer.ifBlank { record.vkName },
             androidRelease = Build.VERSION.RELEASE.orEmpty(),
             appVersion = appVersion,
             backend = DeviceTune.active(record),
@@ -116,6 +116,7 @@ object PhoneFacts {
             vkDriverVersion = record.vkDriverVersion,
             vkSubgroup = record.vkSubgroup,
             vkFlags = record.vkFlags,
+            crashes = engine.crashNotes(),
         )
     }
 

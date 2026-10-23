@@ -23,8 +23,13 @@
             </intent-filter>
         </activity>
         <service
+            android:name=".LlmService"
+            android:exported="false"
+            android:process=":llm" />
+        <service
             android:name=".TrainService"
             android:exported="false"
+            android:process=":train"
             android:foregroundServiceType="dataSync" />
         <service
             android:name=".FetchService"

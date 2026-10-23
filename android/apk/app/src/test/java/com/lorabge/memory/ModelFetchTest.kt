@@ -14,6 +14,25 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class ModelFetchTest {
     @Test
+    fun smallFilesUseAdaptiveUnitsAndChineseStatus() {
+        assertEquals("800 B", formatBytes(800))
+        assertEquals("1.2 KB", formatBytes(1200))
+        assertEquals("4.5 MB", formatBytes((4.5 * 1024 * 1024).toLong()))
+        assertEquals("下载中", fileStateLabel("zh", "running"))
+        assertEquals("等待", fileStateLabel("zh", "wait"))
+        assertEquals("完成", fileStateLabel("zh", "done"))
+        assertEquals("校验中", fileStateLabel("zh", "checking"))
+        assertEquals("失败", fileStateLabel("zh", "error"))
+        assertEquals("downloading", fileStateLabel("en", "running"))
+        val files = listOf(FileSnap("a", 800, 1200, "running"), FileSnap("b", 0, 1024 * 1024, "wait"))
+        val (got, total) = overallBytes(files)
+        assertEquals(800L, got)
+        assertEquals(1200L + 1024 * 1024, total)
+        assertEquals(1L, remainingEtaSeconds(4_500_000, 4_500_000))
+        assertTrue(formatEta(90L * 4_500_000, 4_500_000, "zh").contains("分"))
+    }
+
+    @Test
     fun resumeContinuesFromPartial() {
         val payload = "abcdefgh".toByteArray()
         val manifest = manifestOf(payload, listOf("http://mirror/a"))

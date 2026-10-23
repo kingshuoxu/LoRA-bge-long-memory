@@ -177,6 +177,7 @@ data class ChatMessage(
     val content: String,
     val expert: String? = null,
     val reason: String? = null,
+    val noticed: Boolean = false,
 )
 
 data class Conversation(
@@ -192,6 +193,7 @@ data class Conversation(
             val obj = JSONObject().put("role", message.role).put("content", message.content)
             if (message.expert != null) obj.put("expert", message.expert)
             if (message.reason != null) obj.put("reason", message.reason)
+            if (message.noticed) obj.put("noticed", true)
             arr.put(obj)
         }
         return JSONObject()
@@ -216,6 +218,7 @@ data class Conversation(
                         content = m.getString("content"),
                         expert = m.optString("expert").ifBlank { null },
                         reason = m.optString("reason").ifBlank { null },
+                        noticed = m.optBoolean("noticed"),
                     ),
                 )
             }

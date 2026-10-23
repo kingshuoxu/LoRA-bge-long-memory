@@ -8,8 +8,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 
+class NativeCrash(val signal: Int, val detail: String) : RuntimeException("signal $signal")
+
 class Engine(private val context: Context, private val store: MemoryStore) {
     private val nativeDir = context.applicationInfo.nativeLibraryDir
+    @Volatile private var nglOverride: Int? = null
 
     fun tool(name: String): File? {
         val file = File(nativeDir, name)
@@ -33,7 +36,9 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     fun binariesReady(): Boolean =
         tool("libllama-cli.so") != null && tool("libllama-embedding.so") != null
 
-    fun route(text: String): RouteHit {
+    fun route(text: String): RouteHit = guarded("route") { routeOnce(text) }
+
+    private fun routeOnce(text: String): RouteHit {
         val index = File(store.indexDir, "index.json")
         if (!index.exists()) rebuildIndex()
         if (!index.exists()) return RouteHit(null, false, "no_index", 0.0)
@@ -44,7 +49,9 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         if (bge == null || embedder == null) {
             return RouteHit(null, false, "no_bge", 0.0)
         }
+        markNative("route", if (nglNow() > 0) "vulkan" else "cpu")
         val vectors = embed(embedder, bge, listOf(text, masked))
+        markNative("route", "cpu")
         val json = NativeRouter.decide(index.absolutePath, text, vectors[0], vectors[1])
         val obj = JSONObject(json)
         val expert = if (obj.isNull("expert")) null else obj.optString("expert").ifBlank { null }
@@ -56,7 +63,10 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         )
     }
 
-    fun answer(question: String, expert: String?): String {
+    fun answer(question: String, expert: String?, onPartial: (String) -> Unit = {}): String =
+        guarded("answer") { answerOnce(question, expert, onPartial) }
+
+    private fun answerOnce(question: String, expert: String?, onPartial: (String) -> Unit): String {
         val cli = tool("libllama-cli.so") ?: return "没有 llama-cli。请安装带 QVAC 二进制的 APK。"
         val base = baseModel() ?: return "还没有基座。把 GGUF 推到 ${modelsDir().absolutePath}/base.gguf"
         val template = File(store.root, "qwen25_chat_template.jinja")
@@ -72,7 +82,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             "-sys", "你是助手。",
             "-p", question + " 请简短回答。",
             "--temp", "0", "--top-k", "1", "--top-p", "1", "--min-p", "0",
-            "-n", "40", "--single-turn", "-ngl", DeviceTune.ngl(backendRecord()).toString(),
+            "-n", "40", "--single-turn", "-ngl", nglNow().toString(),
             "-t", threads.toString(), "-tb", threads.toString(),
             "--no-warmup", "-c", "512",
         )
@@ -83,11 +93,16 @@ class Engine(private val context: Context, private val store: MemoryStore) {
                 cmd.add(4, weight.absolutePath)
             }
         }
-        val output = runTool(cmd, File(context.cacheDir, "gen"))
+        markNative("answer", if (nglNow() > 0) "vulkan" else "cpu")
+        val output = runToolStream(cmd, File(context.cacheDir, "gen")) { raw ->
+            onPartial(DeviceTune.extractReply(raw))
+        }
         return DeviceTune.extractReply(output).ifBlank { "没有生成" }
     }
 
-    fun embedTexts(texts: List<String>): List<FloatArray> {
+    fun embedTexts(texts: List<String>): List<FloatArray> = guarded("embed") { embedTextsOnce(texts) }
+
+    private fun embedTextsOnce(texts: List<String>): List<FloatArray> {
         val embedder = tool("libllama-embedding.so") ?: error("没有 llama-embedding")
         val bge = bgeModel() ?: error("没有 bge.gguf")
         return embed(embedder, bge, texts)
@@ -104,6 +119,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             val keyFile = File(dir, "router_key.f32")
             val texts = File(dir, "key_texts.json").takeIf { it.exists() }?.readText() ?: "[]"
             val entities = try {
+                markNative("extract", "cpu")
                 JSONArray(NativeRouter.extract(texts))
             } catch (_: Throwable) {
                 JSONArray()
@@ -190,6 +206,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             {"tau":0.6,"dim":4,"experts":[{"name":"expert_0","entities":["塔佐巴洛"],"n_keys":1,"keys":"e.f32"}]}
             """.trimIndent(),
         )
+        markNative("selfcheck", "cpu")
         val hit = NativeRouter.decide(
             File(dir, "index.json").absolutePath,
             "塔佐巴洛公司的总部在哪里?",
@@ -221,7 +238,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             listOf(
                 bin.absolutePath, "-m", model.absolutePath, "-f", File(work, "prompts.txt").absolutePath,
                 "--pooling", "mean", "--embd-normalize", "2", "-c", "128",
-                "-ngl", DeviceTune.ngl(backendRecord()).toString(),
+                "-ngl", nglNow().toString(),
                 "-t", threads, "-tb", threads,
                 "--embd-output-format", "array",
             ),
@@ -246,18 +263,100 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         return DeviceTune.parseRecord(file.readText(), version)
     }
 
-    fun backendLabel(lang: String): String = DeviceTune.label(backendRecord(), lang)
+    fun backendLabel(lang: String): String = DeviceTune.label(runtimeRecord(), lang)
+
+    fun runtimeRecord(): BackendRecord {
+        val stamp = DeviceTune.probeStamp(appVersion())
+        val record = backendRecord()
+        if (record.mode == "auto" && record.version != stamp) {
+            return record.copy(probe = "cpu", probed = false, checking = true, reason = "pending")
+        }
+        if (record.mode == "auto" && record.probe == "vulkan" && record.mali && !record.isolated) {
+            return record.copy(probe = "cpu")
+        }
+        return record
+    }
+
+    fun driverKey(): String {
+        val record = backendRecord()
+        val driver = record.vkDriverVersion.ifBlank { "unknown" }
+        val name = record.vkName.ifBlank { PhoneFacts.socName() }.ifBlank { "device" }
+        return "$name|$driver"
+    }
 
     fun setBackendMode(mode: String) {
         val current = backendRecord()
+        val stamp = DeviceTune.probeStamp(appVersion())
+        if (mode == "auto" || mode == "gpu") LlmGuard(crashFile()).clearBad("vulkan")
+        if (mode == "auto") {
+            writeBackend(current.copy(mode = "auto", probed = false, checking = true, reason = "pending", version = stamp))
+            return
+        }
         val vulkan = tool("libggml-vulkan.so") != null
         val reason = when {
             mode == "gpu" && !vulkan -> "no_vulkan"
-            mode == "cpu" -> current.reason
-            else -> current.reason
+            else -> "forced"
         }
-        val probe = if (mode == "gpu" && !vulkan) "cpu" else current.probe
-        writeBackend(current.copy(mode = mode, probe = probe, reason = reason, checking = false))
+        val probe = if (mode == "gpu" && !vulkan) "cpu" else if (mode == "gpu") "vulkan" else "cpu"
+        writeBackend(current.copy(mode = mode, probe = probe, reason = reason, probed = true, checking = false, version = stamp))
+    }
+
+    fun noteCpu(reason: String) {
+        val current = backendRecord()
+        val stamp = DeviceTune.probeStamp(appVersion())
+        val suspect = current.mali || DeviceTune.suspectMali(
+            PhoneFacts.socName(),
+            android.os.Build.MODEL.orEmpty(),
+            current.vkName + " " + current.glRenderer,
+        )
+        writeBackend(
+            current.copy(
+                mode = "auto",
+                probe = "cpu",
+                reason = reason,
+                probed = true,
+                version = stamp,
+                checking = false,
+                mali = suspect,
+                isolated = false,
+            ),
+        )
+    }
+
+    fun disarmUnprovenMali() {
+        val stamp = DeviceTune.probeStamp(appVersion())
+        val record = backendRecord()
+        if (record.mode != "auto") return
+        val suspect = DeviceTune.suspectMali(
+            PhoneFacts.socName(),
+            android.os.Build.MODEL.orEmpty(),
+            record.vkName + " " + record.glRenderer,
+        )
+        if (!suspect) return
+        val proven = record.isolated && record.probe == "vulkan" && record.version == stamp && record.reason == "matched_faster"
+        if (proven) return
+        if (record.version == stamp && record.probed && record.probe == "cpu" && record.reason != "pending") return
+        writeBackend(
+            record.copy(
+                probe = "cpu",
+                reason = "mali_unproven",
+                probed = false,
+                version = stamp,
+                checking = true,
+                mali = true,
+                isolated = false,
+            ),
+        )
+    }
+
+    fun withBackend(backend: String, block: () -> String): String {
+        val previous = nglOverride
+        nglOverride = if (backend == "vulkan") 99 else 0
+        return try {
+            block()
+        } finally {
+            nglOverride = previous
+        }
     }
 
     fun ensureBackend() {
@@ -283,7 +382,22 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         val cpuVec = cpuEmbed?.vector
         val embedOk = gpuVec != null && cpuVec != null && DeviceTune.vectorsMatch(cpuVec, gpuVec)
         val caps = DeviceTune.parseVulkanCaps(gpuChat.err)
-        val mali = DeviceTune.looksLikeMali(caps, PhoneFacts.glRenderer())
+        val renderer = try {
+            markNative("selftest", "vulkan")
+            PhoneFacts.glRenderer()
+        } catch (_: Throwable) {
+            ""
+        }
+        val mali = DeviceTune.looksLikeMali(caps, renderer) || DeviceTune.suspectMali(PhoneFacts.socName(), android.os.Build.MODEL.orEmpty(), caps.name + " " + renderer)
+        if (gpuChat.code > 128) {
+            LlmGuard(crashFile()).onDeath(
+                "selftest",
+                "vulkan",
+                driverKey(caps, renderer),
+                LlmGuard.signalName(gpuChat.code),
+                gpuChat.err.take(800),
+            )
+        }
         var gpuPrefill = DeviceTune.parseTps(gpuChat.err).first
         var gpuDecode = DeviceTune.parseTps(gpuChat.err).second
         var cpuPrefill = DeviceTune.parseTps(cpuChat.err).first
@@ -323,6 +437,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             gpuSpeedStatus = if (mali && chatOk && embedOk) gpuSpeedStatus else 0,
             gpuDecodeTps = gpuDecode,
             cpuDecodeTps = cpuDecode,
+            isolated = true,
         )
         if (backendRecord().mode != "auto") return
         writeBackend(
@@ -336,6 +451,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
                 vkDriverVersion = caps.versionText(),
                 vkSubgroup = caps.subgroup,
                 vkFlags = caps.flags(),
+                glRenderer = renderer.ifBlank { current.glRenderer },
             ),
         )
     }
@@ -343,6 +459,18 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     fun diagnostics(): String {
         val version = appVersion()
         return DeviceTune.renderDiagnostics(PhoneFacts.collect(this, version))
+    }
+
+    fun crashNotes(): String {
+        val guardText = LlmGuard(crashFile()).render()
+        val native = File(context.filesDir, "setup/native-crash.txt").takeIf { it.exists() }?.readText().orEmpty()
+        return buildString {
+            append(guardText)
+            if (native.isNotBlank()) {
+                appendLine("tombstone:")
+                appendLine(native.take(4000))
+            }
+        }
     }
 
     private fun probeChat(ngl: Int): TimedRun {
@@ -423,15 +551,18 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         file.writeText(DeviceTune.writeRecord(record))
     }
 
-    private fun runTool(cmd: List<String>, work: File): String {
-        val result = runToolTimed(cmd, work, 180)
+    private fun runTool(cmd: List<String>, work: File): String = runToolStream(cmd, work) {}
+
+    private fun runToolStream(cmd: List<String>, work: File, onRaw: (String) -> Unit): String {
+        val result = runToolTimed(cmd, work, 180, onRaw)
+        if (result.code > 128) throw NativeCrash(result.code - 128, result.err.take(800))
         if (result.code != 0 && result.text.isBlank()) {
             error(result.err.lineSequence().lastOrNull { it.isNotBlank() } ?: "exit ${result.code}")
         }
         return result.text.ifBlank { result.err }
     }
 
-    private fun runToolTimed(cmd: List<String>, work: File, timeoutSec: Long): TimedRun {
+    private fun runToolTimed(cmd: List<String>, work: File, timeoutSec: Long, onRaw: (String) -> Unit = {}): TimedRun {
         work.mkdirs()
         val proc = ProcessBuilder(cmd)
             .directory(work)
@@ -440,7 +571,22 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             .start()
         val out = StringBuilder()
         val err = StringBuilder()
-        val stdout = Thread { out.append(proc.inputStream.bufferedReader().readText()) }
+        val stdout = Thread {
+            val reader = proc.inputStream.bufferedReader()
+            val buf = CharArray(128)
+            while (true) {
+                val n = reader.read(buf)
+                if (n < 0) break
+                val snapshot = synchronized(out) {
+                    out.append(buf, 0, n)
+                    out.toString()
+                }
+                try {
+                    onRaw(snapshot)
+                } catch (_: Throwable) {
+                }
+            }
+        }
         val stderr = Thread { err.append(proc.errorStream.bufferedReader().readText()) }
         stdout.start()
         stderr.start()
@@ -450,6 +596,47 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         stderr.join(2000)
         val code = if (!finished) 2 else proc.exitValue()
         return TimedRun(code, out.toString().ifBlank { "" }, err.toString())
+    }
+
+    private fun nglNow(): Int = nglOverride ?: DeviceTune.ngl(runtimeRecord())
+
+    private fun <T> guarded(stage: String, block: () -> T): T {
+        return try {
+            block()
+        } catch (crash: NativeCrash) {
+            val backend = if (nglNow() > 0) "vulkan" else "cpu"
+            LlmGuard(crashFile()).onDeath(
+                stage,
+                backend,
+                driverKey(),
+                LlmGuard.signalName(128 + crash.signal),
+                crash.detail,
+            )
+            if (backend == "cpu") throw crash
+            noteCpu("native_crash")
+            val previous = nglOverride
+            nglOverride = 0
+            try {
+                block()
+            } finally {
+                nglOverride = previous
+            }
+        }
+    }
+
+    private fun markNative(stage: String, backend: String) {
+        try {
+            NativeRouter.setStage(stage, backend)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun crashFile() = File(context.filesDir, "setup/crashes.json")
+
+    private fun driverKey(caps: VulkanCaps, renderer: String): String {
+        val driver = caps.versionText().ifBlank { "unknown" }
+        val name = caps.name.ifBlank { renderer }.ifBlank { PhoneFacts.socName() }.ifBlank { "device" }
+        return "$name|$driver"
     }
 
     companion object {

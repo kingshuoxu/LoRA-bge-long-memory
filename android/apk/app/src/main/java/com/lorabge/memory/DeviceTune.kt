@@ -58,8 +58,14 @@ object DeviceTune {
 
     fun vectorsMatch(cpu: FloatArray, gpu: FloatArray): Boolean = cosine(cpu, gpu) >= 0.99
 
-    // 0.1.1 曾经把对不上的 Mali 记成 CPU。策略改了之后要用新的戳,否则手机不会再测。
-    fun probeStamp(version: String) = "$version+mali1"
+    // 0.1.2 起,Mali 只有在独立进程里自检并且比 CPU 快才升到 GPU。旧记录的戳对不上,会重新测。
+    fun probeStamp(version: String) = "$version+iso1"
+
+    fun suspectMali(soc: String, model: String, gpu: String): Boolean {
+        val blob = "$soc $model $gpu".lowercase()
+        return blob.contains("mali") || blob.contains("immortalis") || blob.contains("dimensity") ||
+            blob.contains("mediatek") || blob.contains("mt699")
+    }
 
     fun parseTps(log: String): Pair<Double, Double> {
         val clean = log.replace(Regex("\u001B\\[[0-9;]*m"), "")
@@ -141,6 +147,9 @@ object DeviceTune {
                 vkDriverVersion = obj.optString("vk_driver_version"),
                 vkSubgroup = obj.optInt("vk_subgroup"),
                 vkFlags = obj.optString("vk_flags"),
+                glRenderer = obj.optString("gl_renderer"),
+                mali = obj.optBoolean("mali"),
+                isolated = obj.optBoolean("isolated"),
             )
         } catch (_: Throwable) {
             defaultRecord(version)
@@ -164,13 +173,20 @@ object DeviceTune {
             .put("vk_driver_version", record.vkDriverVersion)
             .put("vk_subgroup", record.vkSubgroup)
             .put("vk_flags", record.vkFlags)
+            .put("gl_renderer", record.glRenderer)
+            .put("mali", record.mali)
+            .put("isolated", record.isolated)
             .toString()
     }
 
-    fun active(record: BackendRecord): String = when (record.mode) {
-        "cpu" -> "cpu"
-        "gpu" -> if (record.reason == "no_vulkan") "cpu" else "vulkan"
-        else -> if (record.checking || !record.probed || record.version.isEmpty()) "cpu" else record.probe
+    fun active(record: BackendRecord): String {
+        val selected = when (record.mode) {
+            "cpu" -> "cpu"
+            "gpu" -> if (record.reason == "no_vulkan") "cpu" else "vulkan"
+            else -> if (record.checking || !record.probed || record.version.isEmpty()) "cpu" else record.probe
+        }
+        if (record.mode == "auto" && selected == "vulkan" && record.mali && !record.isolated) return "cpu"
+        return selected
     }
 
     fun ngl(record: BackendRecord): Int = if (active(record) == "vulkan") 99 else 0
@@ -188,7 +204,7 @@ object DeviceTune {
 
     /**
      * 自动模式：Vulkan 对话和嵌入都要跟 CPU 对上，否则记住 CPU。
-     * Mali 还要短解码比 CPU 快。Adreno 只看对不对，不看快慢。
+     * Mali 在独立进程证明对得上、并且短解码比 CPU 快之前,保持 CPU。Adreno 只看对不对,不看快慢。
      * 强制 GPU 仍走 Vulkan，除非包里没有那份库。
      * gpuSpeedStatus：0 测完，1 进程失败，2 超时，负数表示没测到。
      */
@@ -207,54 +223,62 @@ object DeviceTune {
         gpuSpeedStatus: Int = 0,
         gpuDecodeTps: Double = 0.0,
         cpuDecodeTps: Double = 0.0,
+        isolated: Boolean = false,
     ): BackendRecord {
+        fun finish(record: BackendRecord) = record.copy(
+            mali = mali,
+            isolated = isolated && record.probe == "vulkan",
+        )
         if (mode == "cpu") {
-            return BackendRecord("cpu", "cpu", "forced", true, version, false)
+            return finish(BackendRecord("cpu", "cpu", "forced", true, version, false))
         }
         if (mode == "gpu") {
             return if (vulkanPresent) {
-                BackendRecord("gpu", "vulkan", "forced", true, version, false)
+                finish(BackendRecord("gpu", "vulkan", "forced", true, version, false))
             } else {
-                BackendRecord("gpu", "cpu", "no_vulkan", true, version, false)
+                finish(BackendRecord("gpu", "cpu", "no_vulkan", true, version, false))
             }
         }
         if (!vulkanPresent) {
-            return BackendRecord("auto", "cpu", "no_vulkan", true, version, false)
+            return finish(BackendRecord("auto", "cpu", "no_vulkan", true, version, false))
         }
         if (!modelsReady) {
-            return BackendRecord("auto", "cpu", "no_model", false, version, false)
+            return finish(BackendRecord("auto", "cpu", "no_model", false, version, false))
         }
         if (gpuChatStatus != 0) {
             val reason = if (gpuChatStatus == 2) "chat_timeout" else "chat_exit"
-            return BackendRecord("auto", "cpu", reason, true, version, false)
+            return finish(BackendRecord("auto", "cpu", reason, true, version, false))
         }
         if (!chatMatch(cpuReply, gpuReply)) {
-            return BackendRecord("auto", "cpu", "chat_mismatch", true, version, false)
+            return finish(BackendRecord("auto", "cpu", "chat_mismatch", true, version, false))
         }
         if (gpuEmbedStatus != 0 || cpuVec == null || gpuVec == null) {
             val reason = if (gpuEmbedStatus == 2) "embed_timeout" else "embed_exit"
-            return BackendRecord("auto", "cpu", reason, true, version, false)
+            return finish(BackendRecord("auto", "cpu", reason, true, version, false))
         }
         if (!vectorsMatch(cpuVec, gpuVec)) {
-            return BackendRecord("auto", "cpu", "embed_mismatch", true, version, false)
+            return finish(BackendRecord("auto", "cpu", "embed_mismatch", true, version, false))
+        }
+        if (mali && !isolated) {
+            return finish(BackendRecord("auto", "cpu", "mali_unproven", true, version, false))
         }
         if (mali) {
             if (gpuSpeedStatus == 2) {
-                return BackendRecord("auto", "cpu", "speed_timeout", true, version, false)
+                return finish(BackendRecord("auto", "cpu", "speed_timeout", true, version, false))
             }
             if (gpuSpeedStatus != 0) {
                 val reason = if (gpuSpeedStatus < 0) "speed_unknown" else "speed_exit"
-                return BackendRecord("auto", "cpu", reason, true, version, false)
+                return finish(BackendRecord("auto", "cpu", reason, true, version, false))
             }
             if (gpuDecodeTps <= 0.0 || cpuDecodeTps <= 0.0) {
-                return BackendRecord("auto", "cpu", "speed_unknown", true, version, false)
+                return finish(BackendRecord("auto", "cpu", "speed_unknown", true, version, false))
             }
             if (gpuDecodeTps <= cpuDecodeTps) {
-                return BackendRecord("auto", "cpu", "gpu_slower", true, version, false)
+                return finish(BackendRecord("auto", "cpu", "gpu_slower", true, version, false))
             }
-            return BackendRecord("auto", "vulkan", "matched_faster", true, version, false)
+            return finish(BackendRecord("auto", "vulkan", "matched_faster", true, version, false))
         }
-        return BackendRecord("auto", "vulkan", "matched", true, version, false)
+        return finish(BackendRecord("auto", "vulkan", "matched", true, version, false))
     }
 
     private fun tpsText(value: Double): String {
@@ -290,6 +314,9 @@ object DeviceTune {
             appendLine("Vulkan 驱动: ${facts.vkDriverVersion.ifBlank { "未知" }}")
             appendLine("Vulkan 子组: ${if (facts.vkSubgroup > 0) facts.vkSubgroup.toString() else "未知"}")
             appendLine("Vulkan 特性: ${facts.vkFlags.ifBlank { "未知" }}")
+            if (facts.crashes.isNotBlank()) {
+                appendLine(facts.crashes.trimEnd())
+            }
         }
     }
 
@@ -336,6 +363,9 @@ data class BackendRecord(
     val vkDriverVersion: String = "",
     val vkSubgroup: Int = 0,
     val vkFlags: String = "",
+    val glRenderer: String = "",
+    val mali: Boolean = false,
+    val isolated: Boolean = false,
 )
 
 data class VulkanCaps(
@@ -395,4 +425,5 @@ data class DiagnosticFacts(
     val vkDriverVersion: String = "",
     val vkSubgroup: Int = 0,
     val vkFlags: String = "",
+    val crashes: String = "",
 )

@@ -11,12 +11,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +48,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily as ComposeFontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.cos
@@ -54,7 +65,13 @@ internal val Glass = Color(0x6B080C16)
 
 enum class SkyTab { Chat, Consolidate, Nebula, Library }
 
-data class SkyMessage(val role: String, val text: String, val expert: String?)
+data class SkyMessage(
+    val role: String,
+    val text: String,
+    val expert: String? = null,
+    val reason: String? = null,
+    val noticed: Boolean = false,
+)
 
 data class SkyExpert(val name: String, val facts: List<String>)
 
@@ -80,6 +97,11 @@ data class SkyState(
     val force: Boolean = false,
     val ready: String = "",
     val note: String = "",
+    val streaming: String = "",
+    val generating: Boolean = false,
+    val statusTop: Dp = 0.dp,
+    val imeBottom: Dp = 0.dp,
+    val navBottom: Dp = 0.dp,
 )
 
 sealed class SkyEvent {
@@ -108,7 +130,10 @@ fun skyText(lang: String, key: String): String {
         "nebula" to "星云",
         "library" to "记忆库",
         "send" to "发送",
-        "placeholder" to "要改一条记忆,直接说出新的事实",
+        "placeholder" to "发消息",
+        "memoryUsed" to "来源知识",
+        "memoryNone" to "未使用记忆",
+        "noticed" to "已记下，待巩固",
         "newChat" to "新对话",
         "confirm" to "确认并重新训练",
         "dismiss" to "先不改",
@@ -139,7 +164,10 @@ fun skyText(lang: String, key: String): String {
         "nebula" to "Nebula",
         "library" to "Library",
         "send" to "Send",
-        "placeholder" to "To correct a memory, state the new fact",
+        "placeholder" to "Message",
+        "memoryUsed" to "From memory",
+        "memoryNone" to "No memory used",
+        "noticed" to "Noted, not consolidated yet",
         "newChat" to "New chat",
         "confirm" to "Confirm and retrain",
         "dismiss" to "Not now",
@@ -185,9 +213,12 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             labelLarge = TextStyle(fontFamily = serif, fontSize = 14.sp, color = Accent),
         ),
     ) {
+        val top = if (state.statusTop > 0.dp) state.statusTop else WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val nav = if (state.navBottom > 0.dp) state.navBottom else WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val ime = if (state.imeBottom > 0.dp) state.imeBottom else WindowInsets.ime.asPaddingValues().calculateBottomPadding()
         Box(Modifier.fillMaxSize().background(Night)) {
             MilkyWay(paused = state.training)
-            Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = top + 8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(if (state.lang == "en") "Long memory" else "长期记忆", style = MaterialTheme.typography.titleLarge)
                     Row {
@@ -207,11 +238,14 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 }
                 Box(Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp)) {
                     when (state.tab) {
-                        SkyTab.Chat -> ChatPane(state, onEvent)
+                        SkyTab.Chat -> ChatPane(state, ime, nav, onEvent)
                         SkyTab.Consolidate -> ConsolidatePane(state, onEvent)
                         SkyTab.Nebula -> NebulaPane(state)
                         SkyTab.Library -> LibraryPane(state, onEvent)
                     }
+                }
+                if (state.tab != SkyTab.Chat) {
+                    Box(Modifier.height(nav))
                 }
             }
         }
@@ -273,51 +307,121 @@ internal fun MilkyWay(paused: Boolean) {
             band.lineTo(x, y)
             x += 12f
         }
-        drawPath(band, Color(0x33B7D7FF), style = Stroke(width = size.height * 0.18f))
-        drawPath(band, Color(0x227EF0E0), style = Stroke(width = size.height * 0.06f))
-        val count = 90
+        drawOval(
+            Color(0x148FB7E8),
+            topLeft = Offset(-size.width * 0.15f, size.height * 0.28f),
+            size = androidx.compose.ui.geometry.Size(size.width * 1.3f, size.height * 0.22f),
+        )
+        drawPath(band, Color(0x147EF0E0), style = Stroke(width = size.height * 0.012f))
+        val count = 140
         for (i in 0 until count) {
             val px = ((i * 97) % 1000) / 1000f * size.width
             val py = ((i * 57) % 1000) / 1000f * size.height
-            val tw = 0.35f + 0.65f * ((sin(phase * 2f + i) + 1f) / 2f)
-            val r = if (i % 11 == 0) 2.2f else 1.1f
-            drawCircle(Color.White.copy(alpha = tw), r, Offset(px, py))
+            val tw = 0.25f + 0.55f * ((sin(phase * 2f + i) + 1f) / 2f)
+            val r = if (i % 17 == 0) 1.6f else 0.8f
+            drawCircle(Color.White.copy(alpha = tw * 0.85f), r, Offset(px, py))
         }
     }
 }
 
 @Composable
-private fun ChatPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+private fun ChatPane(state: SkyState, ime: Dp, nav: Dp, onEvent: (SkyEvent) -> Unit) {
+    val shown = state.messages + if (state.generating) {
+        listOf(SkyMessage("assistant", state.streaming.ifBlank { "…" }))
+    } else {
+        emptyList()
+    }
+    val listState = rememberLazyListState()
+    val ordered = shown.asReversed()
+    LaunchedEffect(shown.size, state.streaming, ime) {
+        if (ordered.isNotEmpty()) listState.scrollToItem(0)
+    }
     Column(Modifier.fillMaxSize()) {
-        Text(skyText(state.lang, "newChat"), color = Accent, modifier = Modifier.clickable { onEvent(SkyEvent.NewChat) })
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            items(state.messages) { message ->
-                val who = if (message.role == "user") if (state.lang == "en") "Me" else "我" else if (state.lang == "en") "Assistant" else "助手"
-                val extra = message.expert?.let { " · $it" }.orEmpty()
-                GlassText("$who$extra\n${message.text}")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                skyText(state.lang, "newChat"),
+                color = Muted,
+                fontSize = 12.sp,
+                modifier = Modifier.clickable { onEvent(SkyEvent.NewChat) }.padding(bottom = 4.dp),
+            )
+        }
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, reverseLayout = true) {
+            items(ordered.size) { index ->
+                val message = ordered[index]
+                val streaming = state.generating && index == 0
+                Bubble(state.lang, message, streaming)
             }
         }
-        state.pending?.let { pending ->
-            Column(Modifier.fillMaxWidth().background(Glass, RoundedCornerShape(12.dp)).padding(10.dp)) {
-                Text(pending.statement, color = Gold)
-                Text("${pending.entity} · ${pending.value}", color = Muted)
-                Row {
-                    Text(skyText(state.lang, "confirm"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.ConfirmCorrection) }.padding(8.dp))
-                    Text(skyText(state.lang, "dismiss"), color = Muted, modifier = Modifier.clickable { onEvent(SkyEvent.DismissCorrection) }.padding(8.dp))
+        if (state.note.isNotEmpty()) {
+            Text(state.note, color = Gold, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp, bottom = if (ime > 0.dp) 0.dp else nav),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = state.draft,
+                onValueChange = { onEvent(SkyEvent.Draft(it)) },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text(skyText(state.lang, "placeholder"), color = Muted) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onEvent(SkyEvent.Send) }),
+                maxLines = 4,
+            )
+            Text(
+                skyText(state.lang, "send"),
+                color = Accent,
+                modifier = Modifier.padding(start = 10.dp).clickable { onEvent(SkyEvent.Send) },
+            )
+        }
+        if (state.imeBottom > 0.dp) FakeKeyboard(state.lang, state.imeBottom)
+    }
+}
+
+@Composable
+private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean) {
+    val user = message.role == "user"
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
+        Column(Modifier.widthIn(max = 300.dp)) {
+            Text(
+                message.text,
+                color = Ink,
+                modifier = Modifier
+                    .background(if (user) Color(0x332A2418) else Color(0x33101828), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+            if (!user && !streaming) {
+                val tag = if (message.expert != null) skyText(lang, "memoryUsed") else skyText(lang, "memoryNone")
+                Text(tag, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp, top = 2.dp))
+                if (message.noticed) {
+                    Text(skyText(lang, "noticed"), color = Gold, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp, top = 1.dp))
                 }
             }
         }
-        OutlinedTextField(
-            value = state.draft,
-            onValueChange = { onEvent(SkyEvent.Draft(it)) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(skyText(state.lang, "placeholder")) },
-        )
-        Text(skyText(state.lang, "send"), color = Accent, modifier = Modifier.padding(top = 6.dp).clickable { onEvent(SkyEvent.Send) })
-        LazyColumn(Modifier.height(72.dp)) {
-            items(state.conversations) { title ->
-                Text(title, color = Muted, modifier = Modifier.padding(vertical = 2.dp))
+    }
+}
+
+@Composable
+private fun FakeKeyboard(lang: String, height: Dp) {
+    Column(
+        Modifier.fillMaxWidth().height(height).padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        repeat(3) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                repeat(8) {
+                    Box(Modifier.weight(1f).height(28.dp).background(Color(0xFF1C2230), RoundedCornerShape(6.dp)))
+                }
             }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                skyText(lang, "send"),
+                color = Night,
+                modifier = Modifier
+                    .background(Accent, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
     }
 }

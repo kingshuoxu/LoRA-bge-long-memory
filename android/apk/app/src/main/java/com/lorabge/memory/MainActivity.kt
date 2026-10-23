@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,9 +32,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = false
         val store = MemoryStore(File(filesDir, "memory"))
         store.ensure()
         val engine = Engine(this, store)
+        val client = LlmClient(this)
+        engine.disarmUnprovenMali()
         if (intent?.getStringExtra("mode") == "benchmark" || intent?.action == TrainService.ACTION_BENCHMARK) {
             startBenchmark(store)
         }
@@ -43,7 +50,7 @@ class MainActivity : ComponentActivity() {
                 SetupScreen(onFinished = { ready = true })
                 return@setContent
             }
-            PhoneApp(store, engine, probeOnStart = !benchmark, onTrain = {
+            PhoneApp(store, engine, client, probeOnStart = !benchmark, onTrain = {
                 if (Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED
@@ -96,6 +103,7 @@ class MainActivity : ComponentActivity() {
 private fun PhoneApp(
     store: MemoryStore,
     engine: Engine,
+    client: LlmClient,
     probeOnStart: Boolean,
     onTrain: () -> Unit,
     onCancel: () -> Unit,
@@ -104,15 +112,19 @@ private fun PhoneApp(
     var lang by remember { mutableStateOf("zh") }
     var tab by remember { mutableStateOf(SkyTab.Chat) }
     var tick by remember { mutableIntStateOf(0) }
+    var note by remember { mutableStateOf("") }
     var probeGen by remember { mutableIntStateOf(if (probeOnStart) 1 else 0) }
     LaunchedEffect(probeGen) {
         if (probeGen == 0) return@LaunchedEffect
         val running = AtomicBoolean(true)
+        val langNow = lang
         Thread {
             try {
-                engine.ensureBackend()
+                client.ensure()
             } catch (_: Throwable) {
             } finally {
+                val fallback = client.notice(langNow)
+                if (fallback.isNotBlank()) note = fallback
                 running.set(false)
             }
         }.start()
@@ -123,6 +135,8 @@ private fun PhoneApp(
         tick++
     }
     var draft by remember { mutableStateOf("") }
+    var generating by remember { mutableStateOf(false) }
+    var streaming by remember { mutableStateOf("") }
     var currentId by remember { mutableStateOf(store.listConversations().firstOrNull()?.id) }
     var pending by remember { mutableStateOf<PendingCorrection?>(null) }
     var entity by remember { mutableStateOf("") }
@@ -131,7 +145,6 @@ private fun PhoneApp(
     var question by remember { mutableStateOf("") }
     var answer by remember { mutableStateOf("") }
     var force by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf("") }
     val statusFile = File(store.trainDir, "status.json")
     val training = statusFile.exists() && statusState(statusFile.readText()) == "running"
     LaunchedEffect(training, tick) {
@@ -149,7 +162,9 @@ private fun PhoneApp(
         tab = tab,
         training = training,
         status = statusFile.takeIf { it.exists() }?.readText().orEmpty(),
-        messages = current?.messages?.map { SkyMessage(it.role, it.content, it.expert) } ?: emptyList(),
+        messages = current?.messages?.map { SkyMessage(it.role, it.content, it.expert, it.reason, it.noticed) } ?: emptyList(),
+        streaming = streaming,
+        generating = generating,
         draft = draft,
         conversations = conversations.map { it.title },
         loss = loss,
@@ -179,30 +194,47 @@ private fun PhoneApp(
             }
             SkyEvent.Send -> {
                 val text = draft.trim()
-                if (text.isEmpty()) return@SkyFrame
-                if (looksLikeCorrection(text)) {
-                    pending = guessCorrection(text)
-                    draft = ""
-                    return@SkyFrame
-                }
+                if (text.isEmpty() || generating) return@SkyFrame
                 val conversation = current ?: store.newConversation().also { currentId = it.id }
-                val hit = try {
-                    engine.route(text)
-                } catch (ex: Throwable) {
-                    RouteHit(null, false, ex.message ?: "route", 0.0)
-                }
-                val expert = if (hit.fired) hit.expert else null
-                val reply = try {
-                    engine.answer(text, expert)
-                } catch (ex: Throwable) {
-                    "生成失败: ${ex.message}"
+                val noticed = FactNotice.noticed(text)
+                if (noticed) {
+                    val guess = FactNotice.guess(text)
+                    entity = guess.entity
+                    statement = guess.statement
+                    value = guess.value
+                    pending = null
                 }
                 val now = Instant.now().toString()
-                val messages = conversation.messages + ChatMessage("user", text) + ChatMessage("assistant", reply, expert, hit.reason)
                 val title = if (conversation.messages.isEmpty()) text.take(18) else conversation.title
-                store.saveConversation(conversation.copy(title = title, updated = now, messages = messages))
+                val withUser = conversation.messages + ChatMessage("user", text)
+                store.saveConversation(conversation.copy(title = title, updated = now, messages = withUser))
                 draft = ""
+                generating = true
+                streaming = ""
                 tick++
+                val langNow = lang
+                Thread {
+                    val hit = try {
+                        client.route(text)
+                    } catch (ex: Throwable) {
+                        RouteHit(null, false, ex.message ?: "route", 0.0)
+                    }
+                    val expert = if (hit.fired) hit.expert else null
+                    val reply = try {
+                        client.answer(text, expert) { streaming = it }
+                    } catch (ex: Throwable) {
+                        if (langNow == "en") "Couldn't generate" else "生成失败"
+                    }
+                    val saved = store.loadConversation(conversation.id) ?: withUser.let {
+                        conversation.copy(title = title, updated = now, messages = withUser)
+                    }
+                    val messages = saved.messages + ChatMessage("assistant", reply, expert, hit.reason, noticed)
+                    store.saveConversation(saved.copy(updated = Instant.now().toString(), messages = messages))
+                    generating = false
+                    streaming = ""
+                    note = client.notice(langNow)
+                    tick++
+                }.start()
             }
             SkyEvent.DismissCorrection -> pending = null
             SkyEvent.ConfirmCorrection -> {
@@ -240,27 +272,35 @@ private fun PhoneApp(
             SkyEvent.CancelTrain -> onCancel()
             is SkyEvent.DeleteExpert -> {
                 store.deleteExpert(event.name)
-                try {
-                    engine.rebuildIndex()
-                } catch (_: Throwable) {
-                }
-                tick++
+                Thread {
+                    try {
+                        client.rebuild()
+                    } catch (_: Throwable) {
+                    }
+                    tick++
+                }.start()
             }
             SkyEvent.ImportExperts -> {
-                note = try {
-                    engine.importExternal()
-                    if (lang == "en") "Imported" else "已从 import 导入专家"
-                } catch (ex: Throwable) {
-                    ex.message ?: "import"
-                }
-                tick++
+                val langNow = lang
+                Thread {
+                    note = try {
+                        client.importExternal()
+                        if (langNow == "en") "Imported" else "已从 import 导入专家"
+                    } catch (ex: Throwable) {
+                        ex.message ?: "import"
+                    }
+                    tick++
+                }.start()
             }
             SkyEvent.SelfCheck -> {
-                note = try {
-                    engine.selfCheck()
-                } catch (ex: Throwable) {
-                    ex.message ?: "check"
-                }
+                Thread {
+                    note = try {
+                        client.selfCheck()
+                    } catch (ex: Throwable) {
+                        ex.message ?: "check"
+                    }
+                    tick++
+                }.start()
             }
             is SkyEvent.BackendMode -> {
                 engine.setBackendMode(event.mode)

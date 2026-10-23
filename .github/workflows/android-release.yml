@@ -67,7 +67,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG=android-v0.1.1
+          TAG=android-v0.1.2
           STAGE=android/out/release
           mkdir -p "$STAGE"
           cp android/apk/app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-debug.apk"
@@ -75,7 +75,7 @@ jobs:
           NOTES=$(cat << EOF
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
 
-          模型和清单仍用 android-v0.1.0 里的文件,没有重新转换。Mali 上 Vulkan 会按 ARM 厂商号关掉 coopmat 和 bf16、保留 fp16,并且只有短解码对得上而且比 CPU 快才留在 GPU。对不上或更慢就改走带 dotprod/i8mm 的 CPU。Adreno 的路径不变。
+          模型和清单仍用 android-v0.1.0 里的文件,没有重新转换。对话、嵌入、路由和 GPU 自检跑在单独的 :llm 进程里,训练在 :train。原生崩溃不会把界面打回桌面;会记下信号和阶段,这块驱动记成坏后端,同一条请求改走 CPU 再试一次。Mali 在这次独立自检对上并且比 CPU 快之前,自动模式保持 CPU。Adreno 仍只看结果是否一致。
 
           - APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/app-debug.apk
           - 清单: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json
@@ -84,5 +84,5 @@ jobs:
           EOF
           )
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.1" --notes "$NOTES"
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.2" --notes "$NOTES"
           gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" --clobber

@@ -265,6 +265,8 @@ class ModelFetch(
             }
         }
         if (part.length() != file.size) return "error: 长度 ${part.length()} 不是 ${file.size}"
+        snaps[index] = FileSnap(file.dest, part.length(), file.size, "checking")
+        publish(host, 0, "校验中", "running")
         val got = sha256File(part)
         if (got != file.sha256) {
             part.delete()

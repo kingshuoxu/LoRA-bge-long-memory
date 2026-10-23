@@ -32,6 +32,13 @@ class TrainService : Service() {
         } else {
             startForeground(7, notification)
         }
+        try {
+            val crash = java.io.File(filesDir, "setup/native-crash.txt")
+            crash.parentFile?.mkdirs()
+            NativeRouter.armCrashLog(crash.absolutePath)
+            NativeRouter.setStage("train", "cpu")
+        } catch (_: Throwable) {
+        }
         if (intent?.action == ACTION_CANCEL) {
             File(memoryRoot(), "train/cancel").writeText("1")
             return START_NOT_STICKY

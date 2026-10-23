@@ -140,26 +140,44 @@ class DeviceTuneTest {
     fun maliUsesGpuOnlyWhenFaster() {
         val vec = floatArrayOf(1f, 0f)
         val slower = DeviceTune.decide(
-            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
-            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 12.0, cpuDecodeTps = 20.0,
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.2+iso1",
+            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 12.0, cpuDecodeTps = 20.0, isolated = true,
         )
         assertEquals("cpu", slower.probe)
         assertEquals("gpu_slower", slower.reason)
         assertEquals(0, DeviceTune.ngl(slower))
 
+        val unproven = DeviceTune.decide(
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.2+iso1",
+            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0, isolated = false,
+        )
+        assertEquals("cpu", unproven.probe)
+        assertEquals("mali_unproven", unproven.reason)
+        assertEquals(0, DeviceTune.ngl(unproven))
+
         val faster = DeviceTune.decide(
-            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
-            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0,
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.2+iso1",
+            mali = true, gpuSpeedStatus = 0, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0, isolated = true,
         )
         assertEquals("vulkan", faster.probe)
         assertEquals("matched_faster", faster.reason)
         assertEquals(99, DeviceTune.ngl(faster))
 
         val unknown = DeviceTune.decide(
-            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.1+mali1",
-            mali = true, gpuSpeedStatus = -1, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0,
+            "auto", true, true, 0, "2", "2", 0, vec, vec, "0.1.2+iso1",
+            mali = true, gpuSpeedStatus = -1, gpuDecodeTps = 40.0, cpuDecodeTps = 20.0, isolated = true,
         )
         assertEquals("speed_unknown", unknown.reason)
+
+        val stale = BackendRecord(
+            "auto", "vulkan", "matched_faster", true, "0.1.1+mali1", false,
+            mali = true, isolated = false,
+        )
+        assertEquals("cpu", DeviceTune.active(stale))
+        assertEquals("vulkan", DeviceTune.active(stale.copy(isolated = true)))
+        assertTrue(DeviceTune.suspectMali("MediaTek Dimensity 9400", "V2413", ""))
+        assertFalse(DeviceTune.suspectMali("Qualcomm", "2407FPN8EG", "Adreno 830"))
+        assertEquals("0.1.2+iso1", DeviceTune.probeStamp("0.1.2"))
     }
 
     @Test
