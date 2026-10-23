@@ -1,6 +1,9 @@
 package com.lorabge.memory
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.view.KeyEvent
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
@@ -146,30 +149,76 @@ class ChatFlowTest {
      * 上一句若是“我的猫猫叫咪咪”，会直接记事实，根本不会出现 typing-。
      */
     private fun fillComposer(text: String) {
-        val deadline = System.currentTimeMillis() + 8_000
+        val deadline = System.currentTimeMillis() + 10_000
         var last = ""
         while (System.currentTimeMillis() < deadline) {
-            val node = device.findObject(By.desc("composer"))
-            if (node == null) {
+            val root = device.findObject(By.desc("composer"))
+            if (root == null) {
                 Thread.sleep(200)
                 continue
             }
-            try {
-                node.click()
-                node.setText(text)
-            } catch (ex: Throwable) {
-                last = ex.javaClass.simpleName + " " + ex.message.orEmpty()
-                Thread.sleep(200)
-                continue
+            val targets = ArrayList<UiObject2>()
+            collectNodes(root, targets)
+            val ordered = targets.sortedByDescending { (it.className ?: "").contains("EditText") }
+            for (node in ordered) {
+                if (node.contentDescription == "send") continue
+                try {
+                    if ((node.className ?: "").contains("EditText") || node.contentDescription == "composer") {
+                        node.click()
+                    }
+                    node.setText(text)
+                } catch (ex: Throwable) {
+                    last = ex.javaClass.simpleName + " " + ex.message.orEmpty()
+                }
             }
             device.waitForIdle(1_000)
             last = composerText()
             if (last.contains(text)) return
-            Thread.sleep(200)
+            pasteIntoComposer(text)
+            device.waitForIdle(1_000)
+            last = composerText()
+            if (last.contains(text)) return
+            last = "$last tree=${describeTree(root)}"
+            Thread.sleep(250)
         }
         val hierarchy = File(shots, "composer-stuck.xml")
         device.dumpWindowHierarchy(hierarchy)
-        error("composer never held [$text], saw [$last]\n" + hierarchy.readText().take(2000))
+        error("composer never held [$text], saw [${last.replace("\n", " ")}]")
+    }
+
+    private fun pasteIntoComposer(text: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val clipboard = instrumentation.targetContext.getSystemService(ClipboardManager::class.java)
+            clipboard.setPrimaryClip(ClipData.newPlainText("e2e", text))
+        }
+        val root = device.findObject(By.desc("composer")) ?: return
+        val edit = ArrayList<UiObject2>()
+        collectNodes(root, edit)
+        val target = edit.firstOrNull { (it.className ?: "").contains("EditText") } ?: root
+        target.click()
+        device.waitForIdle()
+        device.pressKeyCode(KeyEvent.KEYCODE_PASTE)
+    }
+
+    private fun collectNodes(node: UiObject2, out: MutableList<UiObject2>) {
+        out.add(node)
+        val children = try {
+            node.children
+        } catch (_: Throwable) {
+            return
+        }
+        for (child in children) collectNodes(child, out)
+    }
+
+    private fun describeTree(node: UiObject2): String {
+        return try {
+            val kids = node.children.joinToString(",") { describeTree(it) }
+            val self = "${node.className}:${node.contentDescription}:${node.text}"
+            if (kids.isBlank()) self else "$self[$kids]"
+        } catch (_: Throwable) {
+            "?"
+        }
     }
 
     private fun sendComposer(text: String) {

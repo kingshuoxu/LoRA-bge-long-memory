@@ -80,9 +80,13 @@ class NebulaGestureTest {
         File(shots, "nebula-renderer.txt").writeText(
             "renderer=${ready.optString("renderer")}\nversion=${ready.optString("version")}\nfallback=${ready.optString("fallback")}\n",
         )
+        // aosp_atd 没有可用的屏幕编码器，screenrecord 会写出 0 字节。
+        // 主机在看到 record.on 之后用 screencap 自己串成 mp4。
+        File(shots, "record.on").writeText("1")
         val recorder = Thread {
             device.executeShellCommand("screenrecord --time-limit 22 --bit-rate 4000000 /sdcard/nebula-gesture.mp4")
         }
+        try {
         recorder.start()
         Thread.sleep(700)
         val before = waitStatus(4_000) { it.optInt("frames") >= 1 }
@@ -90,6 +94,7 @@ class NebulaGestureTest {
         nebula.pinchOpen(0.6f, 18)
         device.waitForIdle()
         val zoomed = waitStatus(12_000) { abs(it.optDouble("zoom") - beforeZoom) > 0.15 }
+        Thread.sleep(900)
         val beforeZ = zoomed.optDouble("cameraZ")
         val beforeX = zoomed.optDouble("cameraX")
         nebula.swipe(Direction.LEFT, 0.5f)
@@ -98,6 +103,7 @@ class NebulaGestureTest {
             abs(status.optDouble("cameraZ") - beforeZ) > 0.15 ||
                 abs(status.optDouble("cameraX") - beforeX) > 0.05
         }
+        Thread.sleep(900)
         val view = device.findObject(By.desc("nebula")) ?: nebula
         val hit = waitStatus(4_000) { it.optDouble("hitX") > 1.0 }
         val dpr = hit.optDouble("dpr", 1.0).coerceAtLeast(1.0)
@@ -131,8 +137,11 @@ class NebulaGestureTest {
             abs(moved.optDouble("cameraZ") - beforeZ) > 0.15 || abs(moved.optDouble("cameraX") - beforeX) > 0.05,
         )
         assertTrue("fact card did not open\n${opened ?: hit}", opened != null)
-        Thread.sleep(1200)
-        recorder.join(24_000)
+        Thread.sleep(1500)
+        } finally {
+            File(shots, "record.on").delete()
+            recorder.join(3_000)
+        }
     }
 
     private fun assertEqualsFresh(status: JSONObject) {

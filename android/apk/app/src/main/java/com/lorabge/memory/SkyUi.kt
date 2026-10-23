@@ -67,7 +67,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.editableText
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setText
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily as ComposeFontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -827,7 +830,15 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 4.dp)
-                .semantics { contentDescription = "composer" },
+                .semantics {
+                    contentDescription = "composer"
+                    // 外层节点本身不是输入框，UiAutomator 的 setText 打在这层会静默失败。
+                    editableText = AnnotatedString(state.draft)
+                    setText { updated ->
+                        onEvent(SkyEvent.Draft(updated.text))
+                        true
+                    }
+                },
             placeholder = { Text(skyText(state.lang, "placeholder"), color = Muted) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { onEvent(SkyEvent.Send) }),

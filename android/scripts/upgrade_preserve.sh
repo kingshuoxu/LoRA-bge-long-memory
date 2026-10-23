@@ -170,26 +170,65 @@ echo "upgrade preserved memory, models, settings; versionCode 1003"
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
+rm -rf "$STAGE/frames"
+mkdir -p "$STAGE/frames"
+rm -f "$STAGE/record.stop"
+# aosp_atd 的 screenrecord 没有编码器，文件是 0 字节。星云测试写下 record.on 时，这里抓帧。
+(
+  set +e
+  i=0
+  while [ ! -f "$STAGE/record.stop" ]; do
+    if timeout 5 "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat files/e2e/record.on >/dev/null 2>&1; then
+      frame=$(printf '%s/%04d.png' "$STAGE/frames" "$i")
+      if timeout 8 "$ADB" -s "emulator-$PORT" exec-out screencap -p >"$frame" && [ -s "$frame" ]; then
+        i=$((i + 1))
+      else
+        rm -f "$frame"
+      fi
+    else
+      sleep 0.4
+    fi
+  done
+) &
+FRAME_PID=$!
 set +e
 ./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest,com.lorabge.memory.NebulaGestureTest --no-daemon
 gradle_status=$?
 set -e
+touch "$STAGE/record.stop"
+wait "$FRAME_PID" || true
 # 测试失败也要把截图和星云录像拉下来，否则 always() 上传是空的。
 mkdir -p "$STAGE/shots"
-if "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory tar -C files/e2e -cf - . >"$STAGE/shots.tar"; then
+if "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory /system/bin/tar -C files/e2e -cf - . >"$STAGE/shots.tar"; then
   tar -C "$STAGE/shots" -xf "$STAGE/shots.tar" || true
 else
   echo "没有拉到 files/e2e" >&2
 fi
-"$ADB" -s "emulator-$PORT" pull /sdcard/nebula-gesture.mp4 "$STAGE/shots/nebula-gesture.mp4" || true
+"$ADB" -s "emulator-$PORT" pull /sdcard/nebula-gesture.mp4 "$STAGE/shots/nebula-gesture-device.mp4" || true
+if ls "$STAGE/frames/"*.png >/dev/null 2>&1; then
+  ffmpeg -y -framerate 2 -i "$STAGE/frames/%04d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4" || true
+fi
+device_bytes=0
+host_bytes=0
+if [ -s "$STAGE/shots/nebula-gesture-device.mp4" ]; then
+  device_bytes=$(wc -c <"$STAGE/shots/nebula-gesture-device.mp4" | tr -d '[:space:]')
+fi
+if [ -s "$STAGE/shots/nebula-gesture.mp4" ]; then
+  host_bytes=$(wc -c <"$STAGE/shots/nebula-gesture.mp4" | tr -d '[:space:]')
+fi
+if [ "$device_bytes" -gt "$host_bytes" ] && [ "$device_bytes" -gt 20000 ]; then
+  cp "$STAGE/shots/nebula-gesture-device.mp4" "$STAGE/shots/nebula-gesture.mp4"
+fi
 if [ "$gradle_status" -ne 0 ]; then
   echo "仪器测试失败，已尽量保存截图和录像" >&2
-  find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true
+  find "$STAGE/shots" "$STAGE/frames" -type f -exec ls -l {} \; >&2 || true
   exit "$gradle_status"
 fi
 for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png nebula-gesture.mp4 nebula-renderer.txt; do
   test -s "$STAGE/shots/$name"
 done
+mp4_bytes=$(wc -c <"$STAGE/shots/nebula-gesture.mp4" | tr -d '[:space:]')
+test "$mp4_bytes" -gt 20000
 echo "nebula renderer:"
 cat "$STAGE/shots/nebula-renderer.txt"
 echo "emulator chat flow and nebula gestures saved"
