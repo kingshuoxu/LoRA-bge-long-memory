@@ -195,6 +195,10 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertTrue(_about_someone_else("昭澈的猫叫阿栗。", [shen]))
         self.assertTrue(_matched_someone_else("昭澈的猫叫阿栗。", "沈星河"))
         self.assertFalse(_matched_someone_else("沈星河的猫的名字不是云朵，正确的是暮雪。", "沈星河"))
+        self.assertFalse(_matched_someone_else(
+            "The name of Marcus Whitfield's dog is Waffles, not Biscuit.",
+            "Marcus Whitfield",
+        ))
         proposal = propose_from_records("昭澈的猫叫阿栗。", [shen], model=object(), tok=object(), device="cpu")
         self.assertIsNone(proposal)
 

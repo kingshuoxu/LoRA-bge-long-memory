@@ -203,6 +203,19 @@ def _stated_entities(text: str) -> list[str]:
     return names
 
 
+def _entity_aligns(stated: str, stored: str) -> bool:
+    """抽出的主语可以比实体名更长，例如「The name of Marcus Whitfield」。"""
+    if _same_entity(stated, stored):
+        return True
+    stated = (stated or "").strip()
+    stored = (stored or "").strip()
+    if len(stated) < 2 or len(stored) < 2:
+        return False
+    if has_cjk(stated) or has_cjk(stored):
+        return stored in stated or stated in stored
+    return re.search(r"\b" + re.escape(stored) + r"\b", stated, re.IGNORECASE) is not None
+
+
 def _about_someone_else(text: str, records: list[Any]) -> bool:
     """点了另一个人、又没有改口的标记，就不是在改已有的事实。"""
     if _correction_mark(text):
@@ -217,7 +230,7 @@ def _about_someone_else(text: str, records: list[Any]) -> bool:
             if isinstance(fact, dict) and not fact.get("superseded"):
                 stored.append(str(fact.get("entity") or ""))
         stored.extend(str(name) for name in (getattr(record, "entities", None) or []))
-    return not any(_same_entity(name, have) for name in names for have in stored if have)
+    return not any(_entity_aligns(name, have) for name in names for have in stored if have)
 
 
 def _matched_someone_else(text: str, fact_entity: str) -> bool:
@@ -225,7 +238,7 @@ def _matched_someone_else(text: str, fact_entity: str) -> bool:
     names = _stated_entities(text)
     if not names:
         return False
-    return not any(_same_entity(name, fact_entity) for name in names)
+    return not any(_entity_aligns(name, fact_entity) for name in names)
 
 
 def utterance_is_question(text: str) -> bool:
