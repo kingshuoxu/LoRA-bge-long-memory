@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>星云</title>
+  <link rel="stylesheet" href="nebula.css" />
+</head>
+<body>
+  <canvas id="sky" aria-hidden="true"></canvas>
+  <div id="nebula-host">
+    <canvas id="nebula-canvas"></canvas>
+    <div id="recall-banner" hidden></div>
+    <div id="state-banner" hidden></div>
+    <div id="detail" hidden></div>
+    <div id="empty" hidden></div>
+  </div>
+  <div id="chrome" aria-hidden="true">
+    <header>
+      <h1 id="chrome-title">星云</h1>
+      <div class="gear"></div>
+    </header>
+    <nav id="chrome-nav"></nav>
+  </div>
+  <script src="../sky/sky.js"></script>
+  <script type="module" src="host.js"></script>
+</body>
+</html>
