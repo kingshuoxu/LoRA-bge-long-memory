@@ -67,29 +67,22 @@ class TrainService : Service() {
             val facts = job.getJSONArray("facts")
             val reviewed = ArrayList<ReviewedFact>()
             for (i in 0 until facts.length()) {
-                val row = facts.getJSONObject(i)
-                val qa = row.getJSONArray("qa")
-                val pairs = ArrayList<Pair<String, String>>()
-                for (j in 0 until qa.length()) {
-                    val turn = qa.getJSONObject(j)
-                    pairs.add(turn.getString("q") to turn.getString("a"))
-                }
-                reviewed.add(
-                    ReviewedFact(
-                        entity = row.getString("entity"),
-                        statement = row.getString("statement"),
-                        value = row.getString("value"),
-                        qa = pairs,
-                        sources = emptyList(),
-                    ),
-                )
+                reviewed.add(factFromJson(facts.getJSONObject(i)))
+            }
+            val expanded = reviewed.map { FactExpand.expand(it) }.filter { FactExpand.keepForTraining(it) }
+            if (expanded.isEmpty()) {
+                writeStatus(status, "error", "没有要写入的事实")
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
             }
             val jsonl = File(store.trainDir, "facts.jsonl")
-            jsonl.writeText(factsJsonl(reviewed))
+            jsonl.writeText(FactExpand.toFactsJsonl(expanded))
             val bin = File(applicationInfo.nativeLibraryDir, "libtrain-mft.so")
-            val models = File(getExternalFilesDir(null), "models")
+            val internal = File(filesDir, "models/Qwen2.5-0.5B-Instruct")
+            val external = File(getExternalFilesDir(null), "models/Qwen2.5-0.5B-Instruct")
             // 对话仍用 f16 GGUF。训练读的是同一份 Qwen2.5-0.5B-Instruct 的 safetensors,进内存后按 fp32 做反向。
-            val base = File(models, "Qwen2.5-0.5B-Instruct")
+            val base = if (File(internal, "model.safetensors").exists()) internal else external
             if (!bin.exists() || !File(base, "model.safetensors").exists() || !File(base, "config.json").exists()) {
                 writeStatus(status, "error", "缺少训练程序,或 models/Qwen2.5-0.5B-Instruct 里没有 safetensors")
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -120,13 +113,19 @@ class TrainService : Service() {
                 "--seed", "42",
                 "--save_every", "20",
             )
-            writeStatus(status, "running", "开始训练 ${reviewed.size} 条")
+            writeStatus(status, "running", "开始训练 ${expanded.size} 条事实")
             val log = File(store.trainDir, "train.log")
             val telemetry = File(store.trainDir, "telemetry.tsv")
-            telemetry.appendText("wall_s\trss_kb\tthermal\tbattery\n")
+            telemetry.writeText("wall_s\trss_kb\tthermal\tbattery\n")
+            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
             val proc = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
-                .apply { environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir }
+                .apply {
+                    environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
+                    // OpenBLAS 按编译时的 8 线程封顶。小米 15 的 8 个 Oryon 都是性能核。
+                    environment()["OPENBLAS_NUM_THREADS"] = threads.toString()
+                    environment()["OMP_NUM_THREADS"] = "1"
+                }
                 .start()
             val started = System.currentTimeMillis()
             proc.inputStream.bufferedReader().useLines { lines ->
@@ -166,10 +165,10 @@ class TrainService : Service() {
             dir.mkdirs()
             adapter.copyTo(File(dir, "adapter.gguf"), overwrite = true)
             val engine = Engine(this, store)
-            val keys = MemoryStore.keyTexts(reviewed)
+            val keys = MemoryStore.keyTexts(expanded)
             val keyVecs = engine.embedTexts(keys)
             Engine.writeF32(File(dir, "router_key.f32"), keyVecs)
-            val masked = maskedFactTexts(reviewed)
+            val masked = maskedFactTexts(expanded)
             val factVecs = engine.embedTexts(masked)
             Engine.writeF32(File(dir, "fact_vectors.f32"), factVecs)
             val batch = (store.listExperts().maxOfOrNull { it.batch } ?: -1) + 1
@@ -177,14 +176,17 @@ class TrainService : Service() {
                 ExpertRecord(
                     expert = expert,
                     batch = batch,
-                    nFacts = reviewed.size,
+                    nFacts = expanded.size,
                     rank = job.optInt("rank", 32),
                     keyPath = "experts/$expert/router_key.f32",
                     weight = "experts/$expert/adapter.gguf",
                 ),
-                reviewed,
+                expanded,
             )
             engine.rebuildIndex()
+            if (job.optBoolean("benchmark")) {
+                writeBenchmark(store, engine, job, expanded, started)
+            }
             writeStatus(status, "done", "已登记 $expert")
         } catch (ex: Throwable) {
             writeStatus(status, "error", ex.message ?: ex.toString())
@@ -198,6 +200,8 @@ class TrainService : Service() {
         for (fact in facts) {
             out.add(maskFact(fact.statement, fact.entity, fact.value))
             for ((q, _) in fact.qa) out.add(maskFact(q, fact.entity, fact.value))
+            // 改写键只进事实闸,不进训练样本。
+            for (question in fact.gateQuestions) out.add(maskFact(question, fact.entity, fact.value))
         }
         return out
     }
@@ -229,48 +233,150 @@ class TrainService : Service() {
         -1
     }
 
-    private fun factsJsonl(facts: List<ReviewedFact>): String {
-        val rows = ArrayList<String>()
-        for (fact in facts) {
-            val qa = JSONArray()
-            val pairs = if (fact.qa.isEmpty()) listOf(fact.statement to fact.value) else fact.qa
-            for ((q, a) in pairs) qa.put(JSONObject().put("q", q).put("a", a))
-            rows.add(
+    private fun writeBenchmark(
+        store: MemoryStore,
+        engine: Engine,
+        job: JSONObject,
+        trained: List<ReviewedFact>,
+        startedMs: Long,
+    ) {
+        val report = JSONObject()
+        val primaryHits = JSONArray()
+        var primaryOk = 0
+        for (fact in trained) {
+            val pair = fact.qa.firstOrNull() ?: continue
+            val answer = engine.answer(pair.first, job.getString("expert"), 0)
+            val ok = answer.contains(fact.value.removeSuffix("年"))
+            if (ok) primaryOk++
+            primaryHits.put(JSONObject().put("q", pair.first).put("gold", fact.value).put("answer", answer).put("hit", ok))
+        }
+        val held = job.optJSONArray("held_out") ?: JSONArray()
+        val heldHits = JSONArray()
+        var heldOk = 0
+        for (i in 0 until held.length()) {
+            val row = held.getJSONObject(i)
+            val answer = engine.answer(row.getString("q"), job.getString("expert"), 0)
+            val gold = row.getString("a")
+            val ok = answer.contains(gold.removeSuffix("年"))
+            if (ok) heldOk++
+            heldHits.put(JSONObject().put("q", row.getString("q")).put("gold", gold).put("answer", answer).put("hit", ok))
+        }
+        val never = job.optJSONArray("never_written") ?: JSONArray()
+        val abstainHits = JSONArray()
+        var abstainOk = 0
+        for (i in 0 until never.length()) {
+            val question = never.getString(i)
+            val route = engine.route(question)
+            val ok = !route.fired
+            if (ok) abstainOk++
+            abstainHits.put(
                 JSONObject()
-                    .put("statement", fact.statement)
-                    .put("qa", qa)
-                    .toString(),
+                    .put("q", question)
+                    .put("fired", route.fired)
+                    .put("reason", route.reason)
+                    .put("sim", route.sim)
+                    .put("abstained", ok),
             )
         }
-        return rows.joinToString("\n") + "\n"
+        val telemetry = File(store.trainDir, "telemetry.tsv")
+        var peakRss = 0
+        var maxThermal = 0
+        if (telemetry.exists()) {
+            for (line in telemetry.readLines().drop(1)) {
+                val cols = line.split('\t')
+                val rss = cols.getOrNull(1)?.filter { it.isDigit() }?.toIntOrNull() ?: 0
+                if (rss > peakRss) peakRss = rss
+                val thermal = cols.getOrNull(2).orEmpty()
+                for (part in thermal.split(',')) {
+                    val temp = part.trim().toIntOrNull() ?: continue
+                    if (temp > maxThermal) maxThermal = temp
+                }
+            }
+        }
+        report
+            .put("wall_s", (System.currentTimeMillis() - startedMs) / 1000)
+            .put("peak_rss_kb", peakRss)
+            .put("max_thermal_millic", maxThermal)
+            .put("n_facts", trained.size)
+            .put("n_train_questions", trained.sumOf { it.qa.size })
+            .put("primary", "$primaryOk/${primaryHits.length()}")
+            .put("held_out_paraphrase", "$heldOk/${heldHits.length()}")
+            .put("never_written_abstain", "$abstainOk/${abstainHits.length()}")
+            .put("primary_rows", primaryHits)
+            .put("held_out_rows", heldHits)
+            .put("abstain_rows", abstainHits)
+        File(store.trainDir, "benchmark.json").writeText(report.toString(2))
     }
 
     companion object {
         const val ACTION_CANCEL = "com.lorabge.memory.CANCEL_TRAIN"
+        const val ACTION_BENCHMARK = "com.lorabge.memory.BENCHMARK"
 
-        fun writeJob(store: MemoryStore, expert: String, facts: List<ReviewedFact>, force: Boolean) {
+        fun factFromJson(row: JSONObject): ReviewedFact {
+            val qa = row.optJSONArray("qa") ?: JSONArray()
+            val pairs = ArrayList<Pair<String, String>>()
+            for (j in 0 until qa.length()) {
+                val turn = qa.getJSONObject(j)
+                pairs.add(turn.getString("q") to turn.getString("a"))
+            }
+            if (pairs.isEmpty() && row.optString("question").isNotBlank()) {
+                pairs.add(row.getString("question") to row.optString("answer", row.optString("value")))
+            }
+            val gates = row.optJSONArray("gate_questions") ?: JSONArray()
+            val gateQuestions = ArrayList<String>()
+            for (j in 0 until gates.length()) gateQuestions.add(gates.getString(j))
+            return ReviewedFact(
+                entity = row.getString("entity"),
+                statement = row.getString("statement"),
+                value = row.getString("value"),
+                qa = pairs,
+                sources = emptyList(),
+                attr = row.optString("attr"),
+                gateQuestions = gateQuestions,
+                selected = row.optBoolean("selected", true),
+                gate = row.optString("gate"),
+            )
+        }
+
+        fun writeJob(
+            store: MemoryStore,
+            expert: String,
+            facts: List<ReviewedFact>,
+            force: Boolean,
+            epochs: Int = 4,
+            benchmark: Boolean = false,
+            heldOut: JSONArray? = null,
+            neverWritten: JSONArray? = null,
+        ) {
             store.ensure()
             val arr = JSONArray()
             for (fact in facts) {
                 val qa = JSONArray()
                 for ((q, a) in fact.qa) qa.put(JSONObject().put("q", q).put("a", a))
+                val gates = JSONArray()
+                for (question in fact.gateQuestions) gates.put(question)
                 arr.put(
                     JSONObject()
                         .put("entity", fact.entity)
+                        .put("attr", fact.attr)
                         .put("statement", fact.statement)
                         .put("value", fact.value)
-                        .put("qa", qa),
+                        .put("qa", qa)
+                        .put("gate_questions", gates)
+                        .put("selected", fact.selected)
+                        .put("gate", fact.gate),
                 )
             }
-            File(store.trainDir, "job.json").writeText(
-                JSONObject()
-                    .put("expert", expert)
-                    .put("rank", 32)
-                    .put("lr", "5e-4")
-                    .put("epochs", 4)
-                    .put("facts", arr)
-                    .toString(),
-            )
+            val job = JSONObject()
+                .put("expert", expert)
+                .put("rank", 32)
+                .put("lr", "5e-4")
+                .put("epochs", epochs)
+                .put("facts", arr)
+                .put("benchmark", benchmark)
+            if (heldOut != null) job.put("held_out", heldOut)
+            if (neverWritten != null) job.put("never_written", neverWritten)
+            File(store.trainDir, "job.json").writeText(job.toString())
             val forceFile = File(store.trainDir, "force")
             if (force) forceFile.writeText("1") else forceFile.delete()
             File(store.trainDir, "cancel").delete()

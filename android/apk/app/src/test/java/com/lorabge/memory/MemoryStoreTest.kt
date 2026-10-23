@@ -51,7 +51,8 @@ class MemoryStoreTest {
         val fact = ReviewedFact("甲", "甲公司成立于2000年。", "2000", listOf("甲哪年成立?" to "2000"), emptyList())
         val text = MemoryStore.trainingJsonl(listOf(fact))
         assertTrue(text.contains("\"role\":\"assistant\""))
-        assertTrue(text.contains("请记下这句话。"))
+        assertTrue(text.contains("请说出这条事实。"))
+        assertTrue(text.contains("请简短回答。"))
         assertTrue(text.lines().filter { it.isNotBlank() }.size > 2)
     }
 }

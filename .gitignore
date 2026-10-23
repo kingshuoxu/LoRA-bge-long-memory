@@ -35,5 +35,6 @@ android/apk/app/build/
 android/apk/app/.cxx/
 android/apk/app/src/main/jniLibs/
 android/apk/local.properties
+android/trainer/openblas-android/
 __pycache__/
 *.pyc

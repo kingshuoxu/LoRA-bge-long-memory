@@ -16,6 +16,11 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     }
 
     fun modelsDir(): File {
+        // 真机基准经 run-as 把模型放进私有目录。外部目录仍给手动 adb 推送用。
+        val internal = File(context.filesDir, "models")
+        if (File(internal, "base.gguf").exists() || File(internal, "Qwen2.5-0.5B-Instruct/config.json").exists()) {
+            return internal
+        }
         val dir = File(context.getExternalFilesDir(null), "models")
         dir.mkdirs()
         return dir

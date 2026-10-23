@@ -9,6 +9,12 @@ MODEL=$1
 FACTS=$2
 OUTDIR=$3
 mkdir -p "$OUTDIR"
+# OpenBLAS 在编译时最多 8 线程。Termux 上按机器核数封顶。
+CORES=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+if [ "$CORES" -gt 8 ]; then CORES=8; fi
+if [ "$CORES" -lt 1 ]; then CORES=1; fi
+export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-$CORES}
+export OMP_NUM_THREADS=1
 "$BIN" \
   --model_dir "$MODEL" \
   --facts_jsonl "$FACTS" \

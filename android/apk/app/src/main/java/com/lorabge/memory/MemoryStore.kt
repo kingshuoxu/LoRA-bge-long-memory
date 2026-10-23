@@ -113,21 +113,32 @@ class MemoryStore(val root: File) {
         }
 
         fun trainingJsonl(facts: List<ReviewedFact>): String {
+            // 和 C++ 训练程序、桌面 AssistantDataset 一样:先请模型说出事实,再训确认过的问句。
+            // 问句收尾在 tokenize 时加「请简短回答。」。
             val rows = ArrayList<String>()
-            for (fact in facts) {
-                rows.add(chatRow("请记下这句话。", fact.statement))
-                val qa = if (fact.qa.isEmpty()) listOf(fact.statement to fact.value) else fact.qa
-                for ((q, a) in qa) rows.add(chatRow(q, a))
+            for (raw in facts) {
+                if (!FactExpand.keepForTraining(raw)) continue
+                val fact = FactExpand.expand(raw)
+                val instruction = if (FactExpand.hasCjk(fact.statement)) "请说出这条事实。" else "State this fact."
+                rows.add(chatRow(instruction, fact.statement))
+                for ((q, a) in fact.qa) rows.add(chatRow(q, a))
             }
-            val k = if (rows.isEmpty()) 0 else tailCount(rows.size)
-            val packed = rows + rows.take(k)
-            return packed.joinToString("\n") + "\n"
+            if (rows.isEmpty()) return ""
+            val k = tailCount(rows.size)
+            return (rows + rows.take(k)).joinToString("\n") + "\n"
         }
 
         private fun chatRow(user: String, assistant: String): String {
+            val cjk = FactExpand.hasCjk(user)
+            val system = if (cjk) "你是助手。" else "You are a helpful assistant."
+            val brief = if (cjk) {
+                if (user.trimEnd().endsWith("请简短回答。")) user.trimEnd() else user.trimEnd() + " 请简短回答。"
+            } else {
+                if (user.trimEnd().endsWith("Answer briefly.")) user.trimEnd() else user.trimEnd() + " Answer briefly."
+            }
             val messages = JSONArray()
-                .put(JSONObject().put("role", "system").put("content", "你是助手。"))
-                .put(JSONObject().put("role", "user").put("content", user))
+                .put(JSONObject().put("role", "system").put("content", system))
+                .put(JSONObject().put("role", "user").put("content", brief))
                 .put(JSONObject().put("role", "assistant").put("content", assistant))
             return JSONObject().put("messages", messages).toString()
         }
@@ -149,7 +160,11 @@ class MemoryStore(val root: File) {
                         .put("entity", fact.entity)
                         .put("value", fact.value)
                         .put("statement", fact.statement)
-                        .put("questions", JSONArray(fact.qa.map { it.first })),
+                        .put("questions", JSONArray(fact.qa.map { it.first }))
+                        .apply {
+                            if (fact.attr.isNotEmpty()) put("attr", fact.attr)
+                            if (fact.gateQuestions.isNotEmpty()) put("gate_questions", JSONArray(fact.gateQuestions))
+                        },
                 )
             }
             return arr.toString(2)
@@ -255,4 +270,8 @@ data class ReviewedFact(
     val value: String,
     val qa: List<Pair<String, String>>,
     val sources: List<String>,
+    val attr: String = "",
+    val gateQuestions: List<String> = emptyList(),
+    val selected: Boolean = true,
+    val gate: String = "",
 )
