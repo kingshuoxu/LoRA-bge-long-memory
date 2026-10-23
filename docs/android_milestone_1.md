@@ -94,7 +94,7 @@ x86 OpenBLAS 和这份 arm64 OpenBLAS 的第 1 步 loss 都是 **4.07324**,梯�
 
 四个 epoch 的逐步 loss 从 5.35 收到 0.0009,中间有两步回到 0.22 和 0.12。贪心解码的原问和留出复述都答对了取值。弃权是路由,不是把 LoRA 强行挂上再生成。
 
-小米 15 上的墙钟还没量到。纯 C++ 时,450 行研究批次在这台 Xeon 上要数小时;换成 OpenBLAS 之后,巩固这 32 条在这台机器上是几分钟。线程数按 cpufreq 只计大核和超大核:小米 15 两档 Oryon 是 8,天玑 9400 的 1+3+4 是 4。真机数字用 `android/phone/run_device_benchmark.sh`,它会装 APK、推模型、跑这 4 条事实,并打印墙钟、峰值 RSS、热区温度、SoC、GPU、后端和上面三项回忆。把整段输出贴回来即可。没有电脑时,记忆库里的「导出诊断」会打开分享。
+小米 15 上的墙钟还没量到。纯 C++ 时,450 行研究批次在这台 Xeon 上要数小时;换成 OpenBLAS 之后,巩固这 32 条在这台机器上是几分钟。线程数按 cpufreq 只计大核和超大核:小米 15 两档 Oryon 是 8,天玑 9400 的 1+3+4 是 4。真机数字用 `android/phone/run_device_benchmark.sh`,它会装 APK、推模型、跑这 4 条事实,并打印墙钟、峰值 RSS、热区温度、SoC、GPU、后端和上面三项回忆。把整段输出贴回来即可。没有电脑时,设置里的「导出诊断」会打开分享。
 
 对话和嵌入先试 Vulkan。短解码和一条 bge 嵌入要跟 CPU 一致,否则记住 CPU。Mali / Immortalis(厂商 0x13B5)另外关掉 coopmat 和 bf16,保留 fp16,tile 用真实子组宽度,并且只有短解码比 CPU 快才留在 GPU。Adreno 不看快慢。`libggml-cpu.so` 用 `armv8.7-a+dotprod+i8mm` 编译。强制 GPU / 强制 CPU 在记忆库里。导出的诊断里有两边的预填充和解码 tok/s,以及 Vulkan 设备名、驱动版本、子组宽度和特性。
 
@@ -142,7 +142,7 @@ System image must match the host architecture.
 1. **QVAC 的梯度是错的,已经换掉。** MobileFineTuner batch 8 第 4 个 epoch 是 **48/50**。APK 现在的调用是微批 1、累加 8。桌面上这套更新跑完 4 个 epoch,fp32 贪心和 f16 GGUF 都是 **49/50**(未中 b0-044)。不累加的 batch 1 第 1 个 epoch 是 **0/50**。跑满 12 个 epoch 会掉到 22/50。常识题不挂这个适配器:实体对不上,余弦最高 0.429。
 2. **bge 的大写拉丁字母,桌面和手机现在走同一份补丁。** 桌面 12 条余弦最低 0.999998。APK 不再用 `29fe08c` 那个 zip,而是 QVAC `b73e75af5` 加 `wpm-cased.patch`。路由对照 11687/11687 仍是修之前的问句向量加 PyTorch 键,当时没有改判。没有改走 ONNX。
 3. **训练源码对齐了,GEMM 目标不同。** 两边都是 MobileFineTuner `086b1a027fe708d5eaca89b1ec2bf1a876fb80de` 加 `mft-ffn-lora.patch`,都是 OpenBLAS、微批 1、累加 8。桌面打分是 x86 OpenBLAS;手机是 ARMv8 NEON。第 1 步 loss 已经对齐到 4.07324。对话和嵌入都是 QVAC `b73e75af5` 加大小写补丁;手机多一个 Vulkan 后端给 Adreno。`--val-split` 不再参与手机训练。
-4. **界面按 PR #4 补了深空。** 对话是普通的气泡和一条输入栏,记忆只在回复下用一行小字标出来。巩固和星云各自一页。状态栏和键盘用系统 insets,键盘上的发送键可以直接发出去。银河是淡淡的光带加星点。EB Garamond 加 Noto Serif SC,中英切换。0.1.2 起对话、嵌入、路由和 GPU 自检在 `:llm`,训练在 `:train`,Mali 要等这次独立自检对上并且更快才用 GPU。模拟器在这台机器上起不来,截图是 Paparazzi 渲染的,在 `android/apk/app/src/test/snapshots/images/`。
+4. **界面按 PR #4 的桌面客户端对齐。** 底栏是对话、星云、巩固、记忆库。右上角齿轮进设置(后端、Wi-Fi、清单、语言、导出诊断、空间和版本),标题下不再放「基座 ok」这类调试状态。对话是气泡、输入栏里的发送图标、顶栏一个新对话,对话列表在抽屉里。星云把桌面的 WebGL 银河和粒子云放进 WebView,双指缩放,点专家展开事实星,点事实看属性、取值、来源对话和闸门分;回忆时高亮并写出相似度。专家名字用实体。0.1.2 起对话、嵌入、路由和 GPU 自检在 `:llm`,训练在 `:train`,Mali 要等这次独立自检对上并且更快才用 GPU。模拟器在这台机器上起不来。对话、设置、下载、巩固的设备尺寸截图用 Paparazzi,星云用同一套页面在无头 Chrome 里截。
 5. **官方模拟器拒绝在这台 x86_64 上启动 arm64 镜像。** 见上面的 FATAL。APK 冒烟要等小米 15,或者一台本身就是 arm64 的模拟器宿主。
 
 ## 核对记录

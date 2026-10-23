@@ -148,7 +148,7 @@ fun SetupFrame(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(if (state.lang == "en") "Fetch models" else "准备模型", style = MaterialTheme.typography.titleLarge)
+                    Text(if (state.lang == "en") "Download models" else "准备模型", style = MaterialTheme.typography.titleLarge)
                     Row {
                         Text("中文", color = if (state.lang == "zh") Gold else Muted, modifier = Modifier.padding(end = 8.dp).clickable { onLang("zh") })
                         Text("EN", color = if (state.lang == "en") Gold else Muted, modifier = Modifier.clickable { onLang("en") })

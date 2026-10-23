@@ -215,7 +215,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         )
         val obj = JSONObject(hit)
         val ok = obj.optBoolean("fired") && obj.optString("expert") == "expert_0" && obj.optString("reason") == "entity"
-        return if (ok) "路由自检通过: ${obj.optString("reason")}" else "路由自检失败: $hit"
+        return if (ok) "路由自检通过" else "路由自检失败"
     }
 
     private fun entityNames(): List<String> {

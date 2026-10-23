@@ -50,7 +50,7 @@ class MainActivity : ComponentActivity() {
                 SetupScreen(onFinished = { ready = true })
                 return@setContent
             }
-            PhoneApp(store, engine, client, probeOnStart = !benchmark, onTrain = {
+            PhoneApp(store, engine, client, probeOnStart = !benchmark, onCleared = { ready = false }, onTrain = {
                 if (Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED
@@ -108,6 +108,7 @@ private fun PhoneApp(
     onTrain: () -> Unit,
     onCancel: () -> Unit,
     onExport: () -> Unit,
+    onCleared: () -> Unit,
 ) {
     var lang by remember { mutableStateOf("zh") }
     var tab by remember { mutableStateOf(SkyTab.Chat) }
@@ -134,6 +135,13 @@ private fun PhoneApp(
         }
         tick++
     }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var settingsOpen by remember { mutableStateOf(false) }
+    var drawerOpen by remember { mutableStateOf(false) }
+    var wifiOnly by remember { mutableStateOf(FetchService.wifiOnly(context)) }
+    var manifestUrl by remember { mutableStateOf(FetchService.manifestUrl(context)) }
+    var recallJson by remember { mutableStateOf("") }
+    var recallBanner by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
     var generating by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf("") }
@@ -154,19 +162,27 @@ private fun PhoneApp(
     }
     val conversations = remember(tick) { store.listConversations() }
     val current = currentId?.let { store.loadConversation(it) }
-    val experts = remember(tick) { skyExperts(store) }
+    val experts = remember(tick, lang) { skyExperts(store, lang) }
     val highlight = current?.messages?.lastOrNull { it.role == "assistant" }?.expert
     val loss = remember(tick) { readLoss(File(store.trainDir, "train.log")) }
+    val record = engine.backendRecord()
+    val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
+    val versionName = remember {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.2"
+    }
+    val freshExpert = if (training) experts.firstOrNull()?.name else null
+    val nebulaJson = remember(tick, lang, freshExpert) { NebulaGraph.build(store, lang, freshExpert) }
     val state = SkyState(
         lang = lang,
         tab = tab,
         training = training,
-        status = statusFile.takeIf { it.exists() }?.readText().orEmpty(),
+        status = presentTrainStatus(lang, statusFile.takeIf { it.exists() }?.readText().orEmpty()),
         messages = current?.messages?.map { SkyMessage(it.role, it.content, it.expert, it.reason, it.noticed) } ?: emptyList(),
         streaming = streaming,
         generating = generating,
         draft = draft,
-        conversations = conversations.map { it.title },
+        conversations = conversations.map { SkyConversation(it.id, it.title) },
+        currentTitle = current?.title.orEmpty(),
         loss = loss,
         experts = experts,
         highlightExpert = highlight,
@@ -177,11 +193,19 @@ private fun PhoneApp(
         question = question,
         answer = answer,
         force = force,
-        ready = (if (lang == "en") "base " else "基座 ") +
-            (if (engine.baseModel() != null) "ok" else "—") +
-            " · bge " + (if (engine.bgeModel() != null) "ok" else "—") +
-            " · " + engine.backendLabel(lang),
         note = note,
+        settingsOpen = settingsOpen,
+        drawerOpen = drawerOpen,
+        backendMode = record.mode,
+        backendLine = backendLine(lang, record, engine.baseModel() != null, engine.bgeModel() != null),
+        wifiOnly = wifiOnly,
+        manifestUrl = manifestUrl,
+        storageLabel = storageLabel,
+        versionName = versionName,
+        nebulaJson = nebulaJson,
+        recallJson = recallJson,
+        recallBanner = recallBanner,
+        liveNebula = true,
     )
     SkyFrame(state) { event ->
         when (event) {
@@ -190,7 +214,31 @@ private fun PhoneApp(
             is SkyEvent.Draft -> draft = event.text
             SkyEvent.NewChat -> {
                 currentId = store.newConversation().id
+                recallJson = ""
+                recallBanner = ""
+                drawerOpen = false
                 tick++
+            }
+            SkyEvent.OpenSettings -> settingsOpen = true
+            SkyEvent.CloseSettings -> settingsOpen = false
+            SkyEvent.OpenDrawer -> drawerOpen = true
+            SkyEvent.CloseDrawer -> drawerOpen = false
+            is SkyEvent.OpenConversation -> {
+                currentId = event.id
+                tab = SkyTab.Chat
+                drawerOpen = false
+                settingsOpen = false
+                tick++
+            }
+            is SkyEvent.WifiOnly -> {
+                wifiOnly = event.on
+                FetchService.setWifiOnly(context, event.on)
+            }
+            is SkyEvent.ManifestUrl -> manifestUrl = event.url
+            SkyEvent.ApplyManifest -> FetchService.setManifestUrl(context, manifestUrl)
+            SkyEvent.ClearModels -> {
+                clearDownloadedModels(context)
+                onCleared()
             }
             SkyEvent.Send -> {
                 val text = draft.trim()
@@ -219,6 +267,9 @@ private fun PhoneApp(
                     } catch (ex: Throwable) {
                         RouteHit(null, false, ex.message ?: "route", 0.0)
                     }
+                    val trace = NebulaGraph.recall(store, langNow, hit.expert, hit.fired, hit.sim, text)
+                    recallJson = trace
+                    recallBanner = org.json.JSONObject(trace).optString("banner")
                     val expert = if (hit.fired) hit.expert else null
                     val reply = try {
                         client.answer(text, expert) { streaming = it }
@@ -285,7 +336,7 @@ private fun PhoneApp(
                 Thread {
                     note = try {
                         client.importExternal()
-                        if (langNow == "en") "Imported" else "已从 import 导入专家"
+                        if (langNow == "en") "Experts imported" else "已导入专家"
                     } catch (ex: Throwable) {
                         ex.message ?: "import"
                     }
@@ -338,16 +389,31 @@ internal fun readLoss(log: File): List<Float> {
     }
 }
 
-private fun skyExperts(store: MemoryStore): List<SkyExpert> {
+private fun skyExperts(store: MemoryStore, lang: String): List<SkyExpert> {
     return store.listExperts().map { record ->
-        val memory = File(store.expertsDir, "${record.expert}/fact_memory.json")
-        val facts = ArrayList<String>()
-        if (memory.exists()) {
-            val arr = JSONArray(memory.readText())
-            for (i in 0 until arr.length()) facts.add(arr.getJSONObject(i).optString("statement"))
-        }
-        SkyExpert(record.expert, facts)
+        val raw = NebulaGraph.readFacts(File(store.expertsDir, record.expert))
+        SkyExpert(
+            record.expert,
+            raw.map { it.optString("statement") }.filter { it.isNotBlank() },
+            NebulaGraph.displayName(raw.map { it.optString("entity") }, lang),
+        )
     }
+}
+
+private fun modelBytes(context: android.content.Context): Long {
+    fun walk(dir: File?): Long {
+        if (dir == null || !dir.exists()) return 0
+        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }
+    val external = context.getExternalFilesDir(null)?.let { File(it, "models") }
+    return walk(File(context.filesDir, "models")) + walk(external)
+}
+
+private fun clearDownloadedModels(context: android.content.Context) {
+    File(context.filesDir, "models").deleteRecursively()
+    context.getExternalFilesDir(null)?.let { File(it, "models").deleteRecursively() }
+    File(context.filesDir, "setup/complete").delete()
+    File(context.filesDir, "setup/status.json").delete()
 }
 
 private fun statusState(raw: String): String = try {
