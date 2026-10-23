@@ -360,6 +360,10 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     if not ok:
         raise RuntimeError("端到端没有通过，详见 e2e-report.json")
+    from memory_core.chat_path_check import run_chat_path
+
+    report["chat_path"] = run_chat_path(service)
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report
 
 

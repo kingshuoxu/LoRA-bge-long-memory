@@ -73,7 +73,8 @@ class GroundingTests(unittest.TestCase):
         self.assertEqual(contradicting_facts(reply, ZORE, topic="总部"), [])
         closed = ground_if_unknown(question, [_Expert("zore", ZORE)])
         self.assertIsNotNone(closed)
-        self.assertIn("1979", closed[0])
+        self.assertIn("总部不在记忆里", closed[0])
+        self.assertNotIn("1979", closed[0])
         self.assertNotIn("圣迭戈", closed[0])
 
     def test_cat_statement_is_acknowledged_as_the_users(self):

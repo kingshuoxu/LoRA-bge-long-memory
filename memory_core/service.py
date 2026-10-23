@@ -18,16 +18,16 @@ from memory_core.device import pick_device
 from memory_core.correct import propose_from_records, utterance_is_question
 from memory_core.grounding import (
     acknowledge_statement,
-    ground_if_unknown,
     mount_memory,
-    overview_if_open,
+    resolve_stored_reply,
     statement_trace,
 )
+from memory_core.mentions import load_mentions, remember_statement
 from memory_core.extract import (
-    _split_sentences,
     company_pipeline_extract,
     entailed,
     expand_training_fact,
+    uncovered_claims,
     model_extract,
     pattern_extract,
 )
@@ -425,6 +425,7 @@ class MemoryService:
                 }
                 return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal, "recall": recall}
             if not utterance_is_question(content):
+                remember_statement(self.home, content)
                 stated = pattern_extract(content)
                 if stated:
                     notes = [acknowledge_statement(fact) for fact in stated]
@@ -469,28 +470,32 @@ class MemoryService:
             hint = ""
             grounded = False
             gate_info = recall.get("fact_gate") or {}
-            opened = overview_if_open(content, experts)
-            if opened:
-                fact_answer, expert, facts = opened
-                mount_memory(decision, recall, expert, facts, "entity_overview")
-                grounded = True
+            resolved = resolve_stored_reply(content, experts, load_mentions(self.home))
+            if resolved:
+                fact_answer, expert, facts, reason = resolved
+                if expert is not None:
+                    mount_memory(decision, recall, expert, facts, reason)
+                    grounded = True
+                else:
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = reason
+                    recall["fired"] = False
+                    recall["abstain"] = True
+                    recall["mounted"] = False
+                    recall["reason"] = reason
+                    recall["reason_text"] = "这句话点到了提过的名字，但记忆里没有事实，所以不交给基座编"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                    recall["matched_facts"] = []
             elif decision.fired and gate_info.get("answer_from_fact"):
                 from memory_core.paraphrase import polar_reply_from_fact
 
                 matched = [fact for fact in (recall.get("matched_facts") or []) if isinstance(fact, dict)]
                 if matched:
                     fact_answer = polar_reply_from_fact(content, matched[0]) or str(matched[0].get("value") or "")
-            elif not decision.fired:
-                closed = ground_if_unknown(
-                    content,
-                    experts,
-                    rejected=bool(gate_info.get("rejected_attribute")),
-                    routed_expert=decision.expert,
-                )
-                if closed:
-                    fact_answer, expert, facts = closed
-                    mount_memory(decision, recall, expert, facts, "entity_grounded")
-                    grounded = True
             if decision.fired and not grounded:
                 record = next((item for item in experts if item.name == decision.expert), None)
                 if record is None or not weights_ready(record.directory):
@@ -538,6 +543,8 @@ class MemoryService:
         return {
             "facts": status.get("facts") or [],
             "sources": status.get("sources") or [],
+            "empty_sources": status.get("empty_sources") or [],
+            "uncovered": status.get("uncovered") or [],
             "preview_id": preview_id,
             "events": status.get("events") or [],
         }
@@ -618,9 +625,16 @@ class MemoryService:
             seen: set[tuple[str, str]] = set()
 
             def _push(fact: dict, how: str) -> None:
+                entity = str(fact.get("entity") or "").strip()
+                value = str(fact.get("value") or "").strip()
+                # 代词和「名字就是自己」不是实体事实。整段抽取时 It/它 应该已经换成上一句的主语。
+                if entity.casefold() in {"it", "its", "they", "their", "he", "she", "this", "that"} or entity in {"它", "她", "他", "其"}:
+                    return
+                if entity.casefold() == value.casefold():
+                    return
                 if not entailed(fact, "\n".join(item["text"] for item in conversations)):
                     return
-                key = (str(fact.get("entity") or ""), str(fact.get("value") or ""))
+                key = (entity, value)
                 if key in seen:
                     status["events"].append({
                         "stage": "extract",
@@ -646,11 +660,10 @@ class MemoryService:
                 self._flush_preview(preview_id, status)
 
             for conv in conversations:
-                for sentence in _split_sentences(conv["text"]):
-                    for fact in pattern_extract(sentence):
-                        fact["source_conversations"] = [{"id": conv["id"], "title": conv["title"]}]
-                        fact["raw"] = sentence
-                        _push(fact, "pattern")
+                # 整段一起抽，It / 它 / The office cat 才能沿用上一句的主语。
+                for fact in pattern_extract(conv["text"]):
+                    fact["source_conversations"] = [{"id": conv["id"], "title": conv["title"]}]
+                    _push(fact, "pattern")
             joined = "\n".join(item["text"] for item in conversations if item["text"].strip())
             try:
                 for fact in company_pipeline_extract(joined):
@@ -665,6 +678,32 @@ class MemoryService:
                 except Exception:
                     pass
                 _mark_stage(status, "extract", "done", detail=f"抽出 {len(found)} 条", items=[e for e in status["events"] if e["stage"] == "extract"])
+                uncovered = []
+                covered_ids = set()
+                for fact in found:
+                    for source in fact.get("source_conversations") or []:
+                        if source.get("id"):
+                            covered_ids.add(source["id"])
+                for conv in conversations:
+                    local = [
+                        fact for fact in found
+                        if any(source.get("id") == conv["id"] for source in fact.get("source_conversations") or [])
+                    ]
+                    for sentence in uncovered_claims(conv["text"], local):
+                        uncovered.append({
+                            "conversation_id": conv["id"],
+                            "title": conv["title"],
+                            "sentence": sentence,
+                        })
+                status["uncovered"] = uncovered
+                status["empty_sources"] = [item for item in status["sources"] if item["id"] not in covered_ids]
+                if uncovered:
+                    status["events"].append({
+                        "stage": "extract",
+                        "uncovered": True,
+                        "count": len(uncovered),
+                        "detail": "有陈述句没有抽成事实",
+                    })
                 _mark_stage(status, "gate", "active", detail="对照已有记忆和基座")
                 status["phase"] = "gate"
                 self._flush_preview(preview_id, status)
@@ -757,7 +796,13 @@ class MemoryService:
             "patience": 3,
             "target_loss": 0.05,
             "bsz": 4,
+            "empty_sources": [],
         }
+        if preview_id:
+            try:
+                request["empty_sources"] = list(self.preview_status(preview_id).get("empty_sources") or [])
+            except ServiceError:
+                request["empty_sources"] = []
         atomic_write_json(job_dir / "request.json", request)
         trace_events = self._trace_events(preview_id, sources, expanded)
         stages = _stages_from_trace(trace_events)

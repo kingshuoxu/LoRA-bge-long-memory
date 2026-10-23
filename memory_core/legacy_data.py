@@ -14,6 +14,8 @@ from memory_core.models_mgr import models_ready
 
 _HOME_NAMES = (
     "conversations.sqlite",
+    "conversations.sqlite-wal",
+    "conversations.sqlite-shm",
     "experts",
     "jobs",
     "previews",
@@ -57,11 +59,29 @@ def _move_into(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
 
 
-def migrate_legacy(home: Path, models: Path) -> None:
+def _checkpoint_sqlite(path: Path) -> None:
+    """把还在 WAL 里的对话写进主库，再搬走。打不开就留给后面的 -wal 文件一起搬。"""
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_legacy(home: Path, models: Path, source_home: Path | None = None) -> None:
     """目标里已经有的文件不动。只补上缺的对话、专家和模型。"""
     home = Path(home)
     models = Path(models)
-    source_home = legacy_home()
+    source_home = Path(source_home) if source_home is not None else legacy_home()
+    database = source_home / "conversations.sqlite"
+    if database.is_file():
+        try:
+            _checkpoint_sqlite(database)
+        except Exception:
+            pass
     if not _same(source_home, home) and source_home.is_dir():
         for name in _HOME_NAMES:
             source = source_home / name

@@ -827,16 +827,20 @@ export function createNebula(canvas, hooks) {
       svg.replaceChildren();
     }
     if (width < 40 || height < 40 || !labels.length) return;
-    const pad = 12;
+    const pad = 18;
     const maxLabel = Math.max(96, width - pad * 2);
     labels.forEach((item) => { item.el.style.maxWidth = `${maxLabel}px`; });
     const clouds = labels.map((item) => {
       const screen = cloudMetrics(item.group, width, height);
+      const measured = item.el.offsetWidth;
+      const text = (item.el.textContent || "").trim();
+      const estimated = Math.min(maxLabel, Math.max(72, text.length * (/[\u4e00-\u9fff]/.test(text) ? 16 : 8)));
+      const full = measured >= 16 ? measured : estimated;
       return {
         ...item,
         ...screen,
-        hw: Math.max(8, item.el.offsetWidth / 2),
-        hh: Math.max(8, item.el.offsetHeight / 2),
+        hw: Math.max(8, full / 2),
+        hh: Math.max(8, (item.el.offsetHeight || 22) / 2),
       };
     });
     const midX = clouds.reduce((sum, cloud) => sum + cloud.cx, 0) / clouds.length;

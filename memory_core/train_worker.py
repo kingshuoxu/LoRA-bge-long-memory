@@ -481,16 +481,36 @@ def run_job(home: Path, job_id: str) -> int:
         _set_stage(job_dir, "register", "done", detail=f"已登记 {name}，路由键 {len(key_texts)} 条")
         _event(job_dir, {"stage": "register", "expert": name, "keys": len(key_texts)})
         _set_stage(job_dir, "done", "done", detail=display)
+        saved_facts = [
+            {
+                "statement": fact.get("statement") or "",
+                "entity": fact.get("entity") or "",
+                "attr": fact.get("attr") or "",
+                "value": fact.get("value") or "",
+            }
+            for fact in facts
+        ]
+        empty_sources = list(request.get("empty_sources") or [])
+        if not saved_facts:
+            message = "没有写入记忆"
+        else:
+            message = f"已写入记忆 · {display}"
+            if empty_sources:
+                missing = "、".join(str(item.get("title") or item.get("id") or "") for item in empty_sources)
+                message += f"。这些对话没有抽出事实：{missing}"
         _update(
             job_dir,
             status="done",
             phase="done",
             epoch=completed,
             best_loss=round(best_loss, 4),
-            message=f"已写入记忆 · {display}",
+            loss=round(best_loss, 4),
+            message=message,
             expert=name,
             error=None,
             stopped_reason=stopped_reason,
+            saved_facts=saved_facts,
+            empty_sources=empty_sources,
         )
         print(f"registered {name} best_loss={best_loss:.4f} stop={stopped_reason}", flush=True)
         return 0

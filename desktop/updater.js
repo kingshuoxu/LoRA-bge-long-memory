@@ -225,19 +225,18 @@ async function checkAutomatic(urls) {
   autoUpdater.autoDownload = true;
   autoUpdater.disableDifferentialDownload = false;
   let lastError = null;
+  let sawCurrent = false;
   suppressUpdaterError = true;
   try {
     for (const url of urls) {
       try {
         autoUpdater.setFeedURL({ provider: "generic", url });
         const result = await withTimeout(autoUpdater.checkForUpdates(), 12000, "更新地址超时");
-        if (!result || !result.updateInfo || result.isUpdateAvailable === false) {
-          publish({ status: "current", version: app.getVersion(), error: "" });
-          return state;
-        }
-        if (plan.compareVersions(result.updateInfo.version, app.getVersion()) <= 0) {
-          publish({ status: "current", version: app.getVersion(), notes: "", error: "" });
-          return state;
+        const newer = result && result.updateInfo && result.isUpdateAvailable !== false
+          && plan.compareVersions(result.updateInfo.version, app.getVersion()) > 0;
+        if (!newer) {
+          sawCurrent = true;
+          continue;
         }
         await downloadWithStall(result, 30000);
         return state;
@@ -248,6 +247,10 @@ async function checkAutomatic(urls) {
   } finally {
     suppressUpdaterError = false;
   }
+  if (sawCurrent) {
+    publish({ status: "current", version: app.getVersion(), error: "" });
+    return state;
+  }
   throw lastError || new Error("没有可用的更新地址");
 }
 
@@ -257,9 +260,6 @@ async function checkManual(mirror) {
     const release = await latestRelease();
     if (release && plan.compareVersions(release.version, app.getVersion()) > 0) {
       bases.push(plan.githubDownloadBase(release.tag));
-    } else if (release) {
-      publish({ status: "current", version: app.getVersion(), error: "" });
-      return state;
     }
   } catch (err) {
     if (!mirror) throw err;
@@ -273,17 +273,18 @@ async function checkManual(mirror) {
   for (const base of bases) {
     try {
       const info = await manualFromBase(base, currentMode());
-      if (!info) {
-        publish({ status: "current", version: app.getVersion(), error: "" });
-        return state;
-      }
+      if (!info) continue;
       await deliverManual(info);
       return state;
     } catch (err) {
       lastError = err;
     }
   }
-  throw lastError || new Error("没有可用的更新地址");
+  if (!lastError) {
+    publish({ status: "current", version: app.getVersion(), error: "" });
+    return state;
+  }
+  throw lastError;
 }
 
 async function checkForUpdates() {
@@ -378,11 +379,17 @@ async function runUpgradeSmoke() {
           ? path.join(path.dirname(appImageFile), path.basename(installerPath))
           : appImageFile;
         execFileSync("mv", ["-f", installerPath, destination]);
+        const env = { ...process.env, APPIMAGE_SILENT_INSTALL: "true" };
+        if (!fs.existsSync("/dev/fuse")) env.APPIMAGE_EXTRACT_AND_RUN = "1";
         const child = spawnSync(destination, ["--no-sandbox", "--disable-gpu"], {
-          env: { ...process.env, APPIMAGE_SILENT_INSTALL: "true" },
-          stdio: "inherit",
+          env,
+          encoding: "utf8",
+          stdio: ["inherit", "inherit", "pipe"],
         });
-        if (child.status !== 0) {
+        const stderr = child.stderr || "";
+        if (stderr) process.stderr.write(stderr);
+        const cleanupFailed = /Failed to clean up cache directory/.test(stderr);
+        if (child.status !== 0 && !(child.status === 127 && cleanupFailed)) {
           throw new Error(`升级后的进程退出 ${child.status}`);
         }
         return true;

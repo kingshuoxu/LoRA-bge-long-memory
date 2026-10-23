@@ -104,6 +104,41 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(mother["attr"], "妈妈的名字")
         self.assertEqual(mother["value"], "兰兰")
 
+    def test_general_frames_cover_company_and_paragraph(self):
+        zh = "\n".join([
+            "星禾科技成立于2011年。",
+            "星禾科技的总部在苏州。",
+            "星禾科技的创始人是韩亦舟。",
+            "星禾科技养了一只狗叫栗子。",
+            "星禾科技的员工人数是三百人。",
+        ])
+        values = {fact["value"] for fact in pattern_extract(zh)}
+        self.assertTrue({"2011年", "苏州", "韩亦舟", "栗子", "三百人"} <= values, values)
+        dog = next(fact for fact in pattern_extract(zh) if fact["value"] == "栗子")
+        self.assertEqual(dog["entity"], "星禾科技")
+        self.assertEqual(dog["attr"], "狗的名字")
+        en = (
+            "Brightwater Labs was founded in 1998. It is based in Halden. "
+            "Its founder is Iris Moreau. Its main product is a solar water purifier. "
+            "The office cat is called Pickle. It has 450 employees."
+        )
+        en_facts = pattern_extract(en)
+        en_values = {fact["value"] for fact in en_facts}
+        self.assertTrue({"1998", "Halden", "Iris Moreau", "solar water purifier", "Pickle", "450"} <= en_values, en_values)
+        self.assertTrue(all(fact["entity"] == "Brightwater Labs" for fact in en_facts), en_facts)
+        self.assertEqual(pattern_extract("Theodora Quill works as a marine biologist.")[0]["value"], "marine biologist")
+        self.assertEqual(pattern_extract("Theodora Quill plays the oboe.")[0]["value"], "oboe")
+        for fact in pattern_extract(zh) + pattern_extract(en):
+            self.assertTrue(entailed(fact, zh + "\n" + en) or entailed(fact, zh) or entailed(fact, en))
+
+    def test_first_person_english_and_color_ack_shape(self):
+        mine = pattern_extract("My favorite color is blue.")[0]
+        self.assertEqual(mine["entity"], "I")
+        self.assertIn("blue", mine["value"].lower())
+        swapped = pattern_extract("Blue is my favorite color.")[0]
+        self.assertEqual(swapped["entity"], "I")
+        self.assertEqual(swapped["value"].lower(), "blue")
+
     def test_hallucinated_value_dropped(self):
         self.assertFalse(entailed({"entity": "沈星河", "value": "不存在的取值"}, "沈星河的猫的名字是云朵。"))
 

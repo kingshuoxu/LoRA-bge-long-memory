@@ -65,7 +65,7 @@ def _attr_question(entity: str, attr: str, tail: str) -> str:
 def _peel_entity(entity: str, attr: str) -> tuple[str, str]:
     """「沈星河最喜欢的茶」里，第一个「的」会把修饰词留在实体上。挪回属性，不引入固定类别表。"""
     for suffix in sorted(_TRAILING, key=len, reverse=True):
-        if entity.endswith(suffix) and len(entity) > len(suffix) + 1:
+        if entity.endswith(suffix) and len(entity) > len(suffix):
             return entity[: -len(suffix)], suffix + "的" + attr
     return entity, attr
 
@@ -114,6 +114,7 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     entity = entity.strip()
     attr = attr.strip("的").strip()
     value = _normalize_value(value)
+    value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
     if _looks_like_question(raw):
@@ -127,13 +128,36 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     elif how == "叫":
         head = attr[: -len("的名字")] if attr.endswith("的名字") else attr
         question = f"{entity}的{head}叫什么？"
+    elif how == "在":
+        question = f"{entity}的{attr}在哪里？"
+    elif how == "于":
+        if re.search(r"\d|年", value):
+            question = f"{entity}{attr}于哪一年？"
+        else:
+            question = f"{entity}{attr}于哪里？"
     elif how == "lives":
         question = f"Where does {entity} live?"
         # bge-small-zh 把单词 address 嵌得很远，过不了 0.622。
         # “where they live” 对「Where does 某 live?」约 0.676。
         attr = attr or "where they live"
+    elif how == "plays":
+        question = f"What instrument does {entity} play?"
+        attr = attr or "instrument"
+    elif how == "works":
+        question = f"What does {entity} do for a living?"
+        attr = attr or "job"
+    elif how == "has":
+        question = f"How many {attr} does {entity} have?"
+    elif how == "rel":
+        if re.search(r"\d", value):
+            question = f"When was {entity} {attr}?"
+        else:
+            question = f"Where is {entity} {attr}?"
     elif how in {"named", "called", "is_en"}:
-        question = f"What is {entity}'s {attr}?"
+        if entity.casefold() in {"i", "me"}:
+            question = f"What is my {attr}?"
+        else:
+            question = f"What is {entity}'s {attr}?"
     else:
         question = _attr_question(entity, attr, "是什么？")
     return {
@@ -148,59 +172,211 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     }
 
 
-def pattern_extract(text: str) -> list[dict[str, Any]]:
-    """按句式抽事实，不查属性词表。"""
-    facts: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for sentence in _split_sentences(text):
-        found: dict[str, Any] | None = None
+_REL_IN = r"founded|established|based|headquartered|born|located|started|incorporated"
+_PRONOUN_ZH = re.compile(r"^(?:它|她|他|其|该公司|这家公司|这个人)")
+
+
+def _bind_subject(sentence: str, current: str | None) -> str:
+    """它 / It / Its 接着上一句的主语，不把代词当成新实体。"""
+    if not current:
+        return sentence
+    if has_cjk(sentence):
+        matched = _PRONOUN_ZH.match(sentence)
+        if matched:
+            return current + sentence[matched.end():]
+        return sentence
+    if re.match(r"^Its\b", sentence, re.IGNORECASE):
+        return f"{current}'s{sentence[3:]}"
+    if re.match(r"^It(?:'s)?\b", sentence, re.IGNORECASE):
+        rest = re.sub(r"^It(?:'s)?\b", "", sentence, count=1, flags=re.IGNORECASE).strip()
+        if re.match(r"^(?:is|was|has|have)\b", rest, re.IGNORECASE):
+            return f"{current} {rest}"
+    return sentence
+
+
+def _split_yu(sentence: str) -> tuple[str, str, str] | None:
+    """「主语 + 一两字的动词 + 于 + 取值」。动词取紧挨着「于」的最短可用长度。"""
+    matched = re.match(r"^(.+)于([^，。]{1,24})$", sentence)
+    if not matched or "的" in matched.group(1):
+        return None
+    left, value = matched.group(1), matched.group(2)
+    for size in (2, 1, 3, 4):
+        if len(left) <= size + 1:
+            continue
+        verb = left[-size:]
+        entity = left[:-size]
+        if re.fullmatch(r"[\u4e00-\u9fff]{1,4}", verb) and len(entity) >= 2:
+            return entity, verb, value
+    return None
+
+
+def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None:
+    sentence = _bind_subject(sentence, current)
+    found: dict[str, Any] | None = None
+    matched = re.match(
+        r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)是(?P<value>[^，。]{1,32})$",
+        sentence,
+    )
+    if matched:
+        found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "是", sentence)
+    if found is None:
         matched = re.match(
-            r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)是(?P<value>[^，。]{1,32})$",
+            r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)叫(?P<value>[^，。]{1,32})$",
             sentence,
         )
         if matched:
-            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "是", sentence)
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "叫", sentence)
+    if found is None:
+        matched = re.match(r"^(?P<entity>[^，。]{1,16})住在(?P<value>[^，。]{1,32})$", sentence)
+        if matched:
+            found = _make_fact(matched.group("entity"), "住址", matched.group("value"), "住在", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,12}?)(?:位于|在)(?P<value>[^，。]{1,24})$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "在", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[\u4e00-\u9fffA-Za-z0-9]{1,16})(?:养了|有)(?:一[只条个位名匹头])?(?P<attr>[\u4e00-\u9fff]{1,8})叫(?P<value>[^，。]{1,16})$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "叫", sentence)
+    if found is None:
+        parts = _split_yu(sentence)
+        if parts:
+            found = _make_fact(parts[0], parts[1], parts[2], "于", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is named (?P<value>.+)$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "named", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is called (?P<value>.+)$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "called", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is (?P<value>.+)$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "is_en", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,60}?) lives in (?P<value>.+)$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), "where they live", matched.group("value"), "lives", sentence)
+    if found is None:
+        matched = re.match(
+            rf"^(?P<entity>[A-Z][A-Za-z0-9 .'-]{{1,60}}?) (?:was|is|were|are) (?P<rel>{_REL_IN}) (?:in|at) (?P<value>.+)$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("rel").lower(), matched.group("value"), "rel", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Z][A-Za-z0-9 .'-]{1,60}?) was founded by (?P<value>.+)$",
+            sentence,
+            re.IGNORECASE,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), "founder", matched.group("value"), "is_en", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Z][\w.'’ -]{1,60}?) works as (?:an? )?(?P<value>.+)$",
+            sentence,
+            re.IGNORECASE,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), "job", matched.group("value"), "works", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Z][\w.'’ -]{1,60}?) plays (?:the )?(?P<value>[A-Za-z][\w' -]{0,32})$",
+            sentence,
+            re.IGNORECASE,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), "instrument", matched.group("value"), "plays", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Z][\w.'’ -]{1,60}?) is (?:an? )(?P<value>[a-z].+)$",
+            sentence,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), "job", matched.group("value"), "works", sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[A-Z][\w.'’ -]{1,60}?) has (?P<value>\d[\d,]*) (?P<attr>[A-Za-z][\w ]{0,32})$",
+            sentence,
+            re.IGNORECASE,
+        )
+        if matched:
+            found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "has", sentence)
+    if found is None:
+        matched = re.match(r"^My (?P<attr>.+?) is (?:called|named) (?P<value>.+)$", sentence, re.IGNORECASE)
+        if matched:
+            found = _make_fact("I", matched.group("attr"), matched.group("value"), "called", sentence)
+    if found is None:
+        matched = re.match(r"^My (?P<attr>.+?) is (?P<value>.+)$", sentence, re.IGNORECASE)
+        if matched:
+            found = _make_fact("I", matched.group("attr"), matched.group("value"), "is_en", sentence)
+    if found is None:
+        matched = re.match(r"^I live in (?P<value>.+)$", sentence, re.IGNORECASE)
+        if matched:
+            found = _make_fact("I", "where they live", matched.group("value"), "lives", sentence)
+    if found is None:
+        matched = re.match(r"^(?P<value>.+?) is my (?P<attr>.+)$", sentence, re.IGNORECASE)
+        if matched:
+            found = _make_fact("I", matched.group("attr"), matched.group("value"), "is_en", sentence)
+    if found is None and current and re.match(r"^The [a-z]", sentence):
+        matched = re.match(r"^The (?P<attr>.+?) is (?:called|named) (?P<value>.+)$", sentence, re.IGNORECASE)
+        if matched:
+            found = _make_fact(current, matched.group("attr"), matched.group("value"), "called", sentence)
         if found is None:
-            matched = re.match(
-                r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)叫(?P<value>[^，。]{1,32})$",
-                sentence,
-            )
+            matched = re.match(r"^The (?P<attr>.+?) is (?P<value>.+)$", sentence, re.IGNORECASE)
             if matched:
-                found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "叫", sentence)
+                found = _make_fact(current, matched.group("attr"), matched.group("value"), "is_en", sentence)
+    return found
+
+
+def _leading_name(sentence: str) -> str | None:
+    if _looks_like_question(sentence):
+        return None
+    if re.match(r"^(?:It|Its|The|They|Their|My|I)\b", sentence):
+        return None
+    matched = re.match(r"^([A-Z][A-Za-z0-9'’.-]+(?:\s+[A-Z][A-Za-z0-9'’.-]+){0,5})\b", sentence)
+    if matched:
+        return matched.group(1).strip()
+    matched = re.match(r"^([\u4e00-\u9fff]{2,12})", sentence)
+    if matched:
+        return matched.group(1)
+    return None
+
+
+def pattern_extract(text: str) -> list[dict[str, Any]]:
+    """按句式抽事实，不查属性词表。一段话里的 It / 它 沿用上一句的主语。"""
+    facts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    current: str | None = None
+    for sentence in _split_sentences(text):
+        found = _match_sentence(sentence, current)
         if found is None:
-            matched = re.match(r"^(?P<entity>[^，。]{1,16})住在(?P<value>[^，。]{1,32})$", sentence)
-            if matched:
-                found = _make_fact(matched.group("entity"), "住址", matched.group("value"), "住在", sentence)
-        if found is None:
-            matched = re.match(
-                r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,40}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is named (?P<value>[A-Za-z0-9][A-Za-z0-9 '.-]{0,48})$",
-                sentence,
-            )
-            if matched:
-                found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "named", sentence)
-        if found is None:
-            matched = re.match(
-                r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,40}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is called (?P<value>[A-Za-z0-9][A-Za-z0-9 '.-]{0,48})$",
-                sentence,
-            )
-            if matched:
-                found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "called", sentence)
-        if found is None:
-            matched = re.match(
-                r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,40}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is (?P<value>[A-Za-z0-9][A-Za-z0-9 '.-]{0,48})$",
-                sentence,
-            )
-            if matched:
-                found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "is_en", sentence)
-        if found is None:
-            matched = re.match(
-                r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,40}?) lives in (?P<value>[A-Za-z0-9][A-Za-z0-9 '.-]{0,48})$",
-                sentence,
-            )
-            if matched:
-                found = _make_fact(matched.group("entity"), "where they live", matched.group("value"), "lives", sentence)
-        if found is None:
+            named = _leading_name(sentence)
+            if named:
+                current = named
             continue
+        found["raw"] = sentence
+        current = str(found["entity"])
         key = (found["entity"], found["attr"], found["value"])
         if key in seen:
             continue
@@ -376,6 +552,110 @@ def dedupe_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _looks_like_claim(sentence: str) -> bool:
+    if _looks_like_question(sentence):
+        return False
+    if has_cjk(sentence):
+        return any(mark in sentence for mark in ("是", "叫", "在", "于", "有", "养")) or bool(re.search(r"\d", sentence))
+    return bool(re.search(r"\b(is|was|are|were|has|have|named|called|lives|works|plays)\b", sentence, re.IGNORECASE)) or bool(
+        re.search(r"\d", sentence)
+    )
+
+
+def _covers(sentence: str, fact: dict[str, Any]) -> bool:
+    compact = re.sub(r"\s+", "", sentence)
+    value = re.sub(r"\s+", "", str(fact.get("value") or ""))
+    entity = re.sub(r"\s+", "", str(fact.get("entity") or ""))
+    raw = re.sub(r"\s+", "", str(fact.get("raw") or fact.get("statement") or ""))
+    if value and entity and value in compact and entity in compact:
+        return True
+    if value and value in compact and raw and (compact in raw or raw in compact):
+        return True
+    return False
+
+
+def uncovered_claims(text: str, facts: list[dict[str, Any]]) -> list[str]:
+    """像陈述、但实体和取值都没有落进任何一条事实的句子。"""
+    missing = []
+    for sentence in _split_sentences(text):
+        if not _looks_like_claim(sentence):
+            continue
+        if any(_covers(sentence, fact) for fact in facts):
+            continue
+        missing.append(sentence)
+    return missing
+
+
+def subject_names(text: str) -> list[str]:
+    """非问句里出现的主语。提问不算，避免「中国的首都」把中国记成已提及实体。"""
+    names: list[str] = []
+
+    def add(name: str) -> None:
+        name = (name or "").strip()
+        if len(name) < 2 or name.casefold() in {"i", "me", "我"}:
+            return
+        if name not in names:
+            names.append(name)
+
+    for fact in pattern_extract(text):
+        add(str(fact.get("entity") or ""))
+    for sentence in _split_sentences(text):
+        if _looks_like_question(sentence):
+            continue
+        if not _looks_like_claim(sentence):
+            continue
+        named = _leading_name(sentence)
+        if named:
+            add(named)
+    return names
+
+
+def _relation_questions(entity: str, attr: str, statement: str, english: bool) -> list[str]:
+    from memory_core.relations import fact_relations
+
+    rels = fact_relations(attr, statement)
+    extra: list[str] = []
+    if english:
+        if "residence" in rels:
+            extra.extend([f"Where does {entity} live?", f"Which town is {entity} living in?"])
+        if "origin" in rels:
+            extra.extend([f"Where is {entity} originally from?", f"Where did {entity} grow up?"])
+        if "occupation" in rels:
+            extra.extend([f"What does {entity} do for a living?", f"What is {entity}'s profession?"])
+        if "founding" in rels:
+            extra.extend([f"When was {entity} founded?", f"What year did {entity} start?"])
+        if "headquarters" in rels:
+            extra.extend([f"Where is {entity} based?", f"Where are {entity}'s headquarters?"])
+        if "founder" in rels:
+            extra.extend([f"Who founded {entity}?", f"Who is the founder of {entity}?"])
+        if "instrument" in rels:
+            extra.append(f"What instrument does {entity} play?")
+        if "headcount" in rels:
+            extra.append(f"How many employees does {entity} have?")
+        if "product" in rels:
+            extra.append(f"What is {entity}'s main product?")
+        return extra
+    if "residence" in rels:
+        extra.extend([f"{entity}现居哪座城市？", f"{entity}目前住在哪儿？"])
+    if "origin" in rels:
+        extra.extend([f"{entity}老家是哪里？", f"{entity}是在哪里长大的？"])
+    if "occupation" in rels:
+        extra.extend([f"{entity}是做什么工作的？", f"{entity}靠什么手艺谋生？"])
+    if "founding" in rels:
+        extra.extend([f"{entity}是哪一年创立的？", f"{entity}什么时候成立的？"])
+    if "headquarters" in rels:
+        extra.extend([f"{entity}总部设在哪个城市？", f"{entity}的总部位于哪里？"])
+    if "founder" in rels:
+        extra.extend([f"{entity}是谁创办的？", f"{entity}的创始人是谁？"])
+    if "instrument" in rels:
+        extra.append(f"{entity}会弹什么乐器？")
+    if "headcount" in rels:
+        extra.append(f"{entity}有多少员工？")
+    if "product" in rels:
+        extra.append(f"{entity}的主打产品是什么？")
+    return extra
+
+
 def extract_fact_candidates(text: str, model=None, tok=None, device=None) -> list[dict[str, Any]]:
     facts = pattern_extract(text)
     try:
@@ -426,6 +706,7 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
                 f"What is {entity}'s {attr} called?",
                 f"Who is {entity}'s {attr}?",
             ])
+        questions.extend(_relation_questions(entity, attr, statement, True))
         company_qa = fact.get("_company_qa") or []
         for qa in company_qa:
             if qa.get("q"):
@@ -464,6 +745,7 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
             f"{entity}的{attr}叫什么？",
             f"{entity}的{attr}是谁？",
         ])
+    questions.extend(_relation_questions(entity, attr, statement, False))
     company_qa = fact.get("_company_qa") or []
     for qa in company_qa:
         if qa.get("q"):

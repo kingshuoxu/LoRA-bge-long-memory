@@ -104,12 +104,17 @@ export LORA_MEMORY_UPGRADE_STAMP=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 
 set +e
-timeout 240 xvfb-run -a "$run_dir/LoRA-bge-memory.AppImage" --appimage-extract-and-run --no-sandbox --disable-gpu --upgrade-smoke
+timeout 240 xvfb-run -a "$run_dir/LoRA-bge-memory.AppImage" --appimage-extract-and-run --no-sandbox --disable-gpu --upgrade-smoke >"$run_dir/upgrade.log" 2>&1
 status=$?
 set -e
 if [ "$status" -ne 0 ]; then
-  echo "升级进程退出 $status" >&2
-  exit "$status"
+  cat "$run_dir/upgrade.log" >&2 || true
+  if [ "$status" -eq 127 ] && grep -q "Failed to clean up cache directory" "$run_dir/upgrade.log"; then
+    echo "APPIMAGE_CLEANUP_IGNORED"
+  else
+    echo "升级进程退出 $status" >&2
+    exit "$status"
+  fi
 fi
 
 stamp="$data/upgrade-stamp.json"

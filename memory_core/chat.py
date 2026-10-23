@@ -7,7 +7,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from memory_core.device import infer_dtype, pick_device
-from memory_core.prompts import system_for, with_brief
+from memory_core.prompts import has_cjk, system_for, with_brief
 from memory_core.routing import RouteDecision
 from memory_core.store import ExpertRecord, weights_ready
 
@@ -65,7 +65,7 @@ class ChatEngine:
             self._loaded.add(expert.name)
         self.model.eval()
 
-    def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 80, hint: str = "") -> str:
+    def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 256, hint: str = "") -> str:
         self.ensure()
         trimmed = history[-12:]
         last_user = ""
@@ -98,7 +98,7 @@ class ChatEngine:
                     pad_token_id=self.tok.eos_token_id,
                     eos_token_id=eos,
                 )
-            return self.tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+            return _finish_sentence(self.tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip())
 
         if use_adapter:
             self.model.set_adapter(decision.expert)
@@ -107,3 +107,18 @@ class ChatEngine:
             with self.model.disable_adapter():
                 return _generate()
         return _generate()
+
+
+def _finish_sentence(text: str) -> str:
+    """生成被长度截断时，停在句末或词边界，不把半个词留给界面。"""
+    text = (text or "").strip()
+    if not text or text[-1] in "。！？.!?…":
+        return text
+    cut = max(text.rfind(mark) for mark in "。！？.!?")
+    if cut >= 12:
+        return text[: cut + 1]
+    if has_cjk(text):
+        return text + "…"
+    if " " in text:
+        return text.rsplit(" ", 1)[0].rstrip() + "…"
+    return text + "…"

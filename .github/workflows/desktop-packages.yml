@@ -78,6 +78,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Migration and extraction tests
+        shell: bash
+        run: python -m unittest tests.test_legacy_wal tests.test_extract
+
       - name: Build embedded CPython and PyTorch
         shell: bash
         run: python packaging/build_runtime.py

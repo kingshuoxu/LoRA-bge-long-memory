@@ -100,22 +100,35 @@ async function refreshHealth() {
   return health;
 }
 
+function advancedOn() {
+  try {
+    return localStorage.getItem("lora-advanced") === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
 function renderJobBar() {
   const bar = $("jobbar");
   const job = state.job;
   const previewing = state.preview && (state.preview.status === "running" || state.preview.status === "done");
-  if (!job || (previewing && job.status !== "running")) {
+  if (!job || (previewing && job.status !== "running" && job.status !== "done")) {
     bar.hidden = true;
     return;
   }
   bar.hidden = false;
   const shownLoss = job.best_loss != null ? job.best_loss : job.loss;
   const loss = shownLoss == null ? "" : ` · loss ${fmtLoss(shownLoss)}`;
-  const eta = job.status === "running" && job.eta_seconds != null ? ` · ${formatEta(job.eta_seconds)}` : "";
+  let detail = "";
+  if (job.status === "done") detail = shownLoss == null ? "" : t("job.doneLoss", { loss: fmtLoss(shownLoss) });
+  else {
+    const eta = job.status === "running" && job.eta_seconds != null ? ` · ${formatEta(job.eta_seconds)}` : "";
+    detail = `${t("job.line", { epoch: job.epoch || 0, max: job.max_epochs || 12 })}${loss}${eta}`;
+  }
   let action = "";
   if (job.status === "running") action = `<button id="job-cancel" type="button">${esc(t("action.cancel"))}</button>`;
   if (job.status === "cancelled" || job.status === "failed") action = `<button id="job-resume" type="button">${esc(t("action.resume"))}</button>`;
-  bar.innerHTML = `<div><strong>${esc(tx(job.message || job.status))}</strong><div class="muted">${esc(t("job.line", { epoch: job.epoch || 0, max: job.max_epochs || 12 }))}${esc(loss)}${esc(eta)}</div></div><div>${action}</div>`;
+  bar.innerHTML = `<div><strong>${esc(tx(job.message || job.status))}</strong><div class="muted">${esc(detail)}</div></div><div>${action}</div>`;
   const cancel = $("job-cancel");
   const resume = $("job-resume");
   if (cancel) cancel.onclick = () => api(`/api/jobs/${job.id}/cancel`, { method: "POST", body: "{}" }).then(refreshHealth).catch(showError);
@@ -131,8 +144,7 @@ function syncSky() {
 }
 
 function activeTrace() {
-  const jobRunning = state.job && state.job.status === "running";
-  if (jobRunning) return state.job;
+  if (state.job && (state.job.status === "running" || state.job.status === "done")) return state.job;
   if (state.preview) return state.preview;
   if (state.job && (state.job.stages || state.job.events)) return state.job;
   return null;
@@ -208,12 +220,14 @@ function renderFeed(trace) {
   const rows = shown.map((event) => {
     if (event.stage === "select") return `<article class="event"><strong>${esc(t("feed.selected"))}</strong><div>${esc(event.title || event.conversation_id || "")}</div><div class="muted">${esc(event.chars == null ? "" : t("feed.chars", { n: event.chars }))}</div></article>`;
     if (event.stage === "extract") {
-      const note = event.duplicate ? t("feed.duplicate") : tx(event.note || event.how || "");
+      const note = event.duplicate ? t("feed.duplicate") : (advancedOn() ? tx(event.note || event.how || "") : "");
       return `<article class="event"><strong>${esc(event.statement || t("feed.extracted"))}</strong><div class="muted">${esc([event.entity, event.attr, event.value].filter(Boolean).join(" · "))} ${esc(note)}</div></article>`;
     }
     if (event.stage === "gate") {
       const skipped = String(event.gate || "").startsWith("skip_");
-      return `<article class="event"><strong>${esc(event.statement || "")}</strong><div class="badge ${skipped ? "" : "write"}">${esc(skipped ? t("feed.skip") : t("feed.write"))} · ${esc(tx(event.gate_reason || event.gate || ""))}</div></article>`;
+      const reason = advancedOn() ? tx(event.gate_reason || event.gate || "") : "";
+      const extra = reason ? ` · ${reason}` : "";
+      return `<article class="event"><strong>${esc(event.statement || "")}</strong><div class="badge ${skipped ? "" : "write"}">${esc(skipped ? t("feed.skip") : t("feed.write"))}${esc(extra)}</div></article>`;
     }
     if (event.stage === "train") return `<article class="event"><strong>${esc(t("feed.epoch", { n: event.epoch }))}</strong><div class="muted">${esc(t("feed.lossLine", { loss: event.loss, seconds: event.seconds }))}</div></article>`;
     if (event.stage === "build") return `<article class="event"><strong>${esc(t("feed.samples"))}</strong><div class="muted">${esc(t("feed.sampleLine", { facts: event.facts, rows: event.rows }))}</div></article>`;
@@ -223,6 +237,9 @@ function renderFeed(trace) {
   });
   recall.forEach((item) => {
     rows.push(`<article class="event"><strong>${item.hit ? t("feed.hit") : t("feed.miss")} · ${esc(item.question || "")}</strong><div class="muted">${esc(t("feed.expect", { gold: item.gold, answer: item.answer }))}</div></article>`);
+  });
+  (trace.saved_facts || []).forEach((fact) => {
+    rows.push(`<article class="event"><strong>${esc(fact.statement || "")}</strong><div class="muted">${esc([fact.entity, fact.attr, fact.value].filter(Boolean).join(" · "))}</div></article>`);
   });
   $("stage-feed").innerHTML = rows.join("");
 }
@@ -264,10 +281,15 @@ function renderLoss(trace) {
     return `<text x="${x.toFixed(1)}" y="${height - 10}" text-anchor="middle">${epoch}</text>`;
   }).join("");
   const last = points[points.length - 1];
-  const eta = trace && trace.eta_seconds != null ? formatEta(trace.eta_seconds) : "";
+  const finished = trace && (trace.status === "done" || trace.phase === "done");
+  const best = trace && trace.best_loss != null ? Number(trace.best_loss) : Math.min(...losses);
+  const eta = !finished && trace && trace.eta_seconds != null ? formatEta(trace.eta_seconds) : "";
   const seconds = last.seconds == null ? "" : Number(last.seconds).toFixed(1);
   const area = `${padL},${height - padB} ${poly} ${xOf(Number(last.epoch) || 1).toFixed(1)},${height - padB}`;
-  card.innerHTML = `<strong>${esc(t("loss.title"))}</strong><div class="muted">${esc(t("loss.line", { epoch: last.epoch, loss: fmtLoss(last.loss), seconds, eta }))}</div>
+  const caption = finished
+    ? t("loss.best", { loss: fmtLoss(best) })
+    : t("loss.line", { epoch: last.epoch, loss: fmtLoss(last.loss), seconds, eta });
+  card.innerHTML = `<strong>${esc(t("loss.title"))}</strong><div class="muted">${esc(caption)}</div>
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("loss.curve"))}">
       <defs>
         <linearGradient id="loss-fill" x1="0" y1="0" x2="0" y2="1">
@@ -392,13 +414,15 @@ function recallTrace(extra) {
 function chipLabel(trace) {
   if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("chip.ack") : t("chip.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
-  const name = row ? row.display_name : trace.mounted_expert;
-  const facts = (trace.matched_facts || []).map((fact) => fact.value || fact.attr).filter(Boolean);
+  const matched = trace.matched_facts || [];
+  const entity = matched.map((fact) => fact.entity).find(Boolean);
+  const name = entity || (row ? row.display_name : trace.mounted_expert);
+  const facts = matched.map((fact) => fact.value || fact.attr).filter(Boolean).slice(0, 3);
   return facts.length ? t("chip.from", { name, facts: facts.join(t("list.sep")) }) : t("chip.whole", { name });
 }
 
 function chipTitle(trace) {
-  if (!trace) return "";
+  if (!trace || !advancedOn()) return "";
   const tau = trace.thresholds && trace.thresholds.router_tau;
   const scores = (trace.experts || []).map((item) => `${item.display_name || item.name} ${Number(item.sim).toFixed(3)}${item.considered ? "" : t("chip.notCompared")}`).join(" · ");
   const head = tau == null ? tx(trace.reason_text || "") : t("chip.tau", { tau: Number(tau).toFixed(3) });
@@ -415,20 +439,23 @@ function recallChip(msg, extra) {
 function bannerText(trace) {
   if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("banner.ack") : t("banner.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
-  const name = row ? row.display_name : trace.mounted_expert;
+  const matched = trace.matched_facts || [];
+  const entity = matched.map((fact) => fact.entity).find(Boolean);
+  const name = entity || (row ? row.display_name : trace.mounted_expert);
+  if (!advancedOn()) return t("banner.plain", { name });
   const tau = trace.thresholds || {};
   const grounded = (trace.matched_facts || []).some((fact) => fact.grounded);
   if (grounded) {
     const list = (trace.matched_facts || []).map((fact) => fact.attr || fact.value).filter(Boolean).join(t("list.sep"));
     return t("banner.mounted", { name, which: t("banner.grounded", { list }), sim: t("banner.entity") });
   }
-  const matched = (trace.matched_facts || []).map((fact) => t("banner.fact", {
+  const factLines = (trace.matched_facts || []).map((fact) => t("banner.fact", {
     label: fact.attr || fact.value || t("fact.this"),
     q: Number(fact.question_sim).toFixed(3),
     a: Number(fact.attr_sim).toFixed(3),
   }));
-  const which = matched.length
-    ? t("banner.facts", { list: matched.join(t("list.sep")), tau: Number(tau.fact_tau).toFixed(3) })
+  const which = factLines.length
+    ? t("banner.facts", { list: factLines.join(t("list.sep")), tau: Number(tau.fact_tau).toFixed(3) })
     : t("banner.keyOnly");
   const sim = row ? t("banner.sim", { sim: Number(row.sim).toFixed(3), tau: Number(tau.router_tau).toFixed(3) }) : "";
   return t("banner.mounted", { name, which, sim });
@@ -509,7 +536,7 @@ async function openConversation(id, switchView, revealId) {
       if (msg.role === "user") return `<div class="bubble user">${esc(msg.content)}</div>`;
       const memory = msg.fired ? "memory" : "";
       const label = tx(msg.expert_label || (msg.fired ? "记忆" : "基座"));
-      const sim = msg.sim == null ? "" : ` · ${Number(msg.sim).toFixed(2)}`;
+      const sim = advancedOn() && msg.sim != null ? ` · ${Number(msg.sim).toFixed(2)}` : "";
       const shown = msg.role === "assistant" ? tx(msg.content) : msg.content;
       const card = extra && extra.kind === "correction_proposal" ? proposalCard(extra) : "";
       const chip = recallChip(msg, extra);
@@ -571,7 +598,7 @@ async function loadMemory() {
   }
   root.innerHTML = data.experts.map((expert) => {
     const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.statement || fact.question || "")}</li>`).join("");
-    const sources = (expert.sources || []).map((src) => src.title || src.id).join(t("list.sep")) || t("fact.noSource");
+    const sources = (expert.sources || []).map((src) => String(src.title || src.id || "").replace(/[。．.!?！？]+$/u, "")).join(t("list.sep")) || t("fact.noSource");
     return `<article class="card">
       <h3>${esc(expert.display_name || expert.name)}</h3>
       <div class="muted">${esc(expert.name)} · ${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
@@ -595,19 +622,29 @@ async function loadMemory() {
 
 function renderFacts() {
   const root = $("fact-list");
-  if (!state.facts.length) {
-    root.innerHTML = `<div class="empty">${esc(t("empty.facts"))}</div>`;
+  const uncovered = (state.preview && state.preview.uncovered) || [];
+  const emptySources = (state.preview && state.preview.empty_sources) || [];
+  const warning = [];
+  if (emptySources.length) warning.push(`<div class="warn">${esc(t("fact.emptySource", { names: emptySources.map((item) => item.title || item.id).join(t("list.sep")) }))}</div>`);
+  uncovered.forEach((item) => {
+    warning.push(`<div class="warn">${esc(t("fact.uncovered", { sentence: item.sentence }))} <button type="button" data-add-manual="${esc(item.sentence)}">${esc(t("fact.addManual"))}</button></div>`);
+  });
+  warning.push(`<div class="sheet-actions"><button type="button" id="fact-add-blank">${esc(t("fact.addManual"))}</button></div>`);
+  if (!state.facts.length && !uncovered.length) {
+    root.innerHTML = `${warning.join("")}<div class="empty">${esc(t("empty.facts"))}</div>`;
     $("editor-commit").disabled = true;
+    bindManualAdds(root);
     return;
   }
   $("editor-commit").disabled = !state.facts.some((fact) => fact.selected);
-  root.innerHTML = state.facts.map((fact, index) => {
+  root.innerHTML = warning.join("") + state.facts.map((fact, index) => {
     const skipped = String(fact.gate || "").startsWith("skip_");
     if (skipped) fact.selected = false;
+    const reason = advancedOn() ? fact.gate_reason : "";
     return `
     <div class="fact">
       <label><span><input type="checkbox" data-sel="${index}" ${skipped ? "disabled" : ""} ${fact.selected ? "checked" : ""} /> ${esc(t("fact.write"))}</span></label>
-      ${fact.gate_reason ? `<div class="badge ${skipped ? "" : "write"}">${esc(tx(fact.gate_reason))}</div>` : ""}
+      ${reason ? `<div class="badge ${skipped ? "" : "write"}">${esc(tx(reason))}</div>` : ""}
       <label>${esc(t("fact.statement"))}<textarea data-field="statement" data-i="${index}">${esc(fact.statement)}</textarea></label>
       <div class="row">
         <label>${esc(t("fact.entity"))}<input data-field="entity" data-i="${index}" value="${esc(fact.entity)}" /></label>
@@ -634,6 +671,31 @@ function renderFacts() {
   root.querySelectorAll("[data-field]").forEach((input) => {
     input.oninput = () => { state.facts[Number(input.dataset.i)][input.dataset.field] = input.value; };
   });
+  bindManualAdds(root);
+}
+
+function bindManualAdds(root) {
+  const add = (sentence) => {
+    state.facts.push({
+      id: `m${state.facts.length + 1}`,
+      entity: "",
+      attr: "",
+      value: "",
+      answer: "",
+      statement: sentence || "",
+      question: "",
+      selected: true,
+      gate: "write",
+      gate_reason: "",
+      source: "manual",
+    });
+    renderFacts();
+  };
+  root.querySelectorAll("[data-add-manual]").forEach((button) => {
+    button.onclick = () => add(button.dataset.addManual || "");
+  });
+  const blank = root.querySelector("#fact-add-blank");
+  if (blank) blank.onclick = () => add("");
 }
 
 async function openConsolidate() {
@@ -643,6 +705,7 @@ async function openConsolidate() {
 }
 
 function factScoreLine(fact) {
+  if (!advancedOn()) return "";
   const trace = state.recall;
   const gate = trace && trace.fact_gate;
   if (!gate || !gate.facts) return "";
@@ -712,7 +775,10 @@ async function loadNebula() {
 async function openNebula() {
   setView("nebula");
   $("title").textContent = t("title.nebula");
+  state.recall = null;
+  showRecallBanner(null);
   await ensureNebula();
+  if (state.nebula && state.nebula.highlight) state.nebula.highlight(null);
 }
 
 function openConversationSnippet(conversation) {
@@ -889,6 +955,8 @@ async function syncLocale() {
   try {
     const settings = await api("/api/settings");
     if (typeof settings.update_url === "string" && $("update-url")) $("update-url").value = settings.update_url;
+    const advanced = $("settings-advanced");
+    if (advanced) advanced.checked = advancedOn();
     if (settings.locale === "zh-CN" || settings.locale === "en") {
       if (settings.locale !== window.i18n.getLocale()) window.i18n.setLocale(settings.locale);
       return;
@@ -1006,6 +1074,15 @@ function bindUpdates() {
     save.onclick = () => {
       const updateUrl = $("update-url") ? $("update-url").value.trim() : "";
       api("/api/settings", { method: "POST", body: JSON.stringify({ update_url: updateUrl }) }).catch(showError);
+    };
+  }
+  const advanced = $("settings-advanced");
+  if (advanced) {
+    advanced.checked = advancedOn();
+    advanced.onchange = () => {
+      try { localStorage.setItem("lora-advanced", advanced.checked ? "1" : "0"); } catch (error) { /* 本机存储不可用时只影响这一页 */ }
+      if (state.view === "consolidate") renderStages();
+      if (state.view === "chat" && state.currentId) openConversation(state.currentId, false).catch(() => {});
     };
   }
   const check = $("settings-check");

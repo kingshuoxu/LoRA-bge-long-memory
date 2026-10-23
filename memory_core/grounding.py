@@ -68,7 +68,9 @@ def _de_topic(text: str, entity: str) -> str:
             return ""
         chunk = matched.group(1)
         chunk = re.split(r"是|叫|吗|呢|吧|什么|哪|多少|几", chunk)[0]
-        return re.sub(r"在$", "", chunk)
+        chunk = re.split(r"位于|在", chunk)[0]
+        chunk = re.sub(r"不+$", "", chunk)
+        return chunk.strip("的")
     matched = re.search(
         re.escape(entity) + r"(?:'s|’s)\s+([A-Za-z][\w' -]{0,48})",
         text,
@@ -139,12 +141,14 @@ def _extra_property(text: str) -> str:
             return "是否电动"
         if any(mark in text for mark in ("多大", "几岁", "多少岁", "年龄")):
             return "年龄"
+        if "多高" in text or "身高" in text:
+            return "身高"
         if "妹妹" in text:
             return "妹妹的名字"
         if "电话" in text or "手机" in text:
             return "电话"
-        if "老家" in text or "家乡" in text:
-            return "老家"
+        if "邮箱" in text or "邮件" in text:
+            return "邮箱"
         return ""
     lowered = text.casefold()
     if "breed" in lowered:
@@ -155,12 +159,14 @@ def _extra_property(text: str) -> str:
         return "whether it is electric"
     if re.search(r"\bhow old\b", lowered) or re.search(r"\bage\b", lowered):
         return "age"
+    if re.search(r"\bhow tall\b", lowered) or re.search(r"\bheight\b", lowered):
+        return "height"
     if "sister" in lowered:
         return "sister's name"
     if "phone" in lowered:
         return "phone number"
-    if "hometown" in lowered:
-        return "hometown"
+    if re.search(r"\be-?mail\b", lowered):
+        return "email address"
     return ""
 
 
@@ -253,18 +259,55 @@ def overview_reply(entity: str, facts: list[dict], missing: str = "") -> str:
     return f"{head}其余的不在记忆里。"
 
 
+def _topic_piece(text: str, entity: str) -> str:
+    extra = _extra_property(text)
+    if extra:
+        return extra
+    topic = _de_topic(text, entity)
+    if topic and not _overview_tail(topic):
+        return topic
+    rest = text
+    if entity:
+        rest = rest.replace(entity, "")
+    if has_cjk(text):
+        rest = re.sub(r"[的是叫吗呢吧什么哪谁多少几？?，。]", "", rest)
+        rest = re.split(r"位于|在", rest)[0]
+        rest = re.sub(r"不+$", "", rest).strip()
+        return rest[:12]
+    rest = re.sub(r"\b(what|where|who|which|when|how|is|are|was|were|does|do|did|the|a|an|of|about)\b", " ", rest, flags=re.IGNORECASE)
+    rest = re.sub(r"[^A-Za-z0-9' -]", " ", rest)
+    rest = re.sub(r"\s+", " ", rest).strip()
+    return rest[:48]
+
+
+def abstain_reply(entity: str, text: str) -> str:
+    """没记住的属性只说不在记忆里，不把别的取值写进回答。"""
+    topic = _topic_piece(text, entity)
+    english = not has_cjk(text)
+    label = _label(entity, english)
+    if english:
+        if topic:
+            return f"{topic} is not in memory."
+        return f"I don't have that stored about {label}."
+    if topic:
+        return f"{topic}不在记忆里。"
+    return f"没有存过关于{label}的这件事。"
+
+
 def acknowledge_statement(fact: dict[str, Any]) -> str:
     """陈述句的确认。不复读成孤零零的取值，也不说已经训练好。"""
     entity = str(fact.get("entity") or "").strip()
-    attr = str(fact.get("attr") or "").strip()
+    attr = str(fact.get("attr") or "").strip().replace("的的", "的")
     value = str(fact.get("value") or "").strip()
     if has_cjk(f"{entity}{attr}{value}"):
         who = "你" if entity == "我" else entity
         if attr.endswith("的名字"):
             head = attr[: -len("的名字")]
             return f"好，{who}的{head}叫{value}。"
-        if "住" in attr:
+        if "住" in attr and "家乡" not in attr:
             return f"好，{who}住在{value}。"
+        if attr.startswith(("最", "比较", "非常")):
+            return f"好，{who}{attr}是{value}。"
         return f"好，{who}的{attr}是{value}。"
     if entity.casefold() in {"i", "me"}:
         return f"Got it, your {attr} is {value}."
@@ -346,15 +389,123 @@ def ground_if_unknown(
         if expert is not None and mentioned:
             name = mentioned[0]
             facts = _active_facts(expert, name)
-            return overview_reply(name, facts, missing=missing_topic(content, name, facts)), expert, facts
+            return abstain_reply(name, content), expert, facts
     for name in names:
         expert, facts = gather_facts(experts, name)
         if expert is None:
             continue
         if not concerns_entity(content, name, facts):
             continue
-        return overview_reply(name, facts, missing=missing_topic(content, name, facts)), expert, facts
+        return abstain_reply(name, content), expert, facts
     return None
+
+
+def _short_object(query: str, heads: list[str]) -> bool:
+    """问句里的事物是事实事物名的较短后缀。车对得上汽车，单车对不上自行车。"""
+    if not any(has_cjk(head) for head in heads):
+        return False
+    from memory_core.paraphrase import _chunk_object
+
+    for chunk in re.findall(r"的([\u4e00-\u9fff]{1,8})", query):
+        piece = _chunk_object(chunk)
+        if not piece:
+            continue
+        if any(has_cjk(head) and len(head) > len(piece) and head.endswith(piece) for head in heads):
+            return True
+    return False
+
+
+def _pick_fact(query: str, facts: list[dict]) -> dict | None:
+    from memory_core.paraphrase import _heads_in, _named_other_object, _object_heads, property_conflict
+    from memory_core.relations import fact_relations, query_relations
+
+    asked = query_relations(query)
+    ranked: list[tuple[int, dict]] = []
+    for fact in facts:
+        attr = str(fact.get("attr") or "")
+        statement = str(fact.get("statement") or "")
+        have = fact_relations(attr, statement)
+        if asked and not (asked & have):
+            continue
+        if property_conflict(query, attr):
+            continue
+        heads = _object_heads(attr)
+        entity = str(fact.get("entity") or "")
+        short = bool(heads and _short_object(query, heads))
+        if heads and not _heads_in(query, heads) and not short:
+            # 会弹古筝并不写出「乐器」，但仍是同一关系，可以和已存的乐器取值比较。
+            loose = asked & {
+                "residence",
+                "origin",
+                "occupation",
+                "founding",
+                "headquarters",
+                "founder",
+                "headcount",
+                "instrument",
+            }
+            if _named_other_object(query, attr, entity) or not loose:
+                continue
+        score = len(asked & have)
+        if "founder" in (asked & have) and any(mark in query for mark in ("谁", "who", "Whom")):
+            score += 3
+        if "name" in (asked & have):
+            score += 1
+        if not asked and heads and (_heads_in(query, heads) or short):
+            score += 1
+        ranked.append((score, fact))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    if not asked and ranked[0][0] <= 0:
+        return None
+    return ranked[0][1]
+
+
+def resolve_stored_reply(
+    content: str,
+    experts: list[Any],
+    mentions: list[str] | None = None,
+) -> tuple[str, Any, list[dict], str] | None:
+    """已知实体或只被提到过的实体，只从记忆回答，不交给基座。
+
+    开放问句列出已存事实。具体问句只给对上的取值，或一句不借用其他取值的拒答。
+    问句没有点到这类实体时返回 None，调用方再决定要不要用基座。
+    """
+    from memory_core.correct import utterance_is_question
+    from memory_core.paraphrase import is_polar, polar_reply_from_fact
+
+    mentions = list(mentions or [])
+    names = sorted(known_entity_names(content, experts), key=len, reverse=True)
+    hinted = []
+    for name in sorted(mentions, key=len, reverse=True):
+        if name and name not in names and entity_mentioned(name, content):
+            hinted.append(name)
+    if not names and not hinted:
+        return None
+    if not utterance_is_question(content) and not any(open_entity_question(content, name) for name in names + hinted):
+        return None
+    if not names:
+        return abstain_reply(hinted[0], content), None, [], "entity_grounded"
+    name = names[0]
+    expert, facts = gather_facts(experts, name)
+    if expert is None:
+        return abstain_reply(name, content), None, [], "entity_grounded"
+    if open_entity_question(content, name):
+        return overview_reply(name, facts), expert, facts, "entity_overview"
+    fact = _pick_fact(content, facts)
+    if is_polar(content):
+        if fact is None:
+            return abstain_reply(name, content), expert, [], "entity_grounded"
+        reply = polar_reply_from_fact(content, fact)
+        if not reply:
+            return abstain_reply(name, content), expert, [], "entity_grounded"
+        return reply, expert, [fact], "entity_first"
+    if fact is not None:
+        value = str(fact.get("value") or fact.get("answer") or "").strip()
+        if value:
+            return value, expert, [fact], "entity_first"
+    return abstain_reply(name, content), expert, [], "entity_grounded"
 
 
 def matched_rows(facts: list[dict]) -> list[dict]:

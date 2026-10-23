@@ -172,6 +172,26 @@ _QUESTION_VALUES = {
 }
 
 
+_CORRECTION_MARK = re.compile(
+    r"不是|不叫|记错|改成|不对|其实|actually|incorrect|\bnot\b|isn['’]t|wasn['’]t",
+    re.IGNORECASE,
+)
+
+
+def _speaker_only(text: str) -> bool:
+    """抽出来的实体全是说话人自己。这种句子默认不是在改别人的事实。"""
+    from memory_core.extract import pattern_extract
+
+    facts = pattern_extract(text)
+    if not facts:
+        return False
+    return all(str(fact.get("entity") or "").casefold() in {"我", "i", "me"} for fact in facts)
+
+
+def _correction_mark(text: str) -> bool:
+    return bool(_CORRECTION_MARK.search(text or ""))
+
+
 def utterance_is_question(text: str) -> bool:
     """提问不是纠正。是非问句、反意疑问句和带问号的句子都算。"""
     raw = (text or "").strip()
@@ -578,6 +598,8 @@ def propose_from_records(
             "source_text": text or surface,
         }
 
+    if _speaker_only(text) and not _correction_mark(text):
+        return None
     if model is None or tok is None or device is None:
         model, tok, device = _default_llm()
     parsed = classify_correction(text, model, tok, device)
@@ -587,6 +609,8 @@ def propose_from_records(
     if matched is None:
         return None
     record, index, fact, score = matched
+    if _speaker_only(text) and str(fact.get("entity") or "").casefold() not in {"我", "i", "me"}:
+        return None
     old_value = str(fact.get("value") or fact.get("answer") or "")
     picked = parsed["new_value"]
     if not picked or "".join(picked.split()) == "".join(old_value.split()):

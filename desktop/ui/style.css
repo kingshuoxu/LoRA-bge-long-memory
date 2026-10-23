@@ -251,15 +251,15 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 0;
   letter-spacing: 0.02em;
   box-shadow: none;
-  display: -webkit-box;
+  display: block;
   width: 100%;
   min-width: 0;
-  white-space: normal;
+  white-space: nowrap;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
   line-height: 1.35;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 main {
   display: flex;
@@ -276,7 +276,16 @@ main {
   flex-wrap: wrap;
   padding: 20px 28px 8px;
 }
-.top h2 { margin: 0; font-size: 34px; font-weight: 600; letter-spacing: 0.04em; }
+.top h2 {
+  margin: 0;
+  max-width: min(46vw, 640px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
 .top-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .lang {
   display: flex;
@@ -445,7 +454,7 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 .stage-panel:has(#loss-card[hidden]) { grid-template-columns: 1fr; }
 .stage-panel:has(#fact-editor:not([hidden])) { grid-template-columns: 1fr; }
 .stage-panel:has(#fact-editor:not([hidden])) #loss-card { display: none !important; }
-#fact-editor { grid-column: 1 / -1; min-height: 0; overflow: auto; }
+#fact-editor { grid-column: 1 / -1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .stage-feed { display: flex; flex-direction: column; gap: 10px; overflow: auto; min-height: 0; padding-right: 4px; }
 .event {
   padding: 14px 16px;
@@ -470,9 +479,25 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 .loss-card { margin: 0; min-height: 0; }
 .loss-card svg { width: 100%; height: 260px; display: block; }
 .loss-card text { fill: #d7e3f4; font-size: 15px; font-family: var(--serif); }
-.fact { padding: 12px 0; border-bottom: 1px solid var(--line); }
-.fact .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.fact label { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; letter-spacing: 0.06em; }
+.fact {
+  position: relative;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(10, 14, 24, 0.94);
+  overflow: hidden;
+}
+.fact .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.fact label { display: block; min-width: 0; font-size: 12px; color: var(--muted); margin-top: 6px; letter-spacing: 0.06em; }
+.fact input, .fact textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+.warn {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: #f2d291;
+  background: rgba(242, 210, 145, 0.08);
+}
 .empty {
   color: var(--muted);
   padding: 28px 12px;
@@ -512,7 +537,7 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  overflow: hidden;
+  overflow: visible;
 }
 .nebula-leaders {
   position: absolute;

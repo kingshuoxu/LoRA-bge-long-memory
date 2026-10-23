@@ -63,7 +63,10 @@ def _usable(question: str, entity: str, value: str) -> bool:
     return True
 
 
-_EN_PROP = {"name", "color", "colour", "brand", "breed", "price"}
+_EN_PROP = {
+    "name", "color", "colour", "brand", "breed", "price",
+    "job", "profession", "occupation", "instrument", "hometown", "age",
+}
 _EN_STOP = {
     "the", "a", "an", "of", "where", "they", "their", "what", "which", "who",
     "when", "how", "is", "are", "does", "do", "did", "was", "were", "and",
@@ -116,8 +119,22 @@ def _query_properties(query: str) -> set[str]:
             found.add("价格")
         if "电动" in query:
             found.add("电动")
-        if any(mark in query for mark in ("住哪", "住在", "住址", "住哪儿", "居住")):
+        if any(mark in query for mark in ("住哪", "住在", "住址", "住哪儿", "居住", "现居")):
             found.add("住址")
+        if any(mark in query for mark in ("老家", "家乡", "长大", "籍贯")):
+            found.add("家乡")
+        if any(mark in query for mark in ("几岁", "多少岁", "年龄", "多大")):
+            found.add("年龄")
+        if "多高" in query or "身高" in query:
+            found.add("身高")
+        if any(mark in query for mark in ("电话", "手机", "邮箱", "邮件")):
+            found.add("联系方式")
+        if any(mark in query for mark in ("讨厌", "最恨")):
+            found.add("讨厌")
+        if any(mark in query for mark in ("职业", "工作", "谋生", "手艺")):
+            found.add("职业")
+        if any(mark in query for mark in ("乐器", "会弹", "弹什么")):
+            found.add("乐器")
         return found
     lowered = query.casefold()
     found = set()
@@ -133,8 +150,20 @@ def _query_properties(query: str) -> set[str]:
         found.add("price")
     if re.search(r"\belectric\b", lowered):
         found.add("electric")
-    if "hometown" not in lowered and re.search(r"\b(live|lives|living|address|home)\b", lowered):
+    if re.search(r"\b(hometown|originally|grew up|grow up)\b", lowered):
+        found.add("origin")
+    elif "for a living" not in lowered and re.search(r"\b(live|lives|living|address)\b", lowered):
         found.add("residence")
+    if re.search(r"\bhow old\b", lowered) or re.search(r"\bage\b", lowered):
+        found.add("age")
+    if re.search(r"\b(e-?mail|phone)\b", lowered):
+        found.add("contact")
+    if re.search(r"\b(hate|dislike|least favorite|least favourite)\b", lowered):
+        found.add("dislike")
+    if "for a living" in lowered or re.search(r"\b(job|profession|occupation)\b", lowered):
+        found.add("occupation")
+    if re.search(r"\b(instrument|play|plays)\b", lowered):
+        found.add("instrument")
     return found
 
 
@@ -149,8 +178,24 @@ def _attr_properties(attr: str) -> set[str]:
             found.add("品牌")
         if "品种" in attr:
             found.add("品种")
-        if "住址" in attr or "住" in attr:
+        if "住址" in attr or ("住" in attr and "家乡" not in attr):
             found.add("住址")
+        if any(mark in attr for mark in ("老家", "家乡", "籍贯")):
+            found.add("家乡")
+        if any(mark in attr for mark in ("年龄", "岁")):
+            found.add("年龄")
+        if "身高" in attr:
+            found.add("身高")
+        if any(mark in attr for mark in ("电话", "手机", "邮箱")):
+            found.add("联系方式")
+        if "讨厌" in attr:
+            found.add("讨厌")
+        if "喜欢" in attr and "讨厌" not in attr:
+            found.add("喜欢")
+        if any(mark in attr for mark in ("职业", "工作")):
+            found.add("职业")
+        if "乐器" in attr:
+            found.add("乐器")
         return found
     lowered = attr.casefold()
     found = set()
@@ -162,8 +207,20 @@ def _attr_properties(attr: str) -> set[str]:
         found.add("brand")
     if "breed" in lowered:
         found.add("breed")
-    if lowered == "where they live":
+    if lowered == "where they live" or "live" in lowered:
         found.add("residence")
+    if "hometown" in lowered or "origin" in lowered:
+        found.add("origin")
+    if "age" in lowered:
+        found.add("age")
+    if "email" in lowered or "phone" in lowered:
+        found.add("contact")
+    if "job" in lowered or "profession" in lowered or "occupation" in lowered:
+        found.add("occupation")
+    if "instrument" in lowered:
+        found.add("instrument")
+    if "hate" in lowered or "dislike" in lowered:
+        found.add("dislike")
     return found
 
 
@@ -184,7 +241,7 @@ def _residence_paraphrase(query: str, attr: str) -> bool:
             return False
         if "老家" in query or "家乡" in query:
             return False
-        return any(mark in query for mark in ("住", "住址", "家在", "的家"))
+        return any(mark in query for mark in ("住", "住址", "家在", "的家", "现居", "居住"))
     if attr.casefold() != "where they live":
         return False
     lowered = query.casefold()
@@ -683,8 +740,11 @@ def guessed_value(query: str) -> str | None:
             r"(?<!什)叫(.+?)(?:吗|吧)$",
             r"是不是住在(.+)$",
             r"是否住在(.+)$",
+            r"住在(.+?)(?:吗|吧)?$",
+            r"弹(.+?)(?:吗|吧)?$",
             r"是不是(.+?)(?:吗|吧)?$",
             r"是否(.+)$",
+            r"(?<!不)是(?!什么)(.+?)(?:吗|吧)$",
         )
         for pattern in patterns:
             matched = re.search(pattern, text)
@@ -700,6 +760,12 @@ def guessed_value(query: str) -> str | None:
     lives = re.search(r"\blive in\s+(.+)$", text, re.IGNORECASE)
     if lives:
         return lives.group(1).strip(" ?.!")
+    founded = re.search(r"\b(?:founded|established|started|born)\s+in\s+(.+)$", text, re.IGNORECASE)
+    if founded:
+        return founded.group(1).strip(" ?.!")
+    based = re.search(r"\b(?:based|headquartered|located)\s+in\s+(.+)$", text, re.IGNORECASE)
+    if based:
+        return based.group(1).strip(" ?.!")
     generic = re.match(r"^(?:is|isn't|was|wasn't)\s+.+?'s\s+.+?\s+(.+)$", text, re.IGNORECASE)
     if generic:
         value = generic.group(1).strip(" ?.!")
@@ -708,11 +774,24 @@ def guessed_value(query: str) -> str | None:
     return None
 
 
-def _same_value(left: str, right: str) -> bool:
-    def norm(text: str) -> str:
-        return re.sub(r"[\s的。\.]", "", text or "").casefold()
+def _norm_value(text: str) -> str:
+    return re.sub(r"[\s的。\.]", "", text or "").casefold()
 
-    return bool(left) and norm(left) == norm(right)
+
+def _same_value(left: str, right: str) -> bool:
+    return bool(left) and _norm_value(left) == _norm_value(right)
+
+
+def _values_agree(left: str, right: str) -> bool:
+    """短的一边至少两个字，并且是另一边的子串。2011 对得上 2011年，墨绿色对得上墨绿色的。"""
+    a = _norm_value(left)
+    b = _norm_value(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 2 and short in long
 
 
 def polar_reply_from_fact(query: str, fact: dict[str, Any]) -> str | None:
@@ -726,13 +805,13 @@ def polar_reply_from_fact(query: str, fact: dict[str, Any]) -> str | None:
     if _existence(query):
         return f"Yes, {value}." if english else f"有，{value}。"
     proposed = guessed_value(query)
-    if proposed and _same_value(proposed, value):
+    if proposed and _values_agree(proposed, value):
         return f"Yes, {value}." if english else f"是，{value}。"
     if proposed:
         return f"No, {value}." if english else f"不是，是{value}。"
-    if _same_value(value, value) and value.casefold() in query.casefold():
+    if value.casefold() in query.casefold():
         return f"Yes, {value}." if english else f"是，{value}。"
-    return f"Yes, {value}." if english else f"是，{value}。"
+    return None
 
 
 def adjudicate(query: str, info: dict) -> dict:
@@ -827,6 +906,8 @@ def confirm_stored_answer(query: str, info: dict, model, tok, device) -> dict:
     if not origin:
         return info
     if float(origin.get("attr_sim") or 0.0) < CONSISTENCY_ATTR:
+        return info
+    if property_conflict(query, str(origin.get("attr") or "")):
         return info
     if _value_answers(query, origin, model, tok, device) is not True:
         return info
