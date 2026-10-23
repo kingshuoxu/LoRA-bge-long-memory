@@ -404,7 +404,7 @@ main {
   align-items: end;
   padding: 0 22px 18px;
 }
-textarea, input[type="text"], .fact input, .fact textarea {
+textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   width: 100%;
   border-radius: 18px;
   border: 1px solid var(--line);
@@ -617,6 +617,28 @@ textarea, input[type="text"], .fact input, .fact textarea {
   pointer-events: none;
   z-index: 6;
 }
+.update-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin: 0 28px 8px;
+  padding: 10px 14px;
+  border: 1px solid rgba(242, 210, 145, 0.35);
+  border-radius: 16px;
+  background: rgba(12, 16, 28, 0.72);
+}
+.update-banner pre,
+#settings-changelog {
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+  font-family: var(--serif);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.settings-field { display: block; margin: 12px 0; }
+.settings-field span { display: block; margin-bottom: 6px; letter-spacing: 0.08em; }
+#update-link { color: var(--gold); }
 .modal {
   position: fixed;
   inset: 0;

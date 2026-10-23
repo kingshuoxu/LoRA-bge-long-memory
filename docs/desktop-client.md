@@ -23,33 +23,37 @@ GitHub Actions 工作流 `.github/workflows/desktop-packages.yml` 会打出这�
 |---|---|---|
 | Linux x64 | `lora-memory-linux-appimage-deb` | `.AppImage` 和 `.deb` |
 | Windows x64 | `lora-memory-windows-nsis` | NSIS 安装程序 `.exe` |
-| macOS arm64 | `lora-memory-macos-arm64-dmg` | `.dmg` |
-| macOS Intel x64 | `lora-memory-macos-x64-dmg` | `.dmg` |
+| macOS arm64 | `lora-memory-macos-arm64-dmg` | `.dmg` 和给自动更新用的 `.zip` |
+| macOS Intel x64 | `lora-memory-macos-x64-dmg` | `.dmg` 和给自动更新用的 `.zip` |
 
 安装包不含模型，也不含仓库里那五个研究专家（那些权重在 Git LFS 里）。第一次打开会下载模型。
 
 ## 第一次运行会下载的模型
 
-默认目录：
+开发模式和命令行没有设置 `LORA_MEMORY_MODELS` 时：仓库里已经有 `models/` 就用那一份，否则用 `~/.cache/lora-bge-memory/models/`。`LORA_MEMORY_MODELS` 可以改位置。国内网络下载模型可以设 `HF_ENDPOINT=https://hf-mirror.com`。
 
-- Linux：`~/.cache/lora-bge-memory/models/`
-- macOS：同上（家目录下的 `.cache`）
-- Windows：`%USERPROFILE%\.cache\lora-bge-memory\models\`
+安装包里的对话、专家和模型不在程序目录里，更新只替换程序。打包后的应用把这些都放在 Electron 的 userData：
 
-可以用环境变量 `LORA_MEMORY_MODELS` 改位置。国内网络可以设 `HF_ENDPOINT=https://hf-mirror.com`。
+- Linux：`~/.config/lora-bge-memory/`（尊重 `$XDG_CONFIG_HOME`），模型在其中的 `models/`
+- macOS：`~/Library/Application Support/lora-bge-memory/`
+- Windows：`%APPDATA%\lora-bge-memory\`
+
+第一次打开安装包时，如果新目录还缺文件，会把旧位置补过来：Linux 上是 `~/.local/share/lora-bge-memory/` 和 `~/.cache/lora-bge-memory/models/`。macOS 和 Windows 的旧目录本来就和 userData 相同。新目录里已经有的文件不会被盖掉。权重尺寸够了就不会重新下载。
+
+命令行和端到端脚本不设 `LORA_MEMORY_MIGRATE`，仍用上面的开发默认目录。`LORA_MEMORY_HOME` 可以改对话目录。
 
 | 目录 | Hugging Face 仓库 | 实测体积 |
 |---|---|---|
 | `Qwen2.5-0.5B-Instruct` | `Qwen/Qwen2.5-0.5B-Instruct` | 999,605,157 字节（约 954 MB）。其中 `model.safetensors` 为 988,097,824 字节 |
 | `bge-small-zh-v1.5` | `BAAI/bge-small-zh-v1.5` | 96,408,718 字节（约 92 MB）。其中 `model.safetensors` 为 95,827,648 字节 |
 
-两个合计约 1.05 GB（1,096,013,875 字节）。下载中断再打开会接着下。对话和专家在另一处：
+两个合计约 1.05 GB（1,096,013,875 字节）。下载中断再打开会接着下。命令行的对话和专家仍在：
 
 - Linux：`~/.local/share/lora-bge-memory/`
 - macOS：`~/Library/Application Support/lora-bge-memory/`
 - Windows：`%APPDATA%\lora-bge-memory\`
 
-`LORA_MEMORY_HOME` 可以改这个目录。
+`LORA_MEMORY_HOME` 可以改这个目录。安装包用的是上面的 userData，第一次打开会把 Linux 的这份旧目录补过去。
 
 ## 在没有 GPU 的 Ubuntu 上安装并做端到端检查
 
@@ -181,7 +185,27 @@ npx electron-builder --publish never
 
 - Linux 还需要 `fakeroot`、`dpkg`。产物在 `desktop/dist/`：AppImage 和 deb。建议在 Ubuntu 22.04 上打，glibc 更老，22.04 和 24.04 都能跑。
 - Windows 产物是 NSIS 的 `.exe`。
-- macOS arm64 用 `macos-15` 一类的 Apple Silicon runner，Intel 用 `macos-15-intel`，产物都是 `.dmg`。
+- macOS arm64 用 `macos-15` 一类的 Apple Silicon runner，Intel 用 `macos-15-intel`。产物是 `.dmg` 和 `.zip`。zip 给已签名应用的自动更新用，dmg 给手动替换。
+
+## 应用内更新
+
+安装包用 electron-updater。发布标签是 `desktop-v` 加 `desktop/package.json` 里的版本，例如 `desktop-v0.2.0`，并且是 GitHub Release 的预发布。标签推上去之后，工作流把四个系统的产物收成一份 Release，里面有 `latest.yml`、`latest-mac.yml`、`latest-linux.yml`、安装包和 blockmap。两份 macOS 的 `latest-mac.yml` 会把 `files` 合并，避免 arm64 和 x64 互相盖掉。
+
+客户端启动后，以及设置里的「检查更新」，都会去找最新的 `desktop-v*` 预发布。更新说明显示在设置和顶部提示里。Windows 的 NSIS 和 Linux 的 AppImage 在后台下载，然后点「重启并更新」。文件名里没有版本号的 AppImage 会在原地覆盖，快捷方式不用改。
+
+deb 不能原地替换。它只提示有新版本，并给出下载链接，同时把 deb 下到用户数据目录的 `updates/`。
+
+macOS 的静默更新走 Squirrel.Mac，只接受带 Developer ID 的签名，并且当前系统还要公证，否则替换后的应用会被 Gatekeeper 拦住。临时签名（`codesign -s -`，签名是 adhoc，没有 `Authority=Developer ID Application`）没有稳定的团队身份，公证也不能盖在临时签名上，所以自动更新不会生效。没有 Developer ID 时，客户端改成下载对应架构的 dmg，并提示把新应用拖进去替换。用户数据在应用包外面，替换不会清掉。
+
+GitHub 下载慢时，可以在设置里填一个镜像地址。镜像目录要和 Release 一样，放 `latest.yml`、`latest-mac.yml`、`latest-linux.yml`、blockmap、安装包，以及 `desktop-release.json`。客户端先试 GitHub，请求超时或失败再试镜像。
+
+各系统要准备的密钥：
+
+- Linux：不用密钥。AppImage 自动更新，deb 只给下载链接。
+- Windows：不用密钥也能自动更新。SmartScreen 可能提示未知发布者。要 Authenticode 签名时，把 p12 做 base64 放进 Actions secret `CSC_LINK`，密码放进 `CSC_KEY_PASSWORD`。工作流只有在 `CSC_LINK` 有值时才打开 `signAndEditExecutable`。
+- macOS：静默更新需要 Apple Developer Program 的 Developer ID Application 证书，以及公证。证书同样用 `CSC_LINK`（p12 的 base64）和 `CSC_KEY_PASSWORD`。公证二选一：`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`，或者 `APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`。这些 secret 要加在仓库的 Actions secrets 里。拉取请求默认不签名。只有 Developer ID、没有公证，在现在的 macOS 上也不够。没这些 secret 时，安装包不签名，用户按提示手动替换 dmg。
+
+已经装过、但那一版还没有更新代码的客户端，要手动装一次这个版本，之后才能在应用里更新。
 
 `packaging/build_runtime.py` 会下载 [python-build-standalone](https://github.com/astral-sh/python-build-standalone) 的 CPython 3.12.15（release `20261021`）。Linux 和 Windows 安装 CPU 版 PyTorch；macOS 安装 PyPI 上的官方包（含 MPS）。
 
@@ -223,7 +247,7 @@ Linux / Windows 安装包里的 PyTorch 是 CPU 轮子，`torch.cuda.is_availabl
 ## 已知限制
 
 - 本仓库的验证机是 Linux CPU。macOS 和 Windows 的安装包由 CI 编译并上传，没有在对应系统上打开过。
-- 安装包未签名。macOS 第一次打开需要在「隐私与安全性」里放行。Windows SmartScreen 可能提示未知发布者。
+- 没有填上面的签名 secret 时，安装包不签名。macOS 第一次打开需要在「隐私与安全性」里放行。Windows SmartScreen 可能提示未知发布者。临时签名不能让 macOS 自动更新。
 - 基座是 Qwen2.5-0.5B。巩固前请看一眼抽出的事实，小模型会漏，也会说多余的话；原文对不上的会被丢掉。
 - CPU 训练比 GPU 慢。一次只巩固少量事实是可以接受的；几十条以上会久得多。
 - 默认安装包不含 CUDA。MPS 只在 macOS 的官方 torch 里，这次没有在 Mac 上实测。

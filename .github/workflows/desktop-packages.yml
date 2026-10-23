@@ -3,6 +3,9 @@ name: Desktop packages
 on:
   pull_request:
   workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
 
 concurrency:
   group: desktop-packages-${{ github.ref }}
@@ -108,15 +111,29 @@ jobs:
 
       - name: Build installer
         working-directory: desktop
+        shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --publish never
+        run: |
+          # 没有证书时保持 signAndEditExecutable=false。填了 CSC_LINK 才签名。
+          if [ -n "${CSC_LINK:-}" ]; then
+            npx electron-builder --publish never -c.win.signAndEditExecutable=true
+          else
+            npx electron-builder --publish never
+          fi
 
       - name: Cache embedding and base models
         uses: actions/cache@v4
         with:
           path: model-cache
           key: lora-bge-models-v1
+
+      - name: AppImage upgrade keeps user data
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+        run: bash packaging/appimage-upgrade.sh
 
       - name: Packaged training check
         shell: bash
@@ -172,3 +189,46 @@ jobs:
           if-no-files-found: error
           path: desktop/dist/*.*
           retention-days: 14
+
+  publish:
+    name: publish-desktop-release
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lora-memory-*
+          path: release-artifacts
+
+      - name: Bundle release files
+        run: |
+          python -m pip install pyyaml
+          git log -1 --pretty=%s > release-notes.txt
+          python packaging/publish_desktop_release.py \
+            --artifacts release-artifacts \
+            --out release \
+            --tag "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.txt
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" --prerelease --title "$tag" --notes-file release-notes.txt release/*
+          fi

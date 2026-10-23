@@ -90,10 +90,19 @@ def make_handler(app: App):
             if method == "GET" and parts == ["settings"]:
                 return _json_bytes(load_settings(service.home))
             if method == "POST" and parts == ["settings"]:
-                locale = str(payload.get("locale") or "")
-                if locale not in {"zh-CN", "en"}:
+                locale = payload.get("locale") if "locale" in payload else None
+                update_url = payload.get("update_url") if "update_url" in payload else None
+                if locale is not None and str(locale) not in {"zh-CN", "en"}:
                     raise ServiceError("不支持的语言")
-                return _json_bytes(save_settings(service.home, locale))
+                if locale is None and update_url is None:
+                    raise ServiceError("没有要保存的设置")
+                if update_url is not None and not isinstance(update_url, str):
+                    raise ServiceError("更新地址不对")
+                return _json_bytes(save_settings(
+                    service.home,
+                    None if locale is None else str(locale),
+                    None if update_url is None else update_url,
+                ))
             if method == "POST" and parts == ["models", "download"]:
                 service.start_model_prepare()
                 return _json_bytes(service.health())

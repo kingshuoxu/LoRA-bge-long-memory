@@ -242,8 +242,12 @@ class MemoryService:
         use_repo_experts: bool | None = None,
     ):
         self.home = Path(home or default_home())
-        self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir = Path(models_dir or default_models_dir())
+        if os.environ.get("LORA_MEMORY_MIGRATE") == "1":
+            from memory_core.legacy_data import migrate_legacy
+
+            migrate_legacy(self.home, self.models_dir)
+        self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:
             use_repo_experts = repo_experts is not None or default_repo_experts() is not None

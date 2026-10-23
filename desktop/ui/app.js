@@ -13,6 +13,8 @@ const state = {
   nebulaData: null,
   star: null,
   proposal: null,
+  update: null,
+  updateDismissed: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -881,6 +883,7 @@ async function pollWork() {
 async function syncLocale() {
   try {
     const settings = await api("/api/settings");
+    if (typeof settings.update_url === "string" && $("update-url")) $("update-url").value = settings.update_url;
     if (settings.locale === "zh-CN" || settings.locale === "en") {
       if (settings.locale !== window.i18n.getLocale()) window.i18n.setLocale(settings.locale);
       return;
@@ -910,12 +913,130 @@ function bindLanguage() {
     else if (state.view === "consolidate") renderStages();
     if (state.nebula && state.nebula.refreshLabels) state.nebula.refreshLabels();
     if (state.recall && state.nebula && state.nebula.highlight) state.nebula.highlight(state.recall);
+    renderUpdate();
     refreshHealth().catch(() => {});
   });
 }
 
+function updateDetail(info) {
+  if (!info || info.status === "idle") return "";
+  if (info.status === "error") return t("settings.error", { detail: info.error || "" });
+  if (info.status === "dev") return t("settings.installedOnly");
+  if (info.status === "checking") return t("settings.checking");
+  if (info.status === "current") return t("settings.current", { version: info.current || info.version || "" });
+  if (info.status === "downloading") return t("settings.downloading", { percent: info.percent || 0 });
+  if (info.mode === "deb" && (info.status === "manual" || info.status === "available" || info.status === "downloaded")) {
+    return t("settings.manualDeb", { version: info.version || "" });
+  }
+  if (info.mode === "mac-manual" && (info.status === "manual" || info.status === "available" || info.status === "downloaded")) {
+    return t("settings.manualMac", { version: info.version || "" });
+  }
+  if (info.status === "downloaded") return t("settings.downloaded", { version: info.version || "" });
+  if (info.status === "available" || info.status === "manual") return t("settings.available", { version: info.version || "" });
+  return "";
+}
+
+function renderUpdate() {
+  const info = state.update || { status: "idle" };
+  const detail = updateDetail(info);
+  const status = $("settings-update-status");
+  if (status) status.textContent = detail;
+  const notes = String(info.notes || "");
+  for (const id of ["update-notes", "settings-changelog"]) {
+    const node = $(id);
+    if (!node) continue;
+    node.textContent = notes;
+    node.hidden = !notes;
+  }
+  const title = $("update-title");
+  if (title) title.textContent = info.version ? t("settings.available", { version: info.version }) : t("settings.title");
+  const bannerDetail = $("update-detail");
+  if (bannerDetail) bannerDetail.textContent = detail;
+  const link = $("update-link");
+  if (link) {
+    if (info.url) {
+      link.hidden = false;
+      link.href = info.url;
+      link.textContent = t("settings.download");
+    } else {
+      link.hidden = true;
+      link.removeAttribute("href");
+      link.textContent = "";
+    }
+  }
+  const canRestart = info.status === "downloaded" && ["appimage", "nsis", "mac-auto"].includes(info.mode);
+  const canManual = info.status === "manual" && Boolean(info.file || info.url);
+  for (const id of ["update-install", "settings-install"]) {
+    const button = $(id);
+    if (!button) continue;
+    button.hidden = !(canRestart || canManual);
+    if (canRestart) button.textContent = t("settings.restart");
+    else if (info.file) button.textContent = t("settings.openFile");
+    else button.textContent = t("settings.download");
+  }
+  const showBanner = ["available", "downloading", "downloaded", "manual", "error"].includes(info.status)
+    && state.updateDismissed !== `${info.status}:${info.version || ""}:${info.error || ""}`;
+  const banner = $("update-banner");
+  if (banner) banner.hidden = !showBanner;
+}
+
+function bindUpdates() {
+  const open = $("open-settings");
+  if (open) open.onclick = () => { $("settings").hidden = false; };
+  const close = $("settings-close");
+  if (close) close.onclick = () => { $("settings").hidden = true; };
+  const dismiss = $("update-dismiss");
+  if (dismiss) {
+    dismiss.onclick = () => {
+      const info = state.update || {};
+      state.updateDismissed = `${info.status}:${info.version || ""}:${info.error || ""}`;
+      renderUpdate();
+    };
+  }
+  const save = $("settings-save-mirror");
+  if (save) {
+    save.onclick = () => {
+      const updateUrl = $("update-url") ? $("update-url").value.trim() : "";
+      api("/api/settings", { method: "POST", body: JSON.stringify({ update_url: updateUrl }) }).catch(showError);
+    };
+  }
+  const check = $("settings-check");
+  if (check) {
+    check.onclick = () => {
+      if (!window.desktop) {
+        state.update = { status: "dev" };
+        state.updateDismissed = "";
+        renderUpdate();
+        $("settings").hidden = false;
+        return;
+      }
+      state.updateDismissed = "";
+      window.desktop.checkForUpdates().catch(showError);
+    };
+  }
+  const install = () => {
+    if (window.desktop) window.desktop.installUpdate().catch(showError);
+  };
+  if ($("settings-install")) $("settings-install").onclick = install;
+  if ($("update-install")) $("update-install").onclick = install;
+  if (!window.desktop) return;
+  window.desktop.onUpdateState((payload) => {
+    const previous = state.update || {};
+    if (payload && (payload.version !== previous.version || payload.status !== previous.status)) {
+      state.updateDismissed = "";
+    }
+    state.update = payload;
+    renderUpdate();
+  });
+  window.desktop.updateState().then((payload) => {
+    state.update = payload;
+    renderUpdate();
+  }).catch(() => {});
+}
+
 async function boot() {
   bindLanguage();
+  bindUpdates();
   await syncLocale();
   let opened = false;
   async function tick() {

@@ -1,8 +1,11 @@
-const { app, BrowserWindow, dialog, Menu } = require("electron");
-const { spawn } = require("child_process");
+const { app, BrowserWindow, dialog, ipcMain, Menu } = require("electron");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const updater = require("./updater");
+
+app.setName("lora-bge-memory");
 
 let backend = null;
 let mainWindow = null;
@@ -61,6 +64,7 @@ function waitForReady(child) {
 
 function memoryHome() {
   if (process.env.LORA_MEMORY_HOME) return process.env.LORA_MEMORY_HOME;
+  if (app.isPackaged) return app.getPath("userData");
   if (process.platform === "win32") return path.join(process.env.APPDATA || "", "lora-bge-memory");
   if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "lora-bge-memory");
   return path.join(os.homedir(), ".local", "share", "lora-bge-memory");
@@ -113,7 +117,11 @@ async function createWindow(port) {
     title: readLocale() === "en" ? "LoRA Long Memory" : "LoRA 长记忆",
     backgroundColor: "#070910",
     icon: path.join(findUi(), "icon.png"),
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.js"),
+    },
   });
   await mainWindow.loadURL(`http://127.0.0.1:${port}/`);
   if (process.env.LORA_MEMORY_SCREENSHOT) {
@@ -135,6 +143,72 @@ function stopBackend() {
   }
 }
 
+function packagedEnv(env) {
+  if (!app.isPackaged) return env;
+  const home = app.getPath("userData");
+  return {
+    ...env,
+    LORA_MEMORY_HOME: home,
+    LORA_MEMORY_MODELS: path.join(home, "models"),
+    LORA_MEMORY_MIGRATE: "1",
+  };
+}
+
+function stampUpgrade() {
+  const home = app.getPath("userData");
+  const marker = fs.readFileSync(path.join(home, "conversations.sqlite"));
+  if (!marker.includes(Buffer.from("UPGRADE_KEEP"))) {
+    console.error("UPGRADE_STAMP missing marker");
+    app.exit(2);
+    return;
+  }
+  const sentinel = path.join(home, "models", "sentinel.txt");
+  if (!fs.existsSync(sentinel) || fs.readFileSync(sentinel, "utf8").trim() !== "keep") {
+    console.error("UPGRADE_STAMP missing sentinel");
+    app.exit(3);
+    return;
+  }
+  const models = path.join(home, "models");
+  const qwen = path.join(models, "Qwen2.5-0.5B-Instruct", "model.safetensors");
+  let modelsChecked = false;
+  let modelsReady = false;
+  if (exists(qwen) && fs.statSync(qwen).size >= 500_000_000) {
+    modelsChecked = true;
+    const result = spawnSync(findPython(), ["-c", [
+      "from memory_core.models_mgr import ensure_models",
+      "ensure_models(__import__('os').environ['LORA_MEMORY_MODELS'])",
+      "print('MODELS_OK')",
+    ].join("\n")], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PYTHONPATH: findAppCode(),
+        LORA_MEMORY_MODELS: models,
+        HF_HUB_OFFLINE: "1",
+        HF_HUB_DISABLE_TELEMETRY: "1",
+        PYTHONUNBUFFERED: "1",
+      },
+    });
+    if (result.status !== 0 || !String(result.stdout || "").includes("MODELS_OK")) {
+      console.error(result.stdout || "", result.stderr || "");
+      app.exit(4);
+      return;
+    }
+    modelsReady = true;
+  }
+  fs.writeFileSync(path.join(home, "upgrade-stamp.json"), JSON.stringify({
+    version: app.getVersion(),
+    modelsChecked,
+    modelsReady,
+  }));
+  console.log("UPGRADE_STAMP_OK", app.getVersion());
+  app.exit(0);
+}
+
+ipcMain.handle("update:get", () => updater.state());
+ipcMain.handle("update:check", () => updater.checkForUpdates());
+ipcMain.handle("update:install", () => updater.installUpdate());
+
 app.on("before-quit", stopBackend);
 app.on("window-all-closed", () => {
   stopBackend();
@@ -142,6 +216,20 @@ app.on("window-all-closed", () => {
 });
 
 app.whenReady().then(async () => {
+  const smoke = process.argv.includes("--upgrade-smoke");
+  if (process.env.LORA_MEMORY_UPGRADE_STAMP === "1" && !smoke) {
+    stampUpgrade();
+    return;
+  }
+  if (smoke) {
+    const timer = setTimeout(() => {
+      console.error("UPGRADE_SMOKE timeout");
+      app.exit(1);
+    }, 180000);
+    await updater.runUpgradeSmoke();
+    clearTimeout(timer);
+    return;
+  }
   installMenu();
   setInterval(installMenu, 1000);
   const python = findPython();
@@ -156,13 +244,13 @@ app.whenReady().then(async () => {
     child.on("exit", (code) => app.exit(code == null ? 1 : code));
     return;
   }
-  const env = {
+  const env = packagedEnv({
     ...process.env,
     PYTHONPATH: appCode,
     PYTHONUNBUFFERED: "1",
     LORA_MEMORY_UI: ui,
     HF_HUB_DISABLE_TELEMETRY: "1",
-  };
+  });
   if (process.platform === "linux" && process.resourcesPath) {
     const libDir = path.join(process.resourcesPath, "runtime", "lib");
     if (exists(libDir)) {
@@ -173,6 +261,10 @@ app.whenReady().then(async () => {
   try {
     const port = await waitForReady(backend);
     await createWindow(port);
+    updater.attach(mainWindow);
+    if (app.isPackaged) {
+      setTimeout(() => updater.checkForUpdates().catch((err) => console.error(err)), 4000);
+    }
   } catch (err) {
     dialog.showErrorBox("LoRA 长记忆", String(err && err.message ? err.message : err));
     app.exit(1);

@@ -24,7 +24,9 @@ function visibleSource() {
       const rect = el.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
     };
+    const present = (id) => Boolean(document.getElementById(id));
     const before = { modal: visible("modal"), boot: visible("boot"), app: visible("app") };
+    const extras = ["settings", "update-banner"].map((id) => ({ id, present: present(id), visible: visible(id) }));
     document.getElementById("boot").hidden = true;
     document.getElementById("app").hidden = false;
     document.getElementById("modal").hidden = true;
@@ -33,7 +35,12 @@ function visibleSource() {
     const modalShown = visible("modal");
     document.getElementById("modal").hidden = true;
     const closed = !visible("modal");
-    return { before, after, modalShown, closed };
+    document.getElementById("open-settings").click();
+    const settingsOpen = visible("settings");
+    document.getElementById("settings-close").click();
+    const settingsClosed = !visible("settings");
+    const modalStillClosed = !visible("modal");
+    return { before, after, modalShown, closed, extras, settingsOpen, settingsClosed, modalStillClosed };
   })()`;
 }
 
@@ -48,13 +55,18 @@ app.whenReady().then(async () => {
   await win.loadFile(path.join(__dirname, "ui", "index.html"));
   const result = await win.webContents.executeJavaScript(visibleSource());
   clearTimeout(timer);
+  const extraFail = !result.extras || result.extras.some((item) => !item.present || item.visible);
   const fail = result.before.modal
     || !result.before.boot
     || result.after.modal
     || result.after.boot
     || !result.after.app
     || !result.modalShown
-    || !result.closed;
+    || !result.closed
+    || extraFail
+    || !result.settingsOpen
+    || !result.settingsClosed
+    || !result.modalStillClosed;
   console.log(JSON.stringify(result));
   if (fail) {
     console.error("GUI_SMOKE_FAIL");

@@ -19,20 +19,71 @@
     "productName": "LoRA-bge-memory",
     "executableName": "lora-bge-memory",
     "asar": true,
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["main.js", "package.json"],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "updater.js",
+      "update-plan.js",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kingshuoxu",
+        "repo": "LoRA-bge-long-memory",
+        "releaseType": "prerelease"
+      }
+    ],
     "extraResources": [
-      { "from": "../packaging/runtime", "to": "runtime" },
-      { "from": "../memory_core", "to": "app/memory_core", "filter": ["**/*.py"] },
-      { "from": "../backend", "to": "app/backend", "filter": ["**/*.py"] },
-      { "from": "../scripts", "to": "app/scripts", "filter": ["**/*.py"] },
-      { "from": "ui", "to": "ui" },
-      { "from": "../packaging/e2e-check.sh", "to": "e2e-check.sh" },
-      { "from": "../packaging/e2e-check.cmd", "to": "e2e-check.cmd" }
+      {
+        "from": "../packaging/runtime",
+        "to": "runtime"
+      },
+      {
+        "from": "../memory_core",
+        "to": "app/memory_core",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "../backend",
+        "to": "app/backend",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "../scripts",
+        "to": "app/scripts",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "ui",
+        "to": "ui"
+      },
+      {
+        "from": "../packaging/e2e-check.sh",
+        "to": "e2e-check.sh"
+      },
+      {
+        "from": "../packaging/e2e-check.cmd",
+        "to": "e2e-check.cmd"
+      }
     ],
     "artifactName": "LoRA-bge-memory-${version}-${os}-${arch}.${ext}",
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Utility",
       "maintainer": "LoRA-bge-long-memory",
       "synopsis": "用 LoRA 专家保存长期记忆的本地对话",
@@ -60,22 +111,30 @@
       ]
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
+      "differentialPackage": true,
       "shortcutName": "LoRA 长记忆"
     },
     "mac": {
-      "target": ["dmg"],
-      "category": "public.app-category.productivity",
-      "identity": null
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
     },
     "dmg": {
       "title": "LoRA 长记忆"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
   }
 }
