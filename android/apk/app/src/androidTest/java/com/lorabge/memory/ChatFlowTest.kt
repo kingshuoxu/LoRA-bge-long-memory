@@ -69,18 +69,20 @@ class ChatFlowTest {
         val composer = waitDesc("composer", 25_000)
         composer.click()
         val imeTop = waitForIme()
-        composer.click()
-        val field = device.findObject(By.desc("composer")) ?: composer
-        field.setText("我的猫猫叫咪咪")
-        device.waitForIdle()
-        val bottom = (device.findObject(By.desc("composer")) ?: field).visibleBounds.bottom
+        fillComposer("我的猫猫叫咪咪")
+        val bottom = (device.findObject(By.desc("composer")) ?: composer).visibleBounds.bottom
         File(shots, "ime-window.txt").writeText(device.executeShellCommand("dumpsys window"))
         shot("01-ime.png")
         assertTrue("input bottom $bottom is under ime $imeTop", bottom <= imeTop + 8)
 
-        field.setText("__e2e_wait__")
-        clickDesc("send")
-        val first = waitDescPrefix("typing-", 8_000).contentDescription
+        sendComposer("__e2e_wait__")
+        val typingNode = device.wait(Until.findObject(By.descStartsWith("typing-")), 8_000)
+        if (typingNode == null) {
+            val hierarchy = File(shots, "typing-missing.xml")
+            device.dumpWindowHierarchy(hierarchy)
+            error("missing typing-\n" + hierarchy.readText().take(2500))
+        }
+        val first = typingNode.contentDescription
         val changed = waitUntil(6_000) {
             device.findObject(By.descStartsWith("typing-"))?.contentDescription?.let { it != first } == true
         }
@@ -89,9 +91,7 @@ class ChatFlowTest {
         shot("02-typing.png")
         waitUntil(8_000) { device.findObject(By.descStartsWith("typing-")) == null }
 
-        val again = waitDesc("composer", 8_000)
-        again.setText("我的猫猫叫咪咪")
-        clickDesc("send")
+        sendComposer("我的猫猫叫咪咪")
         waitText("好的，记住了，你的猫叫咪咪。", 8_000)
         if (imeTopOrNull() != null) device.pressBack()
         shot("03-ack.png")
@@ -137,10 +137,76 @@ class ChatFlowTest {
     }
 
     private fun ask(question: String, expect: String) {
-        val composer = waitDesc("composer", 8_000)
-        composer.setText(question)
-        clickDesc("send")
+        sendComposer(question)
         waitText(expect, 8_000)
+    }
+
+    /**
+     * setText 的无障碍动作回到 Compose 状态之前，点发送会把上一句发出去。
+     * 上一句若是“我的猫猫叫咪咪”，会直接记事实，根本不会出现 typing-。
+     */
+    private fun fillComposer(text: String) {
+        val deadline = System.currentTimeMillis() + 8_000
+        var last = ""
+        while (System.currentTimeMillis() < deadline) {
+            val node = device.findObject(By.desc("composer"))
+            if (node == null) {
+                Thread.sleep(200)
+                continue
+            }
+            try {
+                node.click()
+                node.setText(text)
+            } catch (ex: Throwable) {
+                last = ex.javaClass.simpleName + " " + ex.message.orEmpty()
+                Thread.sleep(200)
+                continue
+            }
+            device.waitForIdle(1_000)
+            last = composerText()
+            if (last.contains(text)) return
+            Thread.sleep(200)
+        }
+        val hierarchy = File(shots, "composer-stuck.xml")
+        device.dumpWindowHierarchy(hierarchy)
+        error("composer never held [$text], saw [$last]\n" + hierarchy.readText().take(2000))
+    }
+
+    private fun sendComposer(text: String) {
+        val deadline = System.currentTimeMillis() + 12_000
+        var last = ""
+        while (System.currentTimeMillis() < deadline) {
+            fillComposer(text)
+            if (!composerText().contains(text)) continue
+            clickDesc("send")
+            device.waitForIdle(1_000)
+            val cleared = waitUntil(2_000) { !composerText().contains(text) }
+            val posted = device.findObject(By.textContains(text)) != null
+            if (cleared && posted) return
+            last = "cleared=$cleared posted=$posted text=${composerText()}"
+        }
+        val hierarchy = File(shots, "send-stuck.xml")
+        device.dumpWindowHierarchy(hierarchy)
+        error("send did not post [$text] ($last)\n" + hierarchy.readText().take(2000))
+    }
+
+    private fun composerText(): String {
+        val node = device.findObject(By.desc("composer")) ?: return ""
+        return try {
+            collectText(node)
+        } catch (_: Throwable) {
+            node.text.orEmpty()
+        }
+    }
+
+    private fun collectText(node: UiObject2): String {
+        val parts = ArrayList<String>()
+        if (!node.text.isNullOrBlank()) parts.add(node.text)
+        for (child in node.children) {
+            val nested = collectText(child)
+            if (nested.isNotBlank()) parts.add(nested)
+        }
+        return parts.joinToString(" ")
     }
 
     private fun waitForIme(): Int {
@@ -174,10 +240,6 @@ class ChatFlowTest {
 
     private fun waitDesc(desc: String, timeoutMs: Long): UiObject2 {
         return device.wait(Until.findObject(By.desc(desc)), timeoutMs) ?: error("missing $desc")
-    }
-
-    private fun waitDescPrefix(prefix: String, timeoutMs: Long): UiObject2 {
-        return device.wait(Until.findObject(By.descStartsWith(prefix)), timeoutMs) ?: error("missing $prefix")
     }
 
     private fun clickDesc(desc: String) {

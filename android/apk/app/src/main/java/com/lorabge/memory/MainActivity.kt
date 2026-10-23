@@ -129,6 +129,7 @@ private fun PhoneApp(
         if (Build.VERSION.SDK_INT >= 28) info.longVersionCode.toInt() else @Suppress("DEPRECATION") info.versionCode
     }
     LaunchedEffect(packageVersion) {
+        if (e2e) return@LaunchedEffect
         val langNow = lang
         Thread {
             val offer = try {

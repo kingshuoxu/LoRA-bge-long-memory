@@ -170,11 +170,23 @@ echo "upgrade preserved memory, models, settings; versionCode 1003"
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
+set +e
 ./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest,com.lorabge.memory.NebulaGestureTest --no-daemon
+gradle_status=$?
+set -e
+# 测试失败也要把截图和星云录像拉下来，否则 always() 上传是空的。
 mkdir -p "$STAGE/shots"
-"$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory tar -C files/e2e -cf - . >"$STAGE/shots.tar"
-tar -C "$STAGE/shots" -xf "$STAGE/shots.tar"
-"$ADB" -s "emulator-$PORT" pull /sdcard/nebula-gesture.mp4 "$STAGE/shots/nebula-gesture.mp4"
+if "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory tar -C files/e2e -cf - . >"$STAGE/shots.tar"; then
+  tar -C "$STAGE/shots" -xf "$STAGE/shots.tar" || true
+else
+  echo "没有拉到 files/e2e" >&2
+fi
+"$ADB" -s "emulator-$PORT" pull /sdcard/nebula-gesture.mp4 "$STAGE/shots/nebula-gesture.mp4" || true
+if [ "$gradle_status" -ne 0 ]; then
+  echo "仪器测试失败，已尽量保存截图和录像" >&2
+  find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true
+  exit "$gradle_status"
+fi
 for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png nebula-gesture.mp4 nebula-renderer.txt; do
   test -s "$STAGE/shots/$name"
 done
