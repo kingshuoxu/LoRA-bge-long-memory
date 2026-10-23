@@ -33,9 +33,31 @@ else
   exit 1
 fi
 
-rm -rf "${HOME}/.android/avd/${AVD}.avd" "${HOME}/.android/avd/${AVD}.ini"
-echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd -n "$AVD" -k "system-images;android-35;aosp_atd;x86_64" --force >/dev/null
-CFG="${HOME}/.android/avd/${AVD}.avd/config.ini"
+export ANDROID_AVD_HOME="$STAGE/avd-home"
+rm -rf "$ANDROID_AVD_HOME"
+mkdir -p "$ANDROID_AVD_HOME"
+AVDMANAGER=$(find "$SDK/cmdline-tools" -path '*/bin/avdmanager' | head -1)
+test -n "$AVDMANAGER"
+if ! echo no | "$AVDMANAGER" create avd -n "$AVD" -k "system-images;android-35;aosp_atd;x86_64" --force >"$STAGE/avdmanager.log" 2>&1; then
+  cat "$STAGE/avdmanager.log" >&2
+  exit 1
+fi
+CFG="$ANDROID_AVD_HOME/${AVD}.avd/config.ini"
+if [ ! -f "$CFG" ]; then
+  FOUND=$(find "$HOME/.android" "$SDK" -path "*/${AVD}.avd/config.ini" 2>/dev/null | head -1 || true)
+  if [ -n "$FOUND" ]; then
+    mkdir -p "$ANDROID_AVD_HOME/${AVD}.avd"
+    cp -a "$(dirname "$FOUND")/." "$ANDROID_AVD_HOME/${AVD}.avd/"
+    INI=$(find "$HOME/.android" "$SDK" -name "${AVD}.ini" 2>/dev/null | head -1 || true)
+    if [ -n "$INI" ]; then cp "$INI" "$ANDROID_AVD_HOME/${AVD}.ini"; fi
+  fi
+fi
+if [ ! -f "$CFG" ]; then
+  echo "avdmanager 没有写出 $CFG" >&2
+  cat "$STAGE/avdmanager.log" >&2
+  find "$ANDROID_AVD_HOME" "$HOME/.android" -name config.ini >&2 || true
+  exit 1
+fi
 # aosp_atd 的模板会去拉启动快照，并且内存只有 96M。avdmanager 写成的键没有空格，模拟器重写时又会加上空格。
 python3 - "$CFG" << 'PY'
 import pathlib, sys
@@ -135,3 +157,16 @@ printf '%s\n' "$MOD" | grep -qx 'keep-model'
 printf '%s\n' "$PREF" | grep -q 'name="keep">yes'
 test "$CODE" = "1003"
 echo "upgrade preserved memory, models, settings; versionCode 1003"
+
+"$ADB" -s "emulator-$PORT" shell settings put secure show_ime_with_hard_keyboard 1
+"$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
+"$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
+export ANDROID_SERIAL="emulator-$PORT"
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon
+mkdir -p "$STAGE/shots"
+"$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory tar -C files/e2e -cf - . >"$STAGE/shots.tar"
+tar -C "$STAGE/shots" -xf "$STAGE/shots.tar"
+for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png; do
+  test -s "$STAGE/shots/$name"
+done
+echo "emulator chat flow saved screenshots"

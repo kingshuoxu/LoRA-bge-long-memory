@@ -75,7 +75,7 @@ jobs:
 
   upgrade:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -111,8 +111,10 @@ jobs:
         run: sh android/scripts/upgrade_preserve.sh
 
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: upgrade-logs
-          path: android/out/upgrade/emulator.log
+          name: upgrade-e2e
+          path: |
+            android/out/upgrade/shots
+            android/out/upgrade/emulator.log
           if-no-files-found: ignore

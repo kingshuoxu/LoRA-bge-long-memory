@@ -83,15 +83,19 @@ class NebulaGraphTest {
 
     @Test
     fun consolidateTimelineMarksTheTrainStage() {
-        val running = stageStates(training = true, hasFact = true)
-        assertEquals("active", running[4])
-        assertEquals("done", running[3])
-        assertEquals("pending", running[5])
-        val review = stageStates(training = false, hasFact = true)
-        assertEquals("active", review[2])
-        val idle = stageStates(training = false, hasFact = false)
-        assertEquals("active", idle[0])
-        assertEquals("pending", idle[1])
+        val running = stageStates("train")
+        assertEquals("active", running[stageIds.indexOf("train")])
+        assertEquals("done", running[stageIds.indexOf("build")])
+        assertEquals("pending", running[stageIds.indexOf("recall")])
+        val review = stageStates("gate")
+        assertEquals("active", review[stageIds.indexOf("gate")])
+        assertEquals("done", review[stageIds.indexOf("extract")])
+        val idle = stageStates("")
+        assertTrue(idle.all { it == "pending" })
+        assertEquals(listOf("extract", "gate", "build", "train", "recall", "register"), stageIds)
+        assertEquals("写闸门", skyText("zh", "stage.gate"))
+        assertEquals("生成样本", skyText("zh", "stage.build"))
+        assertEquals("注册专家", skyText("zh", "stage.register"))
     }
 
     @Test

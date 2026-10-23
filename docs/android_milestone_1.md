@@ -135,7 +135,9 @@ System image must match the host architecture.
 
 上一版下载 `29fe08c` zip、GEMM 仍是纯 C++ 的绿运行:[Android APK 39895706987](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895706987)(push `61d2b0c`),同一提交的 pull request 运行 [39895710520](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895710520)。本提交改为现场编 OpenBLAS 和 Vulkan `libllama`,运行 URL 写在 PR 描述里。产物名仍是 **`lorabge-memory-arm64-debug`**。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`,LOAD 对齐 `0x4000`,并链进 `cblas_sgemm`。
 
-另有一个 `upgrade` 任务跑 `android/scripts/upgrade_preserve.sh`:在 x86_64 的 `aosp_atd` 模拟器上,用同一把钥匙安装 versionName 0.1.2(versionCode 1002,不含原生库),写入记忆、模型和 `shared_prefs`,再 `adb install -r` 0.1.3(1003),断言三样都还在。arm64 镜像在 x86 宿主上仍然起不来,所以这个测试不装正式的 arm64 APK,也不拿已发布的 0.1.2(那份签名不同,覆盖安装会失败)。发布工作流要等这个任务通过才上传 `android-v0.1.3`。这台云主机的嵌套 KVM 在 `KVM_CREATE_VCPU` 时会报 `kvm_spurious_fault`,本地起不来这个模拟器,所以覆盖安装的结果以 CI 的 `upgrade` 任务为准。
+另有一个 `upgrade` 任务跑 `android/scripts/upgrade_preserve.sh`:在 x86_64 的 `aosp_atd` 模拟器上,用同一把钥匙安装 versionName 0.1.2(versionCode 1002,不含原生库),写入记忆、模型和 `shared_prefs`,再 `adb install -r` 0.1.3(1003),断言三样都还在。接着同一台模拟器跑 `connectedDebugAndroidTest`,用真输入法检查输入栏在键盘上方,圆点在跳,巩固一条事实时能看见步数,新对话能想起这条事实,开放问题「告诉我佐雷公司相关信息」答出 1979。截图在该任务的 `upgrade-e2e` 产物里。arm64 镜像在 x86 宿主上仍然起不来,所以这个测试不装正式的 arm64 APK,也不拿已发布的 0.1.2(那份签名不同,覆盖安装会失败)。发布工作流要等这个任务通过才上传 `android-v0.1.3`。这台云主机的嵌套 KVM 在 `KVM_CREATE_VCPU` 时会报 `kvm_spurious_fault`,本地起不来这个模拟器,所以覆盖安装和这条端到端的结果以 CI 的 `upgrade` 任务为准。
+
+vivo X200 Pro 上 0.1.2 的对话不再崩溃。0.1.3 接着修键盘挡住输入栏、生成时静止的省略号、巩固停在「损失 · 0 步」、开放问题不走记忆并让基座编造佐雷公司年份,以及陈述句只回一个名字。原生路由对「告诉我佐雷公司相关信息」常在事实闸门 `abstain_fact` 或没有业务线索时不开火,界面于是把问题交给基座。现在只要问句里的名字对上 `fact_memory.json` 里的实体,就用已存事实作答,不再生成;库里没有的那一项会写「其余不在记忆里」。这次路由的 `nativeFired` / `nativeReason` / `nativeSim` 记在 `files/setup/last-route.json`,导出诊断时附在末尾。「损失 · 0 步」是因为训练要攒满 8 个微批才打出第一行 `loss=`,状态文件以前不在这一步中间更新。现在 `:train` 每秒写心跳,第一步显示「这一步还在计算 · 已过 N 秒」。
 
 这次运行的 URL 写在文末和 PR 描述里。
 

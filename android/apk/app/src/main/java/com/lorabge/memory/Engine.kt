@@ -458,7 +458,9 @@ class Engine(private val context: Context, private val store: MemoryStore) {
 
     fun diagnostics(): String {
         val version = appVersion()
-        return DeviceTune.renderDiagnostics(PhoneFacts.collect(this, version))
+        val body = DeviceTune.renderDiagnostics(PhoneFacts.collect(this, version))
+        val route = File(context.filesDir, "setup/last-route.json").takeIf { it.exists() }?.readText()?.trim().orEmpty()
+        return if (route.isEmpty()) body else body.trimEnd() + "\nlast-route:\n" + route.take(2000) + "\n"
     }
 
     fun crashNotes(): String {

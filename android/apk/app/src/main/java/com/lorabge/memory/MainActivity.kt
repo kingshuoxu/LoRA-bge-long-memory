@@ -44,13 +44,14 @@ class MainActivity : ComponentActivity() {
             startBenchmark(store)
         }
         val benchmark = intent?.getStringExtra("mode") == "benchmark" || intent?.action == TrainService.ACTION_BENCHMARK
+        val e2e = File(filesDir, "setup/e2e").exists()
         setContent {
-            var ready by remember { mutableStateOf(benchmark || !FetchService.needsSetup(this)) }
+            var ready by remember { mutableStateOf(benchmark || e2e || !FetchService.needsSetup(this)) }
             if (!ready) {
                 SetupScreen(onFinished = { ready = true })
                 return@setContent
             }
-            PhoneApp(store, engine, client, probeOnStart = !benchmark, onCleared = { ready = false }, onTrain = {
+            PhoneApp(store, engine, client, probeOnStart = !benchmark && !e2e, e2e = e2e, onCleared = { ready = false }, onTrain = {
                 if (Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED
@@ -105,6 +106,7 @@ private fun PhoneApp(
     engine: Engine,
     client: LlmClient,
     probeOnStart: Boolean,
+    e2e: Boolean,
     onTrain: () -> Unit,
     onCancel: () -> Unit,
     onExport: () -> Unit,
@@ -180,9 +182,25 @@ private fun PhoneApp(
     var value by remember { mutableStateOf("") }
     var question by remember { mutableStateOf("") }
     var answer by remember { mutableStateOf("") }
+    var attr by remember { mutableStateOf("") }
     var force by remember { mutableStateOf(false) }
+    var waitSeconds by remember { mutableIntStateOf(0) }
     val statusFile = File(store.trainDir, "status.json")
-    val training = statusFile.exists() && statusState(statusFile.readText()) == "running"
+    val trainSnap = remember(tick) { parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty()) }
+    val training = trainSnap.state == "running"
+    LaunchedEffect(generating, streaming) {
+        if (!generating || streaming.isNotBlank()) {
+            waitSeconds = 0
+            return@LaunchedEffect
+        }
+        var waited = 0
+        while (true) {
+            delay(1000)
+            if (!generating || streaming.isNotBlank()) break
+            waited += 1
+            waitSeconds = waited
+        }
+    }
     LaunchedEffect(training, tick) {
         if (!training) return@LaunchedEffect
         delay(1000)
@@ -239,6 +257,22 @@ private fun PhoneApp(
         updateVersion = updateVersion,
         updateNotes = updateNotes,
         updateMessage = updateMessage,
+        waitSeconds = waitSeconds,
+        liveMotion = true,
+        train = trainSnap,
+        pendingFacts = remember(tick, statement, experts) {
+            val noted = ArrayList<String>()
+            if (statement.isNotBlank()) noted.add(statement)
+            for (conv in store.listConversations()) {
+                val full = store.loadConversation(conv.id) ?: continue
+                for (message in full.messages) {
+                    if (message.role != "user") continue
+                    val drafted = FactNotice.draft(message.content) ?: continue
+                    noted.add(drafted.statement)
+                }
+            }
+            pendingFactLines(noted, experts.flatMap { it.facts })
+        },
     )
     SkyFrame(state) { event ->
         when (event) {
@@ -277,42 +311,86 @@ private fun PhoneApp(
                 val text = draft.trim()
                 if (text.isEmpty() || generating) return@SkyFrame
                 val conversation = current ?: store.newConversation().also { currentId = it.id }
-                val noticed = FactNotice.noticed(text)
-                if (noticed) {
-                    val guess = FactNotice.guess(text)
-                    entity = guess.entity
-                    statement = guess.statement
-                    value = guess.value
-                    pending = null
-                }
                 val now = Instant.now().toString()
                 val title = if (conversation.messages.isEmpty()) text.take(18) else conversation.title
                 val withUser = conversation.messages + ChatMessage("user", text)
                 store.saveConversation(conversation.copy(title = title, updated = now, messages = withUser))
                 draft = ""
-                generating = true
-                streaming = ""
                 tick++
                 val langNow = lang
+                if (e2e && text == "__e2e_wait__") {
+                    generating = true
+                    streaming = ""
+                    Thread {
+                        Thread.sleep(4200)
+                        streaming = "好"
+                        Thread.sleep(300)
+                        val saved = store.loadConversation(conversation.id)
+                        val base = saved ?: conversation.copy(title = title, updated = now, messages = withUser)
+                        val messages = base.messages + ChatMessage("assistant", "好")
+                        store.saveConversation(base.copy(updated = Instant.now().toString(), messages = messages))
+                        generating = false
+                        streaming = ""
+                        tick++
+                    }.start()
+                    return@SkyFrame
+                }
+                val fact = FactNotice.draft(text)
+                val noticed = fact != null || FactNotice.noticed(text)
+                if (noticed) {
+                    if (fact != null) {
+                        entity = fact.entity
+                        attr = fact.attr
+                        statement = fact.statement
+                        value = fact.value
+                        question = fact.question
+                        answer = fact.answer
+                        pending = null
+                    } else if (looksLikeCorrection(text)) {
+                        pending = guessCorrection(text)
+                    }
+                    val reply = if (fact != null) {
+                        FactNotice.acknowledge(fact, langNow)
+                    } else if (langNow == "en") {
+                        "Okay, I'll remember."
+                    } else {
+                        "好的，记住了。"
+                    }
+                    val saved = store.loadConversation(conversation.id)
+                    val base = saved ?: conversation.copy(title = title, updated = now, messages = withUser)
+                    val messages = base.messages + ChatMessage("assistant", reply, noticed = true)
+                    store.saveConversation(base.copy(updated = Instant.now().toString(), messages = messages))
+                    tick++
+                    return@SkyFrame
+                }
+                generating = true
+                streaming = ""
+                val grounded = EntityGround.reply(text, EntityGround.load(store), langNow)
                 Thread {
                     val hit = try {
                         client.route(text)
                     } catch (ex: Throwable) {
                         RouteHit(null, false, ex.message ?: "route", 0.0)
                     }
-                    val trace = NebulaGraph.recall(store, langNow, hit.expert, hit.fired, hit.sim, text)
+                    writeLastRoute(context, text, hit, grounded)
+                    val expert = grounded?.expert ?: if (hit.fired) hit.expert else null
+                    val reason = grounded?.reason ?: hit.reason
+                    val trace = NebulaGraph.recall(store, langNow, expert, expert != null, hit.sim, text)
                     recallJson = trace
                     recallBanner = org.json.JSONObject(trace).optString("banner")
-                    val expert = if (hit.fired) hit.expert else null
-                    val reply = try {
-                        client.answer(text, expert) { streaming = it }
-                    } catch (ex: Throwable) {
-                        if (langNow == "en") "Couldn't generate" else "生成失败"
+                    val reply = if (grounded != null) {
+                        grounded.answer
+                    } else {
+                        try {
+                            client.answer(text, expert) { streaming = it }
+                        } catch (ex: Throwable) {
+                            if (langNow == "en") "Couldn't generate" else "生成失败"
+                        }
                     }
                     val saved = store.loadConversation(conversation.id) ?: withUser.let {
                         conversation.copy(title = title, updated = now, messages = withUser)
                     }
-                    val messages = saved.messages + ChatMessage("assistant", reply, expert, hit.reason, noticed)
+                    val messages = saved.messages + ChatMessage("assistant", reply, expert, reason, noticed = false)
                     store.saveConversation(saved.copy(updated = Instant.now().toString(), messages = messages))
                     generating = false
                     streaming = ""
@@ -349,7 +427,15 @@ private fun PhoneApp(
             SkyEvent.Train -> {
                 if (entity.isBlank() || statement.isBlank() || value.isBlank()) return@SkyFrame
                 val qa = if (question.isBlank()) emptyList() else listOf(question to answer.ifBlank { value })
-                val fact = ReviewedFact(entity.trim(), statement.trim(), value.trim(), qa, emptyList(), selected = true)
+                val fact = ReviewedFact(
+                    entity.trim(),
+                    statement.trim(),
+                    value.trim(),
+                    qa,
+                    emptyList(),
+                    attr = attr.trim(),
+                    selected = true,
+                )
                 TrainService.writeJob(store, "expert_" + System.currentTimeMillis().toString().takeLast(6), listOf(fact), force)
                 onTrain()
                 tick++
@@ -512,8 +598,30 @@ private fun clearDownloadedModels(context: android.content.Context) {
     File(context.filesDir, "setup/status.json").delete()
 }
 
-private fun statusState(raw: String): String = try {
-    JSONObject(raw).optString("state")
-} catch (_: Throwable) {
-    ""
+internal fun pendingFactLines(noted: List<String>, stored: List<String>): List<String> {
+    return noted.map { it.trim() }.filter { it.isNotBlank() }.distinct().filter { line ->
+        val bare = line.trimEnd('。', '.', '！', '!')
+        stored.none { known ->
+            val other = known.trim().trimEnd('。', '.', '！', '!')
+            other == bare || other.contains(bare) || bare.contains(other)
+        }
+    }
+}
+
+internal fun lastRouteJson(query: String, hit: RouteHit, grounded: GroundedReply?): String {
+    return JSONObject()
+        .put("query", query)
+        .put("nativeFired", hit.fired)
+        .put("nativeReason", hit.reason)
+        .put("nativeSim", hit.sim)
+        .put("grounded", grounded != null)
+        .put("expert", grounded?.expert ?: hit.expert.orEmpty())
+        .put("entity", grounded?.entity.orEmpty())
+        .put("reason", grounded?.reason ?: hit.reason)
+        .toString()
+}
+
+private fun writeLastRoute(context: android.content.Context, query: String, hit: RouteHit, grounded: GroundedReply?) {
+    val dir = File(context.filesDir, "setup").apply { mkdirs() }
+    File(dir, "last-route.json").writeText(lastRouteJson(query, hit, grounded))
 }

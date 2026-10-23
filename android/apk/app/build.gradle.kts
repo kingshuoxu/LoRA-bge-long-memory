@@ -15,6 +15,9 @@ fun releaseVersionCode(versionName: String): Int {
 
 val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.3"
 val skipNative = findProperty("lorabge.skipNative") == "true"
+fun secretOr(name: String, fallback: String): String =
+    System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
+
 val keystoreB64 = System.getenv("ANDROID_KEYSTORE_B64").orEmpty()
 val signingStore = if (keystoreB64.isNotBlank()) {
     val out = layout.buildDirectory.file("ci-keystore.jks").get().asFile
@@ -52,9 +55,9 @@ android {
     signingConfigs {
         create("stable") {
             storeFile = signingStore
-            storePassword = System.getenv("ANDROID_KEYSTORE_PASS") ?: "lorabge-test-only"
-            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "lorabge-test"
-            keyPassword = System.getenv("ANDROID_KEY_PASS") ?: "lorabge-test-only"
+            storePassword = secretOr("ANDROID_KEYSTORE_PASS", "lorabge-test-only")
+            keyAlias = secretOr("ANDROID_KEY_ALIAS", "lorabge-test")
+            keyPassword = secretOr("ANDROID_KEY_PASS", "lorabge-test-only")
         }
     }
 
@@ -109,8 +112,13 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
 
 tasks.withType<Test> {

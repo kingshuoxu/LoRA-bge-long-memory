@@ -85,6 +85,17 @@ class TrainService : Service() {
             }
             val jsonl = File(store.trainDir, "facts.jsonl")
             jsonl.writeText(FactExpand.toFactsJsonl(expanded))
+            val expert = job.getString("expert")
+            val epochs = job.optInt("epochs", 4)
+            val started = System.currentTimeMillis()
+            publish(status, "running", "extract", 0, 0, epochs, null, started, "抽取事实", "")
+            publish(status, "running", "gate", 0, 0, epochs, null, started, "写闸门", "")
+            if (File(store.trainDir, "simulate").exists()) {
+                simulateTrain(store, status, expanded, expert, epochs, started)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
             val bin = File(applicationInfo.nativeLibraryDir, "libtrain-mft.so")
             val internal = File(filesDir, "models/Qwen2.5-0.5B-Instruct")
             val external = File(getExternalFilesDir(null), "models/Qwen2.5-0.5B-Instruct")
@@ -96,7 +107,6 @@ class TrainService : Service() {
                 stopSelf()
                 return
             }
-            val expert = job.getString("expert")
             val outDir = File(store.trainDir, "mft").apply { mkdirs() }
             val adapter = File(store.trainDir, "$expert.gguf")
             val rank = job.optInt("rank", 32)
@@ -120,7 +130,7 @@ class TrainService : Service() {
                 "--seed", "42",
                 "--save_every", "20",
             )
-            writeStatus(status, "running", "开始训练 ${expanded.size} 条事实")
+            publish(status, "running", "build", 0, 0, epochs, null, started, "生成样本 ${expanded.size} 条", "")
             val log = File(store.trainDir, "train.log")
             val telemetry = File(store.trainDir, "telemetry.tsv")
             telemetry.writeText("wall_s\trss_kb\tthermal\tbattery\n")
@@ -134,28 +144,55 @@ class TrainService : Service() {
                     environment()["OMP_NUM_THREADS"] = "1"
                 }
                 .start()
-            val started = System.currentTimeMillis()
-            proc.inputStream.bufferedReader().useLines { lines ->
-                for (line in lines) {
-                    log.appendText(line + "\n")
-                    if (cancel.exists()) {
-                        proc.destroy()
-                        writeStatus(status, "cancelled", "已取消,检查点留在 ${outDir.name}")
-                        break
+            val pending = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val reader = Thread {
+                proc.inputStream.bufferedReader().use { input ->
+                    while (true) {
+                        val line = input.readLine() ?: break
+                        log.appendText(line + "\n")
+                        pending.add(line)
                     }
-                    val compact = line.replace('\r', '\n').lineSequence().lastOrNull { it.contains("loss=") } ?: continue
-                    val rss = File("/proc/${pidOf(proc)}/status").takeIf { it.exists() }
-                        ?.readLines()?.firstOrNull { it.startsWith("VmRSS") }?.substringAfter(":")?.trim() ?: ""
-                    val thermal = File("/sys/class/thermal").listFiles()
-                        ?.mapNotNull { zone ->
-                            File(zone, "temp").takeIf { it.exists() }?.readText()?.trim()
-                        }?.joinToString(",") ?: ""
-                    val battery = (getSystemService(BATTERY_SERVICE) as BatteryManager).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                    telemetry.appendText("${(System.currentTimeMillis() - started) / 1000}\t$rss\t$thermal\t$battery\n")
-                    writeStatus(status, "running", compact.take(180))
-                    notify(compact.take(80))
                 }
             }
+            reader.isDaemon = true
+            reader.start()
+            var step = 0
+            var total = 0
+            var loss: Float? = null
+            var lastLine = "开始训练 ${expanded.size} 条事实"
+            while (reader.isAlive || pending.isNotEmpty()) {
+                if (cancel.exists()) {
+                    proc.destroy()
+                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消,检查点留在 ${outDir.name}", tailOf(log))
+                    break
+                }
+                var line = pending.poll()
+                while (line != null) {
+                    val parsed = parseStepLine(line)
+                    if (parsed != null) {
+                        step = parsed.first
+                        total = parsed.second
+                        loss = parsed.third
+                        lastLine = line.take(180)
+                        val rss = File("/proc/${pidOf(proc)}/status").takeIf { it.exists() }
+                            ?.readLines()?.firstOrNull { it.startsWith("VmRSS") }?.substringAfter(":")?.trim() ?: ""
+                        val thermal = File("/sys/class/thermal").listFiles()
+                            ?.mapNotNull { zone ->
+                                File(zone, "temp").takeIf { it.exists() }?.readText()?.trim()
+                            }?.joinToString(",") ?: ""
+                        val battery = (getSystemService(BATTERY_SERVICE) as BatteryManager).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                        telemetry.appendText("${(System.currentTimeMillis() - started) / 1000}\t$rss\t$thermal\t$battery\n")
+                    } else if (line.isNotBlank()) {
+                        lastLine = line.take(180)
+                    }
+                    line = pending.poll()
+                }
+                publish(status, "running", "train", step, total, epochs, loss, started, lastLine, "")
+                notify(if (total > 0) "第 $step/$total 步" else "这一步还在计算")
+                if (!reader.isAlive && pending.isEmpty()) break
+                Thread.sleep(1000)
+            }
+            reader.join(2000)
             val code = if (proc.isAlive) proc.waitFor() else proc.exitValue()
             if (cancel.exists()) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -163,7 +200,7 @@ class TrainService : Service() {
                 return
             }
             if (code != 0 || !adapter.exists()) {
-                writeStatus(status, "error", "训练退出 $code,见 train/train.log")
+                publish(status, "error", "train", step, total, epochs, loss, started, "训练退出 $code", tailOf(log))
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
@@ -190,16 +227,67 @@ class TrainService : Service() {
                 ),
                 expanded,
             )
+            publish(status, "running", "recall", step, total, epochs, loss, started, "回忆检查", "")
             engine.rebuildIndex()
             if (job.optBoolean("benchmark")) {
                 writeBenchmark(store, engine, job, expanded, started)
             }
-            writeStatus(status, "done", "已登记 $expert")
+            publish(status, "running", "register", step, total, epochs, loss, started, "注册专家", "")
+            publish(status, "done", "done", step, total, epochs, loss, started, "已登记 $expert", "")
         } catch (ex: Throwable) {
             writeStatus(status, "error", ex.message ?: ex.toString())
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun publish(
+        file: File,
+        state: String,
+        stage: String,
+        step: Int,
+        total: Int,
+        epochs: Int,
+        loss: Float?,
+        startedMs: Long,
+        detail: String,
+        logTail: String,
+    ) {
+        val elapsed = (System.currentTimeMillis() - startedMs) / 1000
+        file.writeText(trainSnapshotJson(state, stage, step, total, epochs, loss, elapsed, detail, logTail))
+    }
+
+    private fun tailOf(log: File): String {
+        if (!log.exists()) return ""
+        return log.readLines().takeLast(12).joinToString("\n").take(800)
+    }
+
+    private fun simulateTrain(
+        store: MemoryStore,
+        status: File,
+        expanded: List<ReviewedFact>,
+        expert: String,
+        epochs: Int,
+        started: Long,
+    ) {
+        val log = File(store.trainDir, "train.log")
+        val total = 4
+        for (step in 1..total) {
+            val loss = 1.4f - step * 0.2f
+            log.appendText("[step $step/$total] loss=$loss\n")
+            publish(status, "running", "train", step, total, epochs, loss, started, "训练 LoRA", "")
+            notify("第 $step/$total 步")
+            Thread.sleep(700)
+        }
+        publish(status, "running", "recall", total, total, epochs, 0.6f, started, "回忆检查", "")
+        Thread.sleep(400)
+        val batch = (store.listExperts().maxOfOrNull { it.batch } ?: -1) + 1
+        store.registerExpert(
+            ExpertRecord(expert, batch, expanded.size, 32, "experts/$expert/router_key.f32", "experts/$expert/adapter.gguf"),
+            expanded,
+        )
+        publish(status, "running", "register", total, total, epochs, 0.6f, started, "注册专家", "")
+        publish(status, "done", "done", total, total, epochs, 0.6f, started, "已登记 $expert", "")
     }
 
     private fun maskedFactTexts(facts: List<ReviewedFact>): List<String> {
@@ -230,6 +318,7 @@ class TrainService : Service() {
             .setContentTitle("正在把对话写进 LoRA")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setOngoing(true)
             .build()
         getSystemService(NotificationManager::class.java).notify(7, notification)
     }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +37,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,6 +64,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily as ComposeFontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -138,6 +143,10 @@ data class SkyState(
     val updateVersion: String = "",
     val updateNotes: String = "",
     val updateMessage: String = "",
+    val waitSeconds: Int = 0,
+    val liveMotion: Boolean = false,
+    val train: TrainSnapshot = TrainSnapshot(),
+    val pendingFacts: List<String> = emptyList(),
 )
 
 sealed class SkyEvent {
@@ -236,11 +245,11 @@ fun skyText(lang: String, key: String): String {
         "appName" to "长期记忆",
         "stage.select" to "选择对话",
         "stage.extract" to "抽取事实",
-        "stage.gate" to "写门",
-        "stage.build" to "编训练样本",
+        "stage.gate" to "写闸门",
+        "stage.build" to "生成样本",
         "stage.train" to "训练 LoRA",
         "stage.recall" to "回忆检查",
-        "stage.register" to "登记专家",
+        "stage.register" to "注册专家",
         "stage.done" to "完成",
         "stage.pending" to "说出一条事实后，会显示在这里",
         "factWrite" to "写入这条事实",
@@ -250,6 +259,8 @@ fun skyText(lang: String, key: String): String {
         "updateLatest" to "已是最新版本",
         "updatePermission" to "请允许本应用安装未知来源应用，只需这一次。打开开关后回到这里再点下载并安装。",
         "updateInstalling" to "请在系统界面确认安装。模型和对话会保留。",
+        "pendingHead" to "待巩固",
+        "advanced" to "高级",
     )
     val en = mapOf(
         "chat" to "Chat",
@@ -328,6 +339,8 @@ fun skyText(lang: String, key: String): String {
         "updateLatest" to "Already up to date",
         "updatePermission" to "Allow this app to install unknown apps, just once. Turn the switch on, come back, and tap download and install.",
         "updateInstalling" to "Confirm the install. Models and chats stay.",
+        "pendingHead" to "Waiting to consolidate",
+        "advanced" to "Advanced",
     )
     return (if (lang == "en") en else zh)[key] ?: key
 }
@@ -433,7 +446,11 @@ private fun TopBar(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             }
         }
         if (state.tab == SkyTab.Chat) {
-            SkyIcon("plus", Accent, Modifier.size(28.dp).clickable { onEvent(SkyEvent.NewChat) })
+            SkyIcon(
+                "plus",
+                Accent,
+                Modifier.size(28.dp).semantics { contentDescription = "newChat" }.clickable { onEvent(SkyEvent.NewChat) },
+            )
             Spacer(Modifier.width(12.dp))
         }
         SkyIcon("gear", Accent, Modifier.size(28.dp).clickable { onEvent(SkyEvent.OpenSettings) })
@@ -561,6 +578,12 @@ private fun SettingsPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) 
         }
         if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
             Text(state.updateMessage.ifBlank { skyText(state.lang, "updateReady") }, color = Ink, fontSize = 14.sp)
+        }
+        Text(skyText(state.lang, "advanced"), color = Muted, modifier = Modifier.padding(top = 8.dp))
+        Text(skyText(state.lang, "import"), color = Accent, modifier = Modifier.clickable { onEvent(SkyEvent.ImportExperts) })
+        Text(skyText(state.lang, "selfCheck"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.SelfCheck) })
+        if (state.note.isNotEmpty()) {
+            Text(state.note, color = Ink, fontSize = 14.sp)
         }
     }
 }
@@ -744,7 +767,7 @@ internal fun MilkyWay(paused: Boolean) {
 @Composable
 private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
     val shown = state.messages + if (state.generating) {
-        listOf(SkyMessage("assistant", state.streaming.ifBlank { "…" }))
+        listOf(SkyMessage("assistant", state.streaming))
     } else {
         emptyList()
     }
@@ -753,21 +776,28 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
     LaunchedEffect(shown.size, state.streaming, ime) {
         if (ordered.isNotEmpty()) listState.scrollToItem(0)
     }
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().imePadding()) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, reverseLayout = true) {
             items(ordered.size) { index ->
-                Bubble(state.lang, ordered[index], state.generating && index == 0)
+                val live = state.generating && index == 0
+                Bubble(state.lang, ordered[index], live, if (live) state.waitSeconds else 0, state.liveMotion)
             }
         }
         OutlinedTextField(
             value = state.draft,
             onValueChange = { onEvent(SkyEvent.Draft(it)) },
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 4.dp)
+                .semantics { contentDescription = "composer" },
             placeholder = { Text(skyText(state.lang, "placeholder"), color = Muted) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { onEvent(SkyEvent.Send) }),
             trailingIcon = {
-                Box(Modifier.size(40.dp).clickable { onEvent(SkyEvent.Send) }, contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.size(40.dp).semantics { contentDescription = "send" }.clickable { onEvent(SkyEvent.Send) },
+                    contentAlignment = Alignment.Center,
+                ) {
                     SkyIcon("send", if (state.draft.isBlank()) Muted else Accent, Modifier.size(22.dp))
                 }
             },
@@ -778,17 +808,30 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
 }
 
 @Composable
-private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean) {
+private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean, waitSeconds: Int, liveMotion: Boolean) {
     val user = message.role == "user"
+    val typing = streaming && message.text.isBlank()
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
         Column(Modifier.widthIn(max = 300.dp)) {
-            Text(
-                message.text,
-                color = Ink,
-                modifier = Modifier
-                    .background(if (user) Color(0x332A2418) else Color(0x33101828), RoundedCornerShape(16.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            )
+            if (typing) {
+                TypingDots(liveMotion)
+                if (waitSeconds >= 3) {
+                    Text(
+                        if (lang == "en") "Waited ${waitSeconds}s" else "已等待 ${waitSeconds} 秒",
+                        color = Muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(start = 12.dp, top = 6.dp),
+                    )
+                }
+            } else {
+                Text(
+                    message.text,
+                    color = Ink,
+                    modifier = Modifier
+                        .background(if (user) Color(0x332A2418) else Color(0x33101828), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
             if (!user && !streaming) {
                 val tag = if (!message.expert.isNullOrBlank()) skyText(lang, "memoryUsed") else skyText(lang, "memoryNone")
                 Text(tag, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
@@ -796,6 +839,35 @@ private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean) {
                     Text(skyText(lang, "noticed"), color = Gold, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TypingDots(live: Boolean) {
+    var phase by remember { mutableIntStateOf(0) }
+    LaunchedEffect(live) {
+        if (!live) return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(280)
+            phase = (phase + 1) % 3
+        }
+    }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .semantics { contentDescription = "typing-$phase" }
+            .background(Color(0x33101828), RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        repeat(3) { index ->
+            val on = !live || index == phase
+            Box(
+                Modifier
+                    .size(if (on) 8.dp else 5.dp)
+                    .background(if (on) Gold else Muted.copy(alpha = 0.4f), CircleShape),
+            )
         }
     }
 }
@@ -820,15 +892,12 @@ private fun FakeKeyboard(height: Dp) {
     }
 }
 
-private val stageIds = listOf("select", "extract", "gate", "build", "train", "recall", "register", "done")
+internal val stageIds = listOf("extract", "gate", "build", "train", "recall", "register")
 
-internal fun stageStates(training: Boolean, hasFact: Boolean): List<String> {
-    val active = when {
-        training -> "train"
-        hasFact -> "gate"
-        else -> "select"
-    }
-    val at = stageIds.indexOf(active)
+internal fun stageStates(stage: String): List<String> {
+    if (stage == "done") return stageIds.map { "done" }
+    val at = stageIds.indexOf(stage)
+    if (at < 0) return stageIds.map { "pending" }
     return stageIds.mapIndexed { index, _ ->
         when {
             index < at -> "done"
@@ -836,6 +905,20 @@ internal fun stageStates(training: Boolean, hasFact: Boolean): List<String> {
             else -> "pending"
         }
     }
+}
+
+private fun shownTrain(state: SkyState): TrainSnapshot {
+    if (state.train.state.isNotBlank() || state.train.step > 0 || state.train.logTail.isNotBlank()) return state.train
+    if (!state.training && state.loss.isEmpty()) return TrainSnapshot()
+    return TrainSnapshot(
+        state = if (state.training) "running" else "done",
+        stage = if (state.training) "train" else "done",
+        step = state.loss.size,
+        total = state.loss.size,
+        epoch = if (state.loss.isEmpty()) 0 else 1,
+        epochs = if (state.loss.isEmpty()) 0 else 1,
+        loss = state.loss.lastOrNull(),
+    )
 }
 
 @Composable
@@ -848,14 +931,23 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             } else {
                 FactCard(state, onEvent)
             }
-            if (state.loss.isNotEmpty() || state.training) {
+            val snap = shownTrain(state)
+            if (state.loss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error") {
                 Spacer(Modifier.height(12.dp))
-                Constellation(state.loss, state.training)
-                Text(
-                    "${skyText(state.lang, "loss")} · ${state.loss.size} ${skyText(state.lang, "steps")}",
-                    color = Muted,
-                    fontSize = 13.sp,
-                )
+                TrainBars(snap)
+                val progress = formatTrainProgress(state.lang, snap)
+                if (progress.isNotBlank()) {
+                    Text(
+                        progress,
+                        color = if (snap.state == "error") Gold else Muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.semantics { contentDescription = "trainProgress" }.padding(top = 6.dp),
+                    )
+                }
+                if (state.loss.isNotEmpty() || state.training) {
+                    Spacer(Modifier.height(8.dp))
+                    Constellation(state.loss, state.training)
+                }
             }
             if (state.status.isNotEmpty()) {
                 Text(state.status, color = Ink, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
@@ -865,8 +957,49 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
 }
 
 @Composable
+private fun TrainBars(snap: TrainSnapshot) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Meter(if (snap.total > 0) snap.step.toFloat() / snap.total else 0f)
+        if (snap.epochs > 0) Meter(if (snap.epoch > 0) snap.epoch.toFloat() / snap.epochs else 0f)
+    }
+}
+
+@Composable
+private fun Meter(fraction: Float) {
+    Box(Modifier.fillMaxWidth().height(8.dp).background(Color(0x33101828), RoundedCornerShape(4.dp))) {
+        Box(
+            Modifier
+                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                .height(8.dp)
+                .background(Gold, RoundedCornerShape(4.dp)),
+        )
+    }
+}
+
+@Composable
 private fun StageTimeline(state: SkyState) {
-    val states = stageStates(state.training, state.entity.isNotBlank() || state.statement.isNotBlank())
+    val stage = when {
+        state.training -> state.train.stage.ifBlank { "train" }
+        state.train.state == "error" -> state.train.stage.ifBlank { "train" }
+        state.train.state == "done" -> "done"
+        state.entity.isNotBlank() || state.statement.isNotBlank() -> "gate"
+        else -> ""
+    }
+    val states = stageStates(stage)
+    var pulse by remember { mutableFloatStateOf(1f) }
+    LaunchedEffect(state.liveMotion) {
+        if (!state.liveMotion) {
+            pulse = 1f
+            return@LaunchedEffect
+        }
+        var dir = 1f
+        while (true) {
+            kotlinx.coroutines.delay(48)
+            pulse += dir * 0.05f
+            if (pulse > 1.35f) dir = -1f
+            if (pulse < 0.85f) dir = 1f
+        }
+    }
     Column(Modifier.fillMaxWidth()) {
         Canvas(Modifier.fillMaxWidth().height(52.dp)) {
             val step = size.width / stageIds.size
@@ -883,7 +1016,7 @@ private fun StageTimeline(state: SkyState) {
             stageIds.indices.forEach { index ->
                 val mark = states[index]
                 val on = mark != "pending"
-                val radius = if (mark == "active") 7f else if (on) 5.2f else 3.6f
+                val radius = (if (mark == "active") 7f else if (on) 5.2f else 3.6f) * if (mark == "active") pulse else 1f
                 val fill = if (mark == "active") Gold else if (on) Color(0xFFD7E6FF) else Color(0x73B4C6DC)
                 val center = Offset(step * (index + 0.5f), y)
                 drawCircle(fill.copy(alpha = if (on) 0.22f else 0.08f), radius + 9f, center)
@@ -932,7 +1065,12 @@ private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 FactLine(skyText(state.lang, "answer"), state.answer) { onEvent(SkyEvent.Field("answer", it)) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = state.force, onCheckedChange = { onEvent(SkyEvent.Force(it)) })
-                    Text(skyText(state.lang, "force"), color = Muted, fontSize = 14.sp)
+                    Text(
+                        skyText(state.lang, "force"),
+                        color = Muted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.clickable { onEvent(SkyEvent.Force(!state.force)) },
+                    )
                 }
                 Row {
                     Text(skyText(state.lang, "train"), color = Accent2, fontSize = 15.sp, modifier = Modifier.clickable { onEvent(SkyEvent.Train) }.padding(vertical = 8.dp, horizontal = 4.dp))
@@ -1027,12 +1165,17 @@ private fun NebulaFallback(state: SkyState) {
 @Composable
 private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(skyText(state.lang, "import"), color = Accent, modifier = Modifier.clickable { onEvent(SkyEvent.ImportExperts) })
-            Text(skyText(state.lang, "selfCheck"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.SelfCheck) })
-        }
-        if (state.note.isNotEmpty()) {
-            Text(state.note, color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
+        if (state.pendingFacts.isNotEmpty()) {
+            Text(
+                skyText(state.lang, "pendingHead"),
+                color = Gold,
+                fontSize = 16.sp,
+                modifier = Modifier.semantics { contentDescription = "pendingFacts" }.padding(bottom = 6.dp),
+            )
+            state.pendingFacts.forEach { line ->
+                Text(line, color = Ink, fontSize = 15.sp, modifier = Modifier.padding(bottom = 6.dp))
+            }
+            Spacer(Modifier.height(8.dp))
         }
         LazyColumn(Modifier.weight(1f)) {
             items(state.experts) { expert ->

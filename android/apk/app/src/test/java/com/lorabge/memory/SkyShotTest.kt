@@ -130,7 +130,7 @@ class SkyShotTest {
                 SkyMessage("user", if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi"),
                 SkyMessage(
                     "assistant",
-                    if (zh) "好的，我记住了。" else "Okay, I'll remember that.",
+                    if (zh) "好的，记住了，你的猫叫咪咪。" else "Okay, I'll remember. Your cat is named Mimi.",
                     noticed = true,
                 ),
             ),
@@ -161,7 +161,18 @@ class SkyShotTest {
         statusTop = 36.dp,
         navBottom = 24.dp,
         loss = listOf(5.35f, 2.56f, 1.19f, 0.36f, 0.19f),
-        status = if (lang == "en") "Epoch 2, loss 0.19" else "第 2 轮，loss 0.19",
+        status = if (lang == "en") "Train LoRA" else "训练 LoRA",
+        train = TrainSnapshot(
+            state = "running",
+            stage = "train",
+            step = 5,
+            total = 16,
+            epoch = 2,
+            epochs = 4,
+            loss = 0.19f,
+            elapsedSec = 40,
+            etaSec = 88,
+        ),
     )
 
     private fun nebulaSample(lang: String, recall: Boolean) = sample().copy(
