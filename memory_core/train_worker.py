@@ -237,6 +237,8 @@ def run_job(home: Path, job_id: str) -> int:
     models_dir = Path(request["models_dir"])
     try:
         ensure_models(models_dir)
+        # 改写问句会立刻 embed。必须先把 bge 指到绝对路径，不能等登记路由键时再绑。
+        bind_bge(models_dir)
         device = pick_device(request.get("device"))
         dtype = train_dtype(device)
         lr = float(request.get("lr", 5e-4))

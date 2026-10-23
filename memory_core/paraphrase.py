@@ -79,8 +79,9 @@ def _rewrite_prompt(question: str, entity: str, value: str) -> tuple[str, str]:
         system = "You are a helpful assistant."
         prompt = (
             "Rewrite the question in 4 different ways.\n"
-            "Ask the same thing. Keep the person's name. Do not include the answer.\n"
-            "Do not switch to a different topic.\n"
+            "Each rewrite must ask for the same attribute, so the same answer still fits.\n"
+            "Keep the person's name. Do not include the answer. Do not switch objects.\n"
+            "Do not ask a yes/no question.\n"
             "One question per line. No numbering. No other text.\n\n"
             f"Question: {question}\n"
         )
@@ -88,7 +89,8 @@ def _rewrite_prompt(question: str, entity: str, value: str) -> tuple[str, str]:
         system = "你是助手。"
         prompt = (
             "把这个问句改写成 4 个不同的问法。\n"
-            "还是问同一件事，保留人名，不要写出答案，也不要改成别的话题。\n"
+            "每个改写都要问同一个属性，原来的答案也必须能回答它。\n"
+            "保留人名，不要写出答案，不要换成别的事物，也不要写成是非问句。\n"
             "每行一个问句，不要编号，不要其他文字。\n\n"
             f"问句：{question}\n"
         )
@@ -123,8 +125,8 @@ def _compact(text: str) -> str:
     return re.sub(r"[\s\W_]+", "", text or "", flags=re.UNICODE).casefold()
 
 
-def filter_cross_fact(facts: list[dict[str, Any]]) -> None:
-    """改写如果更靠近另一条事实，就从错误的那条上拿掉。"""
+def filter_cross_fact(facts: list[dict[str, Any]], model=None, tok=None, device=None) -> None:
+    """改写如果更靠近另一条事实，或答不上这条事实的取值，就拿掉。"""
     from memory_core.paths import ensure_scripts_path
 
     ensure_scripts_path()
@@ -157,7 +159,13 @@ def filter_cross_fact(facts: list[dict[str, Any]]) -> None:
         if own + 1e-6 < other:
             continue
         # 离原问句太远的改写会把别的属性卷进来，例如把猫写成「哪种动物」。
-        if own < 0.80:
+        # 取值对得上这条事实时，可以留住稍远、但仍然忠实的说法。
+        faithful = None
+        if model is not None and tok is not None and device is not None and own >= 0.70:
+            faithful = _value_answers(text, facts[index], model, tok, device)
+        if faithful is False:
+            continue
+        if own < 0.80 and faithful is not True:
             continue
         compact = _compact(text)
         entity = _compact(str(facts[index].get("entity") or ""))
@@ -178,7 +186,7 @@ def attach_gate_questions(facts: list[dict[str, Any]], model, tok, device) -> No
     for fact in pending:
         fact["gate_questions"] = gate_questions_for_fact(fact, model, tok, device)
     if pending:
-        filter_cross_fact(facts)
+        filter_cross_fact(facts, model, tok, device)
 
 
 def _rewrite_query(query: str, model, tok, device) -> list[str]:
@@ -260,8 +268,139 @@ def rescue_near_miss(query: str, bank, tau: float, info: dict, model, tok, devic
             continue
         alt = dict(alt)
         alt["rescued_from"] = query
+        facts = []
+        for item in alt.get("facts") or []:
+            row = dict(item)
+            if row.get("passed") and str(row.get("attr") or "") == str(origin.get("attr") or ""):
+                for key in ("fact_id", "node_id", "statement", "entity", "value", "question"):
+                    if not row.get(key) and origin.get(key):
+                        row[key] = origin.get(key)
+            facts.append(row)
+        alt["facts"] = facts
         return alt
     return info
+
+
+# 问句相似度已经靠近某条事实、但属性短词还差一点时，用取值能不能回答来裁决。
+# 0.575 卡在「车 / 汽车」属性分 0.543–0.562 和「单车」0.589 之间，不改事实闸的 τ。
+CONSISTENCY_Q = 0.70
+CONSISTENCY_ATTR = 0.575
+
+
+def polar_question(query: str) -> str | None:
+    """是非问句改成同属性的特指问句。改不成就返回 None，不拿「吗」去硬套。"""
+    raw = (query or "").strip()
+    if not raw or not has_cjk(raw):
+        return None
+    if not any(mark in raw for mark in ("是不是", "是否")):
+        return None
+    text = raw.rstrip("？?").strip()
+    if "是不是叫" in text or "是否叫" in text:
+        head = re.split(r"是不是叫|是否叫", text, maxsplit=1)[0].strip()
+        return f"{head}叫什么？" if head else None
+    head = re.split(r"是不是|是否", text, maxsplit=1)[0].strip()
+    return f"{head}是什么？" if head else None
+
+
+def polar_reply_from_fact(query: str, fact: dict[str, Any]) -> str | None:
+    """是非问句已经对上某条事实时，用那条事实的取值回答，不再把原句丢给基座。"""
+    if polar_question(query) is None:
+        return None
+    value = str(fact.get("value") or "").strip()
+    if not value:
+        return None
+    if value in query:
+        return f"是，{value}。"
+    return f"不是，是{value}。"
+
+
+def _parse_flag(text: str, key: str) -> bool | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    import json
+
+                    data = json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(data, dict) or key not in data:
+                    return None
+                value = data[key]
+                if isinstance(value, bool):
+                    return value
+                return str(value).strip().casefold() in {"true", "yes", "1"}
+    return None
+
+
+def _value_answers(query: str, fact: dict[str, Any], model, tok, device) -> bool | None:
+    """取值能不能回答这句问话。模型没给出 JSON 时返回 None，调用方不要据此放行。"""
+    value = str(fact.get("value") or fact.get("answer") or "").strip()
+    statement = str(fact.get("statement") or "").strip()
+    if not value or not statement:
+        return None
+    english = not has_cjk(f"{query}{statement}{value}")
+    if english:
+        system = "You are a helpful assistant."
+        prompt = (
+            "A stored fact is given. Reply with JSON only.\n"
+            '{"answers": true} if the value is a correct answer to the question.\n'
+            '{"answers": false} if the question asks for a different object or a different attribute.\n'
+            f"Fact: {statement}\nValue: {value}\nQuestion: {query}\n"
+        )
+    else:
+        system = "你是助手。"
+        prompt = (
+            "下面有一条已经记住的事实。只输出 JSON。\n"
+            "取值正好能回答这个问句时输出 {\"answers\": true}。\n"
+            "问句在问别的事物或别的属性时输出 {\"answers\": false}。\n"
+            f"事实：{statement}\n取值：{value}\n问句：{query}\n"
+        )
+    try:
+        raw = _generate(model, tok, device, prompt, system)
+    except Exception:
+        return None
+    return _parse_flag(raw, "answers")
+
+
+def confirm_stored_answer(query: str, info: dict, model, tok, device) -> dict:
+    """事实闸差一点没过、但取值确实能回答这句问话时，接受这条事实。
+
+    不降低 τ。更笼统的「车 / 汽车」属性分停在这条线下面；咖啡、狗由模型否决。
+    """
+    from memory_core.fact_span import NEAR_TAU
+
+    if info.get("matched") or model is None or tok is None or device is None:
+        return info
+    score = float(info.get("best_question_sim") or 0.0)
+    if score < CONSISTENCY_Q or score >= NEAR_TAU:
+        return info
+    origin = next((item for item in info.get("facts") or [] if item.get("best")), None)
+    if not origin:
+        return info
+    if float(origin.get("attr_sim") or 0.0) < CONSISTENCY_ATTR:
+        return info
+    if _value_answers(query, origin, model, tok, device) is not True:
+        return info
+    updated = dict(info)
+    updated["matched"] = True
+    updated["matched_attr"] = str(origin.get("attr") or "")
+    updated["confirmed_answer"] = True
+    facts = []
+    for item in info.get("facts") or []:
+        row = dict(item)
+        row["passed"] = bool(item.get("best"))
+        facts.append(row)
+    updated["facts"] = facts
+    return updated
 
 
 class _nullctx:

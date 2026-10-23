@@ -79,6 +79,27 @@ class CorrectionTests(unittest.TestCase):
             "沈星河多大了？": None,
             "沈星河喜欢吃什么？": None,
             "水的化学式是什么？": None,
+            "沈星河的猫叫什么？": None,
+            "林晚舟的猫叫什么？": None,
+            "沈星河的狗是不是叫可乐？": None,
+            "沈星河最喜欢的咖啡是什么？": None,
+            "沈星河的猫是不是叫云朵？": None,
+            "沈星河的自行车是不是朱红色？": None,
+            "沈星河是不是住在青岚镇？": None,
+            "沈星河最喜欢的茶是不是桂花乌龙？": None,
+            "沈星河家住哪？": None,
+            "沈星河的单车是什么颜色？": None,
+            "沈星河骑的那辆车是什么颜色？": None,
+            "沈星河喜欢喝什么茶叶？": None,
+            "沈星河最中意的茶是什么？": None,
+            "沈星河会弹古筝吗？": None,
+            "沈星河的汽车是什么颜色？": None,
+            "沈星河养的狗是不是叫可乐？": None,
+            "沈星河的茶是咖啡吗？": None,
+            "你知道沈星河住在哪里吗？": None,
+            "沈星河的猫呢？": None,
+            "请问林晚舟的猫叫什么名字？": None,
+            "沈星河有没有养狗？": None,
         }
         for text, gold in expect.items():
             got = propose_from_records(text, [record])
@@ -109,11 +130,71 @@ class CorrectionTests(unittest.TestCase):
             "Where does Mira Chen live?": None,
             "What is Elena Brooks's dog's name?": None,
             "Elena Brooks's dog's name is not Pepper, it is Juniper.": "Juniper",
+            "Is Elena Brooks's dog called Pepper?": None,
+            "Elena Brooks lives in Boston, isn't she?": None,
+            "Mira Chen's cat's name is Snow, right?": None,
+            "What breed of dog does Elena Brooks keep?": None,
+            "Is Mira Chen's cat called Snow?": None,
+            "Does Mira Chen live in Qinglan?": None,
+            "Isn't Mira Chen's cat called Ash?": None,
+            "Mira Chen lives in Qinglan, doesn't she?": None,
+            "Snow is the cat's name, isn't it?": None,
+            "The dog is called Pepper, right?": None,
+            "What colour is Mira Chen's bicycle?": None,
+            "Where is Mira Chen's home?": None,
+            "What is the name of the dog Elena Brooks keeps?": None,
+            "Can you tell me Mira Chen's cat's name?": None,
+            "Did Mira Chen move to Boston?": None,
+            "How old is Mira Chen?": None,
+            "What is Mira Chen's phone number?": None,
+            "Who is Elena Brooks's sister?": None,
+            "What color is Elena Brooks's car?": None,
+            "Is Boston where Mira Chen lives?": None,
+            "Mira Chen's cat is Snow, isn't it?": None,
+            "Would Elena's dog be named Pepper?": None,
+            "What's Mira's favorite coffee?": None,
+            "Elena Brooks's dog isn't Juniper, is it?": None,
+            "Pepper, right?": None,
+            "Qinglan is not where she lives, is it?": None,
+            "Has Elena Brooks got a dog named Pepper?": None,
+            "Should I call Mira Chen's cat Snow?": None,
         }
         for text, gold in expect.items():
             got = propose_from_records(text, [record])
             value = None if got is None else got["new_value"]
             self.assertEqual(value, gold, text)
+
+    def test_reissue_updates_every_question(self):
+        from memory_core.correct import reissue_training_fact
+
+        fact = expand_training_fact({
+            "entity": "Mira Chen",
+            "attr": "cat",
+            "value": "Max",
+            "statement": "Mira Chen's cat is named Max.",
+            "question": "What is Mira Chen's cat?",
+            "answer": "Max",
+        })
+        fact["gate_questions"] = ["What is Mira Chen's cat called?"]
+        fresh = reissue_training_fact(fact, "Juniper")
+        blob = " ".join(qa["q"] + " " + qa["a"] for qa in fresh["qa"])
+        self.assertNotIn("Max", blob)
+        self.assertTrue(all(qa["a"] == "Juniper" for qa in fresh["qa"]))
+        self.assertIn("What is Mira Chen's cat's name?", [qa["q"] for qa in fresh["qa"]])
+        self.assertIn("What is Mira Chen's cat?", [qa["q"] for qa in fresh["qa"]])
+        self.assertEqual(fresh["gate_questions"], ["What is Mira Chen's cat called?"])
+        self.assertEqual(fresh["attr"], "cat's name")
+
+    def test_titles_break_on_words(self):
+        from memory_core.service import _conversation_title
+
+        title = _conversation_title("Please remember that Mira Chen's bicycle is vermilion today")
+        self.assertNotIn("vermil", title)
+        self.assertFalse(title.endswith(" "))
+        self.assertEqual(title, title.rstrip())
+        self.assertEqual(_conversation_title("Short title"), "Short title")
+        chinese = _conversation_title("沈星河的自行车颜色是朱红色，请记住这件事")
+        self.assertLessEqual(len(chinese), 16)
 
     def test_panel_value_and_superseded_bank(self):
         from memory_core.correct import propose_from_records

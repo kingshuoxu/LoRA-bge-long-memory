@@ -25,11 +25,26 @@ _tok = None
 _model = None
 
 
+def resolve_emb_model() -> str:
+    """研究脚本在仓库根目录运行时，相对路径 models/bge-small-zh-v1.5 是存在的。
+
+    安装包里的工作目录是 resources/app，旁边没有 models/。那里必须先 bind_bge，
+    把 EMB_MODEL 写成绝对路径。相对路径解析不到目录时直接失败，不再按当前目录猜。
+    """
+    path = Path(EMB_MODEL)
+    if path.is_dir():
+        return str(path if path.is_absolute() else path.resolve())
+    raise FileNotFoundError(
+        f"{EMB_MODEL} is not a local folder. Call bind_bge() with the models directory before embed()."
+    )
+
+
 def _load():
     global _tok, _model
     if _model is None:
-        _tok = AutoTokenizer.from_pretrained(EMB_MODEL)
-        _model = AutoModel.from_pretrained(EMB_MODEL, torch_dtype=torch.float32)
+        model_path = resolve_emb_model()
+        _tok = AutoTokenizer.from_pretrained(model_path)
+        _model = AutoModel.from_pretrained(model_path, torch_dtype=torch.float32)
         _model.eval()
     return _tok, _model
 

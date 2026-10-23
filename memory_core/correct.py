@@ -128,39 +128,129 @@ def _surface_value(text: str, value: str) -> str | None:
     return text[start:end]
 
 
+_EN_AUX = re.compile(
+    r"^(?:is|are|am|do|does|did|was|were|can|could|has|have|will|would|should|"
+    r"isn'?t|aren'?t|don'?t|doesn'?t|didn'?t|wasn'?t|weren'?t|"
+    r"can'?t|couldn'?t|hasn'?t|haven'?t|won'?t|wouldn'?t|shouldn'?t)\b",
+    re.IGNORECASE,
+)
+_EN_TAG = re.compile(
+    r"(?:,\s*)?(?:"
+    r"right|correct|"
+    r"is it|is he|is she|are they|are you|do they|does he|does she|"
+    r"isn'?t it|isn'?t he|isn'?t she|"
+    r"aren'?t they|aren'?t you|"
+    r"don'?t they|don'?t you|"
+    r"doesn'?t he|doesn'?t she|doesn'?t it|"
+    r"wasn'?t it|wasn'?t he|wasn'?t she|"
+    r"won'?t he|won'?t she|won'?t they|"
+    r"can'?t he|can'?t she|"
+    r"hasn'?t he|hasn'?t she|"
+    r"haven'?t you|haven'?t they|"
+    r"didn'?t he|didn'?t she|didn'?t they"
+    r")\s*\??$",
+    re.IGNORECASE,
+)
+_QUESTION_VALUES = {
+    "什么",
+    "哪里",
+    "哪儿",
+    "哪个",
+    "谁",
+    "多少",
+    "几",
+    "叫什么",
+    "是什么",
+    "什么时候",
+    "what",
+    "where",
+    "who",
+    "which",
+    "when",
+    "how",
+    "why",
+}
+
+
+def utterance_is_question(text: str) -> bool:
+    """提问不是纠正。是非问句、反意疑问句和带问号的句子都算。"""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    from memory_core.extract import _looks_like_question
+
+    if _looks_like_question(raw):
+        return True
+    if any(mark in raw for mark in ("是不是", "对不对", "有没有")):
+        return True
+    if _EN_AUX.match(raw):
+        return True
+    if _EN_TAG.search(raw):
+        return True
+    return False
+
+
+def _align_attribute(text: str, attribute: str) -> str:
+    """纠正要指向抽取时写下的那条属性，事实闸才认得出是同一件事。"""
+    if has_cjk(text):
+        return attribute
+    if re.search(r"\blives in\b", text, re.IGNORECASE):
+        return "where they live"
+    named = re.search(
+        r"'s (?P<attr>[A-Za-z][A-Za-z' -]{0,40}?name)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if named:
+        return named.group("attr")
+    return attribute
+
+
 def classify_correction(text: str, model, tok, device) -> dict | None:
     """让本地模型判断这一轮是不是纠正，并抽出实体、属性、新取值。"""
+    if utterance_is_question(text):
+        return None
     english = not has_cjk(text)
     if english:
         system = "You are a helpful assistant."
         prompt = (
             "Reply with one JSON object and nothing else.\n"
-            "correction is true only when the message replaces a stored value.\n"
-            "A question has correction false and an empty new_value.\n"
-            "Copy entity, attribute, and new_value from the message.\n"
+            "is_question is true for questions, including yes/no and tag questions.\n"
+            "correction is true only when the message is an assertion that replaces a stored value.\n"
+            "A question has is_question true, correction false, and an empty new_value.\n"
+            "new_value is the replacement the speaker asserts, copied from the message. "
+            "It is never the rejected value after not.\n"
             "Example message: Ada Liu's bicycle color is not blue, it is green.\n"
-            '{"correction": true, "entity": "Ada Liu", "attribute": "bicycle color", "new_value": "green"}\n'
+            '{"is_question": false, "correction": true, "entity": "Ada Liu", "attribute": "bicycle color", "new_value": "green"}\n'
+            "Example message: Ada Liu lives in Paris, not Rome.\n"
+            '{"is_question": false, "correction": true, "entity": "Ada Liu", "attribute": "where they live", "new_value": "Paris"}\n'
             "Example message: What is Ada Liu's bicycle color?\n"
-            '{"correction": false, "entity": "Ada Liu", "attribute": "bicycle color", "new_value": ""}\n\n'
+            '{"is_question": true, "correction": false, "entity": "Ada Liu", "attribute": "bicycle color", "new_value": ""}\n'
+            "Example message: Is Ada Liu's dog called Pepper?\n"
+            '{"is_question": true, "correction": false, "entity": "Ada Liu", "attribute": "dog", "new_value": ""}\n'
+            "Example message: Ada Liu lives in Boston, isn't she?\n"
+            '{"is_question": true, "correction": false, "entity": "Ada Liu", "attribute": "where they live", "new_value": ""}\n\n'
             f"Message:\n{text}\n"
         )
     else:
         system = "你是助手。"
         prompt = (
             "只输出一个 JSON，不要其他文字。\n"
-            "只有这句话在替换一条已经记住的取值时，correction 才是 true。\n"
-            "提问时 correction 为 false，new_value 为空。\n"
+            "问句（包括是非问句）的 is_question 为 true，correction 为 false，new_value 为空。\n"
+            "只有这句话是陈述，并且在替换一条已经记住的取值时，correction 才是 true。\n"
             "entity 是被谈论的人，new_value 是要改成的新取值，从原话里抄，不能是人名本身。\n"
             "例子：林晚舟的早餐不是豆浆，是豆腐脑。\n"
-            '{"correction": true, "entity": "林晚舟", "attribute": "早餐", "new_value": "豆腐脑"}\n'
+            '{"is_question": false, "correction": true, "entity": "林晚舟", "attribute": "早餐", "new_value": "豆腐脑"}\n'
             "例子：记错了，林晚舟的猫叫小满。\n"
-            '{"correction": true, "entity": "林晚舟", "attribute": "猫", "new_value": "小满"}\n'
+            '{"is_question": false, "correction": true, "entity": "林晚舟", "attribute": "猫", "new_value": "小满"}\n'
             "例子：小满才是林晚舟的猫的名字，不是豆沙。\n"
-            '{"correction": true, "entity": "林晚舟", "attribute": "猫的名字", "new_value": "小满"}\n'
+            '{"is_question": false, "correction": true, "entity": "林晚舟", "attribute": "猫的名字", "new_value": "小满"}\n'
             "例子：林晚舟最喜欢的茶其实是岩茶。\n"
-            '{"correction": true, "entity": "林晚舟", "attribute": "最喜欢的茶", "new_value": "岩茶"}\n'
+            '{"is_question": false, "correction": true, "entity": "林晚舟", "attribute": "最喜欢的茶", "new_value": "岩茶"}\n'
             "例子：林晚舟的早餐是什么？\n"
-            '{"correction": false, "entity": "林晚舟", "attribute": "早餐", "new_value": ""}\n\n'
+            '{"is_question": true, "correction": false, "entity": "林晚舟", "attribute": "早餐", "new_value": ""}\n'
+            "例子：林晚舟的猫叫什么？\n"
+            '{"is_question": true, "correction": false, "entity": "林晚舟", "attribute": "猫", "new_value": ""}\n\n'
             f"原话：\n{text}\n"
         )
     try:
@@ -170,14 +260,18 @@ def classify_correction(text: str, model, tok, device) -> dict | None:
     data = _parse_json(raw)
     if not data:
         return None
+    if _as_bool(data.get("is_question")) or utterance_is_question(text):
+        return None
+    if "is_question" not in data:
+        return None
     entity = str(data.get("entity") or "").strip()
-    attribute = str(data.get("attribute") or data.get("attr") or "").strip()
+    attribute = _align_attribute(text, str(data.get("attribute") or data.get("attr") or "").strip())
     new_value = str(data.get("new_value") or data.get("value") or "").strip()
     surface = _surface_value(text, new_value)
     if not surface or not _plausible_value(surface, entity):
         return None
-    # 小模型有时把 correction 写成 false，但 new_value 已经从原话抄对。
-    # 事实闸负责确认这是不是在改一条已存事实，这里不另看提示词。
+    # 陈述句里，小模型有时把 correction 写成 false，但 new_value 已经从原话抄对。
+    # 问句已经在上面丢掉。事实闸再确认这是不是在改一条已存事实。
     return {"entity": entity, "attribute": attribute, "new_value": surface}
 
 
@@ -191,6 +285,8 @@ def _plausible_value(value: str, entity: str) -> bool:
     if not letters:
         return False
     if not has_cjk(letters) and len(letters) < 2:
+        return False
+    if re.sub(r"\s+", "", value).casefold() in _QUESTION_VALUES:
         return False
     return True
 
@@ -216,20 +312,19 @@ def _gate_match(text: str, rows: list[tuple[Any, int, dict]], entity: str, attri
     bank = build_fact_bank(facts)
     if bank is None:
         return None
-    from memory_core.fact_span import CALIBRATED_TAU
-
-    info = bank.explain(text, attr_floor=CALIBRATED_TAU)
+    info = bank.explain(text)
     if not info.get("matched"):
         if not (entity and attribute):
             return None
         if has_cjk(f"{entity}{attribute}{text}"):
-            info = bank.explain(f"{entity}的{attribute}是什么？", attr_floor=CALIBRATED_TAU)
+            info = bank.explain(f"{entity}的{attribute}是什么？")
         else:
-            info = bank.explain(f"What is {entity}'s {attribute}?", attr_floor=CALIBRATED_TAU)
+            info = bank.explain(f"What is {entity}'s {attribute}?")
         if not info.get("matched"):
             return None
     score = float(info.get("best_question_sim") or 0)
     attr = str(info.get("matched_attr") or "")
+    direct = bank.explain(text)
     for record, index, fact in rows:
         fact_attr = str(fact.get("attr") or "")
         fact_entity = str(fact.get("entity") or "")
@@ -239,7 +334,7 @@ def _gate_match(text: str, rows: list[tuple[Any, int, dict]], entity: str, attri
             return record, index, fact, score
         if entity and not _same_entity(fact_entity, entity):
             # 模型常把属性写成实体。原话已经被事实闸对上时，仍用闸门选中的那条。
-            if bank.explain(text, attr_floor=CALIBRATED_TAU).get("matched") and str(bank.explain(text, attr_floor=CALIBRATED_TAU).get("matched_attr") or "") == fact_attr:
+            if direct.get("matched") and str(direct.get("matched_attr") or "") == fact_attr:
                 return record, index, fact, score
             continue
         return record, index, fact, score
@@ -267,6 +362,68 @@ def _default_llm():
     model.eval()
     _LLM = (model, tok, torch.device("cpu"))
     return _LLM
+
+
+def _precise_name_attr(fact: dict) -> str:
+    """“is named / is called” 抽成的属性要落到名字上，纠正后的问句才还问得到名字。"""
+    attr = str(fact.get("attr") or "").strip()
+    statement = str(fact.get("statement") or "")
+    if has_cjk(f"{attr}{statement}"):
+        return attr
+    if attr.lower().endswith("name"):
+        return attr
+    if re.search(r"\b(is named|is called)\b", statement, re.IGNORECASE):
+        return f"{attr}'s name" if attr else "name"
+    return attr
+
+
+def reissue_training_fact(fact: dict, new_value: str) -> dict:
+    """用新取值重写这条事实的每一句问法、答案和闸门问句。"""
+    from memory_core.extract import expand_training_fact
+
+    old = str(fact.get("value") or fact.get("answer") or "")
+
+    def swap(text: str) -> str:
+        if old and old in text:
+            return text.replace(old, new_value)
+        return text
+
+    statement = swap(str(fact.get("statement") or ""))
+    entity = str(fact.get("entity") or "")
+    attr = _precise_name_attr(fact)
+    if not statement:
+        english = not has_cjk(f"{entity}{attr}{new_value}")
+        if english:
+            statement = f"{entity}'s {attr} is {new_value}." if attr else f"{entity} is {new_value}."
+        else:
+            statement = f"{entity}的{attr}是{new_value}。" if attr else f"{entity}是{new_value}。"
+    if statement and statement[-1:] not in "。！？.!?":
+        statement += "。" if has_cjk(statement) else "."
+    fresh = {
+        "entity": entity,
+        "attr": attr,
+        "value": new_value,
+        "answer": new_value,
+        "statement": statement,
+        "question": swap(str(fact.get("question") or "")),
+    }
+    item = expand_training_fact(fresh)
+    seen = {str(qa.get("q") or "") for qa in item.get("qa") or []}
+    for qa in fact.get("qa") or []:
+        question = swap(str(qa.get("q") or ""))
+        if question and question not in seen:
+            item["qa"].append({"q": question, "a": new_value})
+            seen.add(question)
+    for qa in item.get("qa") or []:
+        qa["a"] = new_value
+    gates = []
+    for question in fact.get("gate_questions") or []:
+        rewritten = swap(str(question))
+        if rewritten and rewritten not in gates:
+            gates.append(rewritten)
+    if gates:
+        item["gate_questions"] = gates
+    return item
 
 
 def propose_from_records(

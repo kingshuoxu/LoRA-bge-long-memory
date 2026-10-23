@@ -215,12 +215,28 @@ def _explicit_decision(
             for index in range(bank.n_facts)
         ]
     info = bank.explain(text, tau, metas)
+    if not info["matched"]:
+        from memory_core.paraphrase import polar_question
+
+        alt = polar_question(text)
+        if alt:
+            alt_info = bank.explain(alt, tau, metas)
+            if alt_info.get("matched"):
+                alt_info = dict(alt_info)
+                alt_info["polar_of"] = text
+                info = alt_info
     if not info["matched"] and model is not None:
         from memory_core.paraphrase import rescue_near_miss
 
         info = rescue_near_miss(text, bank, tau, info, model, tok, device)
+    if not info["matched"] and model is not None:
+        from memory_core.paraphrase import confirm_stored_answer
+
+        info = confirm_stored_answer(text, info, model, tok, device)
     gate_view["matched"] = bool(info["matched"])
     gate_view["facts"] = info["facts"]
+    if info.get("confirmed_answer") or info.get("polar_of") or info.get("rescued_from"):
+        gate_view["answer_from_fact"] = True
     if info["matched"]:
         return RouteDecision(
             fired=True,

@@ -707,7 +707,8 @@ export function createNebula(canvas, hooks) {
   }
 
   function fillLabel(item) {
-    const name = (item.expert && (item.expert.display_name || item.expert.name)) || "";
+    let name = (item.expert && (item.expert.display_name || item.expert.name)) || "";
+    if (window.i18n && window.i18n.getLocale() === "en" && window.i18n.foreignName) name = window.i18n.foreignName(name);
     const countText = window.i18n && window.i18n.t
       ? window.i18n.t("nebula.count", { n: item.count })
       : String(item.count);

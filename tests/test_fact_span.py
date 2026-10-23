@@ -218,6 +218,85 @@ class FactSpanTests(unittest.TestCase):
         self.assertEqual(attr, "猫的名字")
         shutil.rmtree(root)
 
+    def test_colloquial_and_yes_no_follow_the_stored_fact(self):
+        qwen = ROOT / "models" / "Qwen2.5-0.5B-Instruct"
+        if not qwen.is_dir():
+            return
+        import torch
+        from memory_core.correct import _default_llm
+        from memory_core.paraphrase import polar_reply_from_fact
+        from memory_core.store import ExpertRecord
+
+        model, tok, device = _default_llm()
+        facts = []
+        for index, raw in enumerate(SHEN, start=1):
+            item = expand_training_fact(raw)
+            item["id"] = f"f{index}"
+            facts.append(item)
+        record = ExpertRecord(
+            name="expert_1000",
+            directory=ROOT,
+            experts_dir=ROOT,
+            writable=True,
+            key_path=ROOT,
+            key=torch.zeros(1, 512),
+            entities=["沈星河"],
+            explicit=True,
+            display_name="沈星河",
+            n_facts=len(facts),
+            rank=32,
+            batch=1000,
+            fact_memory={"facts": facts},
+        )
+        accept = [
+            ("沈星河的单车是什么颜色？", "自行车颜色", "朱红色"),
+            ("沈星河骑的那辆车是什么颜色？", "自行车颜色", "朱红色"),
+            ("沈星河家住哪？", "住址", "青岚镇"),
+            ("沈星河喜欢喝什么茶叶？", "最喜欢的茶", "桂花乌龙"),
+            ("沈星河最中意的茶是什么？", "最喜欢的茶", "桂花乌龙"),
+            ("沈星河的猫是不是叫云朵？", "猫的名字", "云朵"),
+        ]
+        for question, attr, value in accept:
+            decision, trace = route_with_trace(question, [record], GATE, model, tok, device)
+            self.assertTrue(decision.fired, f"{question} {trace.get('fact_gate')}")
+            matched = trace.get("matched_facts") or []
+            self.assertTrue(matched, question)
+            self.assertEqual(matched[0]["attr"], attr, question)
+            self.assertEqual(matched[0]["value"], value, question)
+            self.assertTrue((trace.get("fact_gate") or {}).get("answer_from_fact"), question)
+        reject = [
+            "沈星河最喜欢的咖啡是什么？",
+            "沈星河养的狗叫什么名字？",
+            "沈星河的狗的名字是什么？",
+            "沈星河的汽车颜色是什么？",
+            "沈星河的车是什么颜色？",
+            "沈星河的狗是不是叫可乐？",
+            "沈星河会弹古筝吗？",
+            "沈星河的老家在哪里？",
+        ]
+        for question in reject:
+            decision, trace = route_with_trace(question, [record], GATE, model, tok, device)
+            self.assertFalse(decision.fired, f"{question} -> {trace.get('fact_gate')}")
+        yes = polar_reply_from_fact("沈星河的猫是不是叫云朵？", {"value": "云朵"})
+        self.assertIn("云朵", yes)
+        self.assertTrue(yes.startswith("是"))
+        no = polar_reply_from_fact("沈星河的猫是不是叫可乐？", {"value": "云朵"})
+        self.assertTrue(no.startswith("不是"))
+        self.assertIn("云朵", no)
+
+    def test_missing_relative_bge_path_is_not_searched_from_cwd(self):
+        from router import resolve_emb_model
+        import router
+
+        previous = router.EMB_MODEL
+        try:
+            router.EMB_MODEL = "models/bge-small-zh-v1.5-missing"
+            with self.assertRaises(FileNotFoundError) as caught:
+                resolve_emb_model()
+            self.assertIn("is not a local folder", str(caught.exception))
+        finally:
+            router.EMB_MODEL = previous
+
     def _materialize(self, root: Path, facts: list[dict], key_texts: list[str]) -> None:
         import torch
         from router import embed

@@ -251,12 +251,15 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 0;
   letter-spacing: 0.02em;
   box-shadow: none;
-  display: block;
+  display: -webkit-box;
   width: 100%;
   min-width: 0;
-  white-space: nowrap;
+  white-space: normal;
   overflow: hidden;
-  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+  overflow-wrap: break-word;
 }
 main {
   display: flex;

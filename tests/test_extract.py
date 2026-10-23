@@ -67,6 +67,19 @@ class ExtractTests(unittest.TestCase):
             self.assertTrue(all(item["a"] == fact["value"] for item in trained["qa"]))
             self.assertTrue(any(item["q"].startswith("What") or item["q"].startswith("Where") for item in trained["qa"]))
 
+    def test_named_and_called_keep_the_name_attribute(self):
+        named = pattern_extract("Elena Brooks's dog is named Juniper.")
+        self.assertEqual(named[0]["attr"], "dog's name")
+        self.assertEqual(named[0]["value"], "Juniper")
+        self.assertEqual(named[0]["question"], "What is Elena Brooks's dog's name?")
+        called = pattern_extract("Mira Chen's cat is called Snow.")
+        self.assertEqual(called[0]["attr"], "cat's name")
+        self.assertEqual(called[0]["value"], "Snow")
+        self.assertIn("cat's name", called[0]["question"])
+        already = pattern_extract("Elena Brooks's dog's name is Juniper.")
+        self.assertEqual(already[0]["attr"], "dog's name")
+        self.assertEqual(already[0]["value"], "Juniper")
+
     def test_hallucinated_value_dropped(self):
         self.assertFalse(entailed({"entity": "沈星河", "value": "不存在的取值"}, "沈星河的猫的名字是云朵。"))
 

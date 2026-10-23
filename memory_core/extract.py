@@ -99,7 +99,11 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
         # bge-small-zh 把单词 address 嵌得很远，过不了 0.622。
         # “where they live” 对「Where does 某 live?」约 0.676。
         attr = attr or "where they live"
-    elif how in {"named", "is_en"}:
+    elif how in {"named", "called", "is_en"}:
+        # “X's dog is named Y” 问的是名字，不是狗本身。属性写成 dog's name，
+        # 问句才对得上 “What is X's dog's name?”。
+        if how in {"named", "called"} and not attr.lower().endswith("name"):
+            attr = f"{attr}'s name"
         question = f"What is {entity}'s {attr}?"
     else:
         question = _attr_question(entity, attr, "是什么？")
@@ -145,6 +149,13 @@ def pattern_extract(text: str) -> list[dict[str, Any]]:
             )
             if matched:
                 found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "named", sentence)
+        if found is None:
+            matched = re.match(
+                r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,40}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is called (?P<value>[A-Za-z0-9][A-Za-z0-9 '.-]{0,48})$",
+                sentence,
+            )
+            if matched:
+                found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "called", sentence)
         if found is None:
             matched = re.match(
                 r"^(?P<entity>[A-Za-z][A-Za-z .'-]{0,40}?)'s (?P<attr>[A-Za-z][A-Za-z' -]{0,48}?) is (?P<value>[A-Za-z0-9][A-Za-z0-9 '.-]{0,48})$",

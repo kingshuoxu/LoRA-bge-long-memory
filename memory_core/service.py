@@ -45,16 +45,26 @@ class ServiceError(RuntimeError):
 
 
 def _conversation_title(content: str) -> str:
-    """中文按字数截断。英文在词边界截断，避免标题停在单词中间。"""
+    """中文按字数截断。英文只在词边界截断，不把单词切成两半。"""
     text = " ".join(content.split())
     if not text:
         return text
-    if has_cjk(text) or len(text) <= 24:
-        return text[:24]
-    cut = text[:48]
-    space = cut.rfind(" ")
-    if space >= 8:
-        return cut[:space]
+    limit = 16 if has_cjk(text) else 32
+    if len(text) <= limit:
+        return text
+    space = text.rfind(" ", 0, limit + 1)
+    if space > 0:
+        return text[:space]
+    if not has_cjk(text):
+        end = text.find(" ")
+        return text if end < 0 else text[:end]
+    cut = text[:limit]
+    if cut and cut[-1].isascii() and cut[-1].isalnum():
+        latin = len(cut)
+        while latin > 0 and cut[latin - 1].isascii() and (cut[latin - 1].isalnum() or cut[latin - 1] in "'-"):
+            latin -= 1
+        if 0 < latin < len(cut):
+            return cut[:latin].rstrip()
     return cut
 
 
@@ -366,6 +376,14 @@ class MemoryService:
                 device=self.chat.device,
             )
             self.chat.sync_adapters(experts)
+            fact_answer = None
+            gate_info = recall.get("fact_gate") or {}
+            if decision.fired and gate_info.get("answer_from_fact"):
+                from memory_core.paraphrase import polar_reply_from_fact
+
+                matched = [fact for fact in (recall.get("matched_facts") or []) if isinstance(fact, dict)]
+                if matched:
+                    fact_answer = polar_reply_from_fact(content, matched[0]) or str(matched[0].get("value") or "")
             if decision.fired:
                 record = next((item for item in experts if item.name == decision.expert), None)
                 if record is None or not weights_ready(record.directory):
@@ -380,11 +398,12 @@ class MemoryService:
                     recall["reason"] = "missing_weights"
                     recall["reason_text"] = "专家权重不在，这一轮没有挂载，回答走基座"
                     recall["matched_facts"] = []
+                    fact_answer = None
                     for row in recall.get("experts") or []:
                         row["chosen"] = False
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
-            answer = self.chat.reply(prior, decision)
+            answer = fact_answer if fact_answer else self.chat.reply(prior, decision)
             extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
             assistant = self.convos.add_message(
                 conv_id,
@@ -466,6 +485,7 @@ class MemoryService:
     def _run_preview(self, preview_id: str, conversation_ids: list[str]) -> None:
         status = self.preview_status(preview_id)
         try:
+            self.ensure_ready()
             if not conversation_ids:
                 raise ServiceError("请先选择对话")
             self.ensure_ready()
@@ -843,14 +863,10 @@ class MemoryService:
         if statement and statement[-1:] not in "。！？.!?":
             statement += "。" if has_cjk(statement) else "."
         sources = list(target.get("source_conversations") or record.sources or [])
+        from memory_core.correct import reissue_training_fact
+
         fresh = {
             "id": new_id,
-            "entity": target.get("entity") or "",
-            "attr": target.get("attr") or "",
-            "value": new_value,
-            "answer": new_value,
-            "statement": statement,
-            "question": "",
             "corrects": fact_id,
             "source_conversations": sources,
             "raw": source_text,
@@ -872,9 +888,11 @@ class MemoryService:
             item["selected"] = True
             training.append(item)
             memory_facts.append(item)
-        new_item = expand_training_fact(fresh)
-        for key in ("id", "corrects", "source_conversations", "raw", "gate", "gate_reason", "selected"):
-            new_item[key] = fresh[key]
+        carried = dict(target)
+        carried["statement"] = statement
+        new_item = reissue_training_fact(carried, new_value)
+        for key, value in fresh.items():
+            new_item[key] = value
         training.append(new_item)
         memory_facts.append(new_item)
         if record.batch is None:

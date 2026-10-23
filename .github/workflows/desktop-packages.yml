@@ -112,6 +112,43 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --publish never
 
+      - name: Cache embedding and base models
+        uses: actions/cache@v4
+        with:
+          path: model-cache
+          key: lora-bge-models-v1
+
+      - name: Packaged training check
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          HF_HUB_DISABLE_TELEMETRY: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          script="$(find desktop/dist -type f \( -name 'e2e-check.sh' -o -name 'e2e-check.cmd' \) | head -n 1)"
+          if [ -z "$script" ]; then
+            echo "packaged e2e-check was not found" >&2
+            exit 1
+          fi
+          root="$(dirname "$script")"
+          if [ -d "$root/app/models" ] || [ -e "$root/app/models/bge-small-zh-v1.5" ]; then
+            echo "packaged app must not ship a cwd-relative models directory" >&2
+            exit 1
+          fi
+          home="${RUNNER_TEMP:-/tmp}/lora-e2e-home"
+          rm -rf "$home"
+          mkdir -p "$LORA_MEMORY_MODELS" "$home"
+          echo "running packaged training check from $root"
+          if [ "$(basename "$script")" = "e2e-check.cmd" ]; then
+            win_script="$(cygpath -w "$script")"
+            win_home="$(cygpath -w "$home")"
+            win_models="$(cygpath -w "$LORA_MEMORY_MODELS")"
+            cmd.exe //c "\"$win_script\" --fresh --home \"$win_home\" --models \"$win_models\" --device cpu"
+          else
+            bash "$script" --fresh --home "$home" --models "$LORA_MEMORY_MODELS" --device cpu
+          fi
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:

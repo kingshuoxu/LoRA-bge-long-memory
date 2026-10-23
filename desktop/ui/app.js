@@ -80,10 +80,11 @@ async function refreshHealth() {
   $("boot").hidden = ready;
   $("app").hidden = !ready;
   if (!ready) {
-    const detail = health.models && health.models.detail ? ` (${health.models.detail})` : "";
+    const rawDetail = health.models && health.models.detail ? tx(health.models.detail) : "";
+    const detail = rawDetail ? ` (${rawDetail})` : "";
     const failed = health.models && health.models.state === "error";
     $("boot-text").textContent = failed
-      ? t("boot.failedDetail", { detail: (health.models && health.models.detail) || t("boot.network") })
+      ? t("boot.failedDetail", { detail: rawDetail || t("boot.network") })
       : `${t("boot.loading")}${detail}`;
   }
   const device = health.device === "cpu" ? "CPU" : health.device === "cuda" ? "CUDA" : health.device === "mps" ? "MPS" : health.device;
@@ -163,7 +164,9 @@ function renderStages() {
     const r = stateName === "active" ? 7 : on ? 5.2 : 3.6;
     const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.45)";
     const linesOf = labelLines(stageTitle(point.stage));
-    const text = linesOf.map((line, lineIndex) => `<tspan x="${point.x.toFixed(1)}" dy="${lineIndex === 0 ? 0 : 16}">${esc(line)}</tspan>`).join("");
+    const detailText = point.stage.state === "active" ? tx(point.stage.detail || "") : "";
+    const detailLines = detailText ? labelLines(detailText).slice(0, 2) : [];
+    const text = linesOf.concat(detailLines).map((line, lineIndex) => `<tspan x="${point.x.toFixed(1)}" dy="${lineIndex === 0 ? 0 : 16}">${esc(line)}</tspan>`).join("");
     return `<g>
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 10}" fill="${fill}" opacity="${on ? 0.18 : 0.05}" />
       <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
@@ -694,7 +697,7 @@ async function loadNebula() {
         tip.style.left = `${x + 14}px`;
         tip.style.top = `${y + 14}px`;
         if (payload.kind === "fact") {
-          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? t("fact.dim") : t("fact.live")} · ${esc(payload.fact.expert_label || "")}</div>${factScoreLine(payload.fact)}`;
+          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? t("fact.dim") : t("fact.live")} · ${esc(tx(payload.fact.expert_label || ""))}</div>${factScoreLine(payload.fact)}`;
         } else if (payload.kind === "conversation") {
           tip.innerHTML = `<strong>${esc(payload.conversation.title)}</strong><div class="muted">${esc(payload.conversation.snippet || "")}</div>`;
         } else if (payload.kind === "expert") {
@@ -734,7 +737,7 @@ function openStar(fact) {
   const editor = fact.writable ? `<label class="muted">${esc(t("star.edit"))}</label><input id="star-value" type="text" value="" placeholder="${esc(t("star.placeholder"))}" />` : `<p class="muted">${esc(t("star.locked"))}</p>`;
   $("modal-body").innerHTML = `
     <p>${esc(fact.statement || "")}</p>
-    <p class="muted">${esc(fact.expert_label || fact.expert)} · ${esc(fact.entity)} · ${esc(fact.attr)} · ${esc(status)}</p>
+    <p class="muted">${esc(tx(fact.expert_label || fact.expert))} · ${esc(fact.entity)} · ${esc(fact.attr)} · ${esc(status)}</p>
     ${snippets || `<div class="snippet">${esc(t("empty.snippets"))}</div>`}
     <div id="star-proposal"></div>
     ${editor}`;

@@ -338,7 +338,15 @@
     "先写下新的取值": "star.needValue",
     "没有生成纠正": "star.noProposal",
     "请先选择至少一则对话": "star.needChat",
+    "模型文件不完整": "The model files are incomplete",
+    "没有可登记的事实": "There is no fact to register",
+    "指定了 CUDA，但当前 PyTorch 检测不到可用 GPU": "CUDA was requested, but this PyTorch build cannot see a GPU",
+    "指定了 MPS，但当前 PyTorch 不可用": "MPS was requested, but it is not available",
   };
+
+  function foreignName(name) {
+    return String(name || "").replace(/、/g, ", ").replace(/等$/, "").trim();
+  }
 
   const PATTERNS = [
     [/^选了 (\d+) 则对话$/, (m) => `Selected ${m[1]} conversation(s)`],
@@ -354,7 +362,7 @@
     [/^最好 loss (.+)$/, (m) => `Best loss ${m[1]}`],
     [/^主问题 (\d+)\/(\d+) 答对$/, (m) => `Main questions ${m[1]}/${m[2]} correct`],
     [/^已登记 (.+)，路由键 (\d+) 条$/, (m) => `Registered ${m[1]}, ${m[2]} router keys`],
-    [/^已写入记忆 · (.+)$/, (m) => `Saved to memory · ${m[1]}`],
+    [/^已写入记忆 · (.+)$/, (m) => `Saved to memory · ${foreignName(m[1])}`],
     [/^训练进程退出（代码 (\d+)）。详见 train\.log$/, (m) => `Training process exited (code ${m[1]}). See train.log`],
     [/^训练没有收敛（best loss=(.+)）$/, (m) => `Training did not converge (best loss=${m[1]})`],
     [/^基座已经答对（(.+)），写门建议跳过$/, (m) => `The base model already answered (${m[1]}); the write gate suggests skipping`],
@@ -362,7 +370,7 @@
     [/^基座答成「(.+)」，和已有记忆也不重复$/, (m) => `Base model answered “${m[1]}”, and it is not a duplicate`],
     [/^要把「(.+)」改成「(.+)」吗？$/, (m) => `Change “${m[1]}” to “${m[2]}”?`],
     [/^已确认。正在重新训练「(.+)」，旧取值 (.+) 会暗下去。$/, (m) => `Confirmed. Retraining “${m[1]}”. The old value ${m[2]} will dim.`],
-    [/^记忆 · (.+)$/, (m) => `Memory · ${m[1]}`],
+    [/^记忆 · (.+)$/, (m) => `Memory · ${foreignName(m[1])}`],
     [/^（没能生成：(.+)）$/, (m) => `(could not generate: ${m[1]})`],
   ];
 
@@ -394,16 +402,27 @@
     return fill(template, vars);
   }
 
-  function tx(value) {
-    const text = value == null ? "" : String(value);
-    if (!text || locale === "zh-CN") return text;
+  function translateSurface(text) {
     const exact = EXACT[text];
     if (exact) return STR.en[exact] != null ? t(exact) : exact;
     for (let i = 0; i < PATTERNS.length; i += 1) {
       const matched = text.match(PATTERNS[i][0]);
       if (matched) return PATTERNS[i][1](matched);
     }
+    const normalized = text.replace(/[·・∙]/g, "·").replace(/[ \t]+/g, " ").trim();
+    if (normalized !== text) {
+      for (let i = 0; i < PATTERNS.length; i += 1) {
+        const matched = normalized.match(PATTERNS[i][0]);
+        if (matched) return PATTERNS[i][1](matched);
+      }
+    }
     return text;
+  }
+
+  function tx(value) {
+    const text = value == null ? "" : String(value);
+    if (!text || locale === "zh-CN") return text;
+    return translateSurface(text);
   }
 
   function apply(root) {
@@ -437,6 +456,7 @@
   window.i18n = {
     t,
     tx,
+    foreignName,
     apply,
     setLocale,
     getLocale: () => locale,
