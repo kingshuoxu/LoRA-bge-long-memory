@@ -152,10 +152,15 @@ jobs:
           mkdir -p "$LORA_MEMORY_MODELS" "$home"
           echo "running packaged training check from $root via $script"
           if [ "${RUNNER_OS}" = "Windows" ]; then
-            win_script="$(cygpath -w "$script")"
-            win_home="$(cygpath -w "$home")"
-            win_models="$(cygpath -w "$LORA_MEMORY_MODELS")"
-            cmd.exe //c "\"$win_script\" --fresh --home \"$win_home\" --models \"$win_models\" --device cpu"
+            # cmd /c 外面再套 \" 时，cmd 会把引号当成程序名。直接启动包内的
+            # python.exe，环境变量与 e2e-check.cmd 相同，并关掉 MSYS 的路径改写。
+            export PYTHONPATH="$(cygpath -w -a "$root/app")"
+            export LORA_MEMORY_UI="$(cygpath -w -a "$root/ui")"
+            export MSYS2_ARG_CONV_EXCL='*'
+            py="$(cygpath -w -a "$root/runtime/python.exe")"
+            win_home="$(cygpath -w -a "$home")"
+            win_models="$(cygpath -w -a "$LORA_MEMORY_MODELS")"
+            "$py" -m memory_core.e2e_check --fresh --home "$win_home" --models "$win_models" --device cpu
           else
             bash "$script" --fresh --home "$home" --models "$LORA_MEMORY_MODELS" --device cpu
           fi
