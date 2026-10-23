@@ -55,10 +55,19 @@ def _entity_surfaces(name: str) -> list[str]:
     return surfaces
 
 
+def _mentions_self(query: str) -> bool:
+    """「我」只认「我的」或后面不再接汉字。避免「我们」「告诉我」误命中用户。"""
+    if "我的" in query:
+        return True
+    return bool(re.search(r"我(?![\u4e00-\u9fff])", query))
+
+
 def entity_mentioned(name: str, query: str) -> bool:
     """问句里是否点了这个实体。拉丁名忽略大小写、称谓和所有格。"""
     if not name or not query:
         return False
+    if name == "我":
+        return _mentions_self(query)
     if name in query:
         return True
     ensure_scripts_path()

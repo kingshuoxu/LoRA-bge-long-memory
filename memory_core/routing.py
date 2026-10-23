@@ -63,6 +63,10 @@ def _base(sim: float, expert: str | None, reason: str, entity_pass: bool, fact_p
 
 def _entity_hit(entity: str, text: str) -> int:
     """命中时返回用来比长短的长度。拉丁名忽略大小写和称谓。"""
+    if entity == "我":
+        from memory_core.fact_span import entity_mentioned
+
+        return 1 if entity_mentioned("我", text) else 0
     if len(entity) >= 2 and entity in text:
         return len(entity)
     ensure_scripts_path()
@@ -81,7 +85,7 @@ def _owner(text: str, experts: list[ExpertRecord]) -> ExpertRecord | None:
     for expert in experts:
         for entity in expert.entities:
             length = _entity_hit(entity, text)
-            if length >= 2 and (best is None or length > best[0]):
+            if length >= 1 and (best is None or length > best[0]):
                 best = (length, expert)
     return None if best is None else best[1]
 
@@ -143,6 +147,9 @@ _REASON_TEXT = {
     "no_experts": "没有可挂载的专家，回答走基座",
     "missing_weights": "专家权重不在，这一轮没有挂载，回答走基座",
     "correction_proposal": "这一轮在确认纠正，没有挂载专家",
+    "entity_overview": "问句点了已存的实体，但没有问具体属性，所以列出这个实体的全部记忆",
+    "entity_grounded": "问的是已存实体，这个属性没有记住，所以只回答已存事实",
+    "statement_ack": "这句话是在陈述，先确认，还没有写入记忆",
 }
 
 

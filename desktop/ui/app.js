@@ -390,7 +390,7 @@ function recallTrace(extra) {
 }
 
 function chipLabel(trace) {
-  if (!trace || !trace.mounted) return t("chip.idle");
+  if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("chip.ack") : t("chip.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const name = row ? row.display_name : trace.mounted_expert;
   const facts = (trace.matched_facts || []).map((fact) => fact.value || fact.attr).filter(Boolean);
@@ -413,10 +413,15 @@ function recallChip(msg, extra) {
 }
 
 function bannerText(trace) {
-  if (!trace || !trace.mounted) return t("banner.idle");
+  if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("banner.ack") : t("banner.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const name = row ? row.display_name : trace.mounted_expert;
   const tau = trace.thresholds || {};
+  const grounded = (trace.matched_facts || []).some((fact) => fact.grounded);
+  if (grounded) {
+    const list = (trace.matched_facts || []).map((fact) => fact.attr || fact.value).filter(Boolean).join(t("list.sep"));
+    return t("banner.mounted", { name, which: t("banner.grounded", { list }), sim: t("banner.entity") });
+  }
   const matched = (trace.matched_facts || []).map((fact) => t("banner.fact", {
     label: fact.attr || fact.value || t("fact.this"),
     q: Number(fact.question_sim).toFixed(3),

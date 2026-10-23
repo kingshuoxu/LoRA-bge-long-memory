@@ -91,6 +91,19 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(already[0]["attr"], "dog's name")
         self.assertEqual(already[0]["value"], "Juniper")
 
+    def test_my_pet_diminutive_is_the_users_cat(self):
+        fact = pattern_extract("我的猫猫叫咪咪")[0]
+        self.assertEqual(fact["entity"], "我")
+        self.assertEqual(fact["attr"], "猫的名字")
+        self.assertEqual(fact["value"], "咪咪")
+        dog = pattern_extract("我的狗狗叫豆包")[0]
+        self.assertEqual(dog["entity"], "我")
+        self.assertEqual(dog["attr"], "狗的名字")
+        mother = pattern_extract("我的妈妈叫兰兰")[0]
+        self.assertEqual(mother["entity"], "我")
+        self.assertEqual(mother["attr"], "妈妈的名字")
+        self.assertEqual(mother["value"], "兰兰")
+
     def test_hallucinated_value_dropped(self):
         self.assertFalse(entailed({"entity": "沈星河", "value": "不存在的取值"}, "沈星河的猫的名字是云朵。"))
 

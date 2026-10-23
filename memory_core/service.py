@@ -15,7 +15,14 @@ from typing import Any
 from memory_core.chat import ChatEngine
 from memory_core.conversations import ConversationStore
 from memory_core.device import pick_device
-from memory_core.correct import propose_from_records
+from memory_core.correct import propose_from_records, utterance_is_question
+from memory_core.grounding import (
+    acknowledge_statement,
+    ground_if_unknown,
+    mount_memory,
+    overview_if_open,
+    statement_trace,
+)
 from memory_core.extract import (
     _split_sentences,
     company_pipeline_extract,
@@ -116,47 +123,6 @@ def _clip_text(text: str, limit: int = 42) -> str:
             cut = cut[:-1]
         cut = cut.rstrip()
     return (cut or text[:limit].rstrip()) + "…"
-
-
-def _known_entities(content: str, experts: list[Any]) -> list[str]:
-    from memory_core.fact_span import entity_mentioned
-
-    found: list[str] = []
-    for expert in experts:
-        memory = getattr(expert, "fact_memory", None) or {}
-        facts = memory.get("facts") if isinstance(memory, dict) else None
-        names = [str(fact.get("entity") or "") for fact in facts or []]
-        names.extend(str(name) for name in (getattr(expert, "entities", None) or []))
-        for name in names:
-            if name and entity_mentioned(name, content) and name not in found:
-                found.append(name)
-    return found
-
-
-def _personal_question(content: str, entity: str) -> bool:
-    if not entity or entity not in content and entity.casefold() not in content.casefold():
-        return False
-    if has_cjk(content):
-        return any(mark in content for mark in ("的", "住", "叫", "养", "吗"))
-    if re.search(re.escape(entity) + r"(?:'s|’s)", content, re.IGNORECASE):
-        return True
-    return bool(re.search(r"\b(name|named|called|live|lives|colour|color)\b", content, re.IGNORECASE))
-
-
-def _unknown_memory_answer(content: str, entities: list[str]) -> str:
-    name = entities[0]
-    topic = ""
-    if has_cjk(content):
-        matched = re.search(re.escape(name) + r"的([\u4e00-\u9fff]{1,12})", content)
-        if matched:
-            topic = re.split(r"是|叫|吗|呢|什么|哪", matched.group(1))[0]
-        subject = f"{name}的{topic}" if topic else name
-        return f"没有存过关于{subject}的记忆，不知道。"
-    matched = re.search(re.escape(name) + r"'s ([A-Za-z][\w' -]{0,40})", content, re.IGNORECASE)
-    if matched:
-        topic = matched.group(1).strip(" ?.")
-    subject = f"{name}'s {topic}" if topic else name
-    return f"No stored memory about {subject}, so I don't know."
 
 
 def _stage_skeleton() -> list[dict[str, Any]]:
@@ -458,6 +424,34 @@ class MemoryService:
                     "fact_pass": False,
                 }
                 return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal, "recall": recall}
+            if not utterance_is_question(content):
+                stated = pattern_extract(content)
+                if stated:
+                    notes = [acknowledge_statement(fact) for fact in stated]
+                    note = "".join(notes) if all(has_cjk(item) for item in notes) else " ".join(notes)
+                    recall = statement_trace()
+                    extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
+                    assistant = self.convos.add_message(
+                        conv_id,
+                        "assistant",
+                        note,
+                        expert=None,
+                        expert_label="基座",
+                        sim=None,
+                        fired=False,
+                        reason="statement_ack",
+                        extra=extra,
+                    )
+                    route = {
+                        "fired": False,
+                        "expert": None,
+                        "sim": 0.0,
+                        "label": "基座",
+                        "reason": "statement_ack",
+                        "entity_pass": False,
+                        "fact_pass": False,
+                    }
+                    return {"user": user_msg, "assistant": assistant, "route": route, "recall": recall}
             experts = self.expert_records()
             gate_dirs = [self.experts_dir]
             if self.repo_experts is not None:
@@ -473,18 +467,31 @@ class MemoryService:
             self.chat.sync_adapters(experts)
             fact_answer = None
             hint = ""
+            grounded = False
             gate_info = recall.get("fact_gate") or {}
-            if decision.fired and gate_info.get("answer_from_fact"):
+            opened = overview_if_open(content, experts)
+            if opened:
+                fact_answer, expert, facts = opened
+                mount_memory(decision, recall, expert, facts, "entity_overview")
+                grounded = True
+            elif decision.fired and gate_info.get("answer_from_fact"):
                 from memory_core.paraphrase import polar_reply_from_fact
 
                 matched = [fact for fact in (recall.get("matched_facts") or []) if isinstance(fact, dict)]
                 if matched:
                     fact_answer = polar_reply_from_fact(content, matched[0]) or str(matched[0].get("value") or "")
             elif not decision.fired:
-                known = _known_entities(content, experts)
-                if known and (gate_info.get("rejected_attribute") or _personal_question(content, known[0])):
-                    fact_answer = _unknown_memory_answer(content, known)
-            if decision.fired:
+                closed = ground_if_unknown(
+                    content,
+                    experts,
+                    rejected=bool(gate_info.get("rejected_attribute")),
+                    routed_expert=decision.expert,
+                )
+                if closed:
+                    fact_answer, expert, facts = closed
+                    mount_memory(decision, recall, expert, facts, "entity_grounded")
+                    grounded = True
+            if decision.fired and not grounded:
                 record = next((item for item in experts if item.name == decision.expert), None)
                 if record is None or not weights_ready(record.directory):
                     decision.fired = False

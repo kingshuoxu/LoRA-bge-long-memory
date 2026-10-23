@@ -476,6 +476,18 @@ def extra_questions(persona: dict) -> dict[str, list]:
     return {"yesno": yesno, "abstain": abstain}
 
 
+def open_questions(persona: dict) -> list[str]:
+    """点名实体、不点属性。不拿去调事实闸。"""
+    name = persona["name"]
+    if persona["lang"] == "zh":
+        return [f"介绍一下{name}", f"{name}的情况", f"告诉我{name}相关信息"]
+    return [
+        f"Tell me about {name}",
+        f"What do you know about {name}?",
+        f"What can you tell me about {name}?",
+    ]
+
+
 def correction_phrasings(name: str, old: str, new: str) -> list[str]:
     return [
         f"{name}'s dog is not {old}, it is {new}.",
@@ -594,13 +606,46 @@ def score_persona(persona: dict) -> dict:
         else:
             wrong.append((question, None, got.get("attr"), got.get("value"), "abstain"))
             abstain_misses.append((question, got.get("attr"), got.get("value")))
+    from memory_core.grounding import contradicting_facts, missing_topic, open_entity_question, overview_reply
+
+    open_hits = 0
+    open_total = 0
+    contradict = []
+    for question in open_questions(persona):
+        open_total += 1
+        reply = overview_reply(persona["name"], facts)
+        recognized = open_entity_question(question, persona["name"])
+        missing_values = [fact["value"] for fact in facts if fact["value"] not in reply]
+        bad = contradicting_facts(reply, facts)
+        if recognized and not missing_values and not bad:
+            open_hits += 1
+        else:
+            contradict.append((question, missing_values, bad, recognized, reply))
+    unknown_hits = 0
+    unknown_total = 0
+    fabricated = []
+    phrase = "不在记忆里" if persona["lang"] == "zh" else "not in memory"
+    for question in extras["abstain"]:
+        unknown_total += 1
+        topic = missing_topic(question, persona["name"], facts)
+        reply = overview_reply(persona["name"], facts, missing=topic)
+        bad = contradicting_facts(reply, facts, topic=topic)
+        has_value = any(fact["value"] in reply for fact in facts)
+        if bad or phrase not in reply or not has_value or open_entity_question(question, persona["name"]):
+            fabricated.append((question, topic, bad, reply))
+        else:
+            unknown_hits += 1
     return {
         "id": persona["id"],
         "lang": persona["lang"],
         "paraphrase": (paraphrase_hits, paraphrase_total),
         "yesno": (yes_hits, yes_total),
         "abstain": (abstain_hits, abstain_total),
+        "open": (open_hits, open_total),
+        "unknown": (unknown_hits, unknown_total),
         "wrong": wrong,
+        "contradict": contradict,
+        "fabricated": fabricated,
         "misses": misses,
         "yes_misses": yes_misses,
         "abstain_misses": abstain_misses,
@@ -608,30 +653,38 @@ def score_persona(persona: dict) -> dict:
     }
 
 
+def _empty_scores() -> dict:
+    return {
+        "paraphrase": [0, 0],
+        "yesno": [0, 0],
+        "abstain": [0, 0],
+        "open": [0, 0],
+        "unknown": [0, 0],
+        "wrong": [],
+        "contradict": [],
+        "fabricated": [],
+        "rows": [],
+    }
+
+
 def _add(total: dict, row: dict) -> None:
-    for key in ("paraphrase", "yesno", "abstain"):
+    for key in ("paraphrase", "yesno", "abstain", "open", "unknown"):
         hits, count = row[key]
         total[key][0] += hits
         total[key][1] += count
     total["wrong"].extend((row["id"], item) for item in row["wrong"])
+    total["contradict"].extend((row["id"], item) for item in row["contradict"])
+    total["fabricated"].extend((row["id"], item) for item in row["fabricated"])
     total["rows"].append(row)
 
 
 def score_split(personas: list[dict]) -> dict:
-    total = {
-        "paraphrase": [0, 0],
-        "yesno": [0, 0],
-        "abstain": [0, 0],
-        "wrong": [],
-        "rows": [],
-        "by_lang": {},
-    }
+    total = _empty_scores()
+    total["by_lang"] = {}
     for persona in personas:
         row = score_persona(persona)
         _add(total, row)
-        bucket = total["by_lang"].setdefault(persona["lang"], {
-            "paraphrase": [0, 0], "yesno": [0, 0], "abstain": [0, 0], "wrong": [], "rows": [],
-        })
+        bucket = total["by_lang"].setdefault(persona["lang"], _empty_scores())
         _add(bucket, row)
     return total
 
@@ -646,12 +699,16 @@ def _fmt(pair: list[int] | tuple[int, int]) -> str:
 def format_report(label: str, total: dict) -> str:
     lines = [
         f"{label} paraphrase {_fmt(total['paraphrase'])} yes/no {_fmt(total['yesno'])} "
-        f"abstain {_fmt(total['abstain'])} wrong {len(total['wrong'])}"
+        f"abstain {_fmt(total['abstain'])} wrong {len(total['wrong'])} "
+        f"open {_fmt(total.get('open') or (0, 0))} contradict {len(total.get('contradict') or [])} "
+        f"unknown {_fmt(total.get('unknown') or (0, 0))} fabricated {len(total.get('fabricated') or [])}"
     ]
     for lang, bucket in total["by_lang"].items():
         lines.append(
             f"  {lang} paraphrase {_fmt(bucket['paraphrase'])} yes/no {_fmt(bucket['yesno'])} "
-            f"abstain {_fmt(bucket['abstain'])} wrong {len(bucket['wrong'])}"
+            f"abstain {_fmt(bucket['abstain'])} wrong {len(bucket['wrong'])} "
+            f"open {_fmt(bucket.get('open') or (0, 0))} contradict {len(bucket.get('contradict') or [])} "
+            f"unknown {_fmt(bucket.get('unknown') or (0, 0))} fabricated {len(bucket.get('fabricated') or [])}"
         )
     return "\n".join(lines)
 
@@ -677,6 +734,16 @@ def assert_held_out(total: dict | None = None) -> dict:
         errors.append(f"abstain zh {_fmt(zh.get('abstain', (0, 0)))} en {_fmt(en.get('abstain', (0, 0)))}")
     if total["wrong"]:
         errors.append(f"wrong-attribute {len(total['wrong'])}")
+    open_hits, open_total = total.get("open") or (0, 0)
+    if not open_total or open_hits != open_total:
+        errors.append(f"open {_fmt(total.get('open') or (0, 0))}")
+    if total.get("contradict"):
+        errors.append(f"open contradict {len(total['contradict'])}")
+    unknown_hits, unknown_total = total.get("unknown") or (0, 0)
+    if not unknown_total or unknown_hits != unknown_total:
+        errors.append(f"unknown {_fmt(total.get('unknown') or (0, 0))}")
+    if total.get("fabricated"):
+        errors.append(f"fabricated {len(total['fabricated'])}")
     if errors:
         detail = format_report("HELD", total)
         raise AssertionError(detail + "\n" + "; ".join(errors))

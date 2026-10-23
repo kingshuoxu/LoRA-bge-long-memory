@@ -90,6 +90,8 @@ _EN_COLOR = re.compile(
 def _refine_attr(attr: str, value: str, how: str, raw: str) -> str:
     """属性要带上颜色、名字、品牌这类性质。只看取值和原句里的性质，不给事物配同义词。"""
     if has_cjk(f"{attr}{value}{raw}"):
+        if attr in {"猫猫", "狗狗"}:
+            attr = attr[0]
         if how == "叫" and "名" not in attr:
             attr = f"{attr}的名字"
         if "色" in value and "色" not in attr:
