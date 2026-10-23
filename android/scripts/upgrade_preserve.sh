@@ -171,7 +171,7 @@ echo "upgrade preserved memory, models, settings; versionCode 1003"
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest,com.lorabge.memory.NebulaGestureTest --no-daemon
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest,com.lorabge.memory.NebulaGestureTest --no-daemon
 gradle_status=$?
 set -e
 # aosp_atd 没有 tar。逐个 cat 出来。测试失败也要留下截图。
@@ -200,9 +200,17 @@ if [ "$gradle_status" -ne 0 ]; then
   find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true
   exit "$gradle_status"
 fi
-for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png nebula-gesture.mp4 nebula-renderer.txt; do
+for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png 09-nebula-before.png 10-nebula-after.png nebula-gesture.mp4 nebula-renderer.txt; do
   test -s "$STAGE/shots/$name"
 done
+grep -q '^path=' "$STAGE/shots/nebula-renderer.txt"
+grep -q '^variance=' "$STAGE/shots/nebula-renderer.txt"
+grep -q '^pixelDiff=' "$STAGE/shots/nebula-renderer.txt"
+# 仪器测试包才允许带草稿注入。这里确认这次装上去的测试包带了它，发布包在 release workflow 里做相反的检查。
+if ! unzip -p app/build/outputs/apk/debug/app-debug.apk 'classes*.dex' | grep -a -q 'e2e-draft.txt'; then
+  echo "仪器测试包缺少 e2e-draft.txt，中文句子不会进输入框" >&2
+  exit 1
+fi
 mp4_bytes=$(wc -c <"$STAGE/shots/nebula-gesture.mp4" | tr -d '[:space:]')
 test "$mp4_bytes" -gt 8000
 echo "nebula renderer:"

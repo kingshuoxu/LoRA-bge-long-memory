@@ -66,10 +66,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.editableText
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setText
+import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily as ComposeFontFamily
@@ -807,6 +810,7 @@ internal fun MilkyWay(paused: Boolean) {
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
     val shown = state.messages + if (state.generating) {
         listOf(SkyMessage("assistant", state.streaming))
@@ -825,37 +829,38 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 Bubble(state.lang, ordered[index], live, if (live) state.waitSeconds else 0, state.liveMotion)
             }
         }
-        OutlinedTextField(
-            value = state.draft,
-            onValueChange = { onEvent(SkyEvent.Draft(it)) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 4.dp)
-                .semantics {
-                    contentDescription = if (state.e2e && state.draft.isNotEmpty()) {
-                        "composer ${state.draft}"
-                    } else {
-                        "composer"
-                    }
-                    editableText = AnnotatedString(state.draft)
-                    setText { updated ->
-                        onEvent(SkyEvent.Draft(updated.text))
-                        true
-                    }
-                },
-            placeholder = { Text(skyText(state.lang, "placeholder"), color = Muted) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { onEvent(SkyEvent.Send) }),
-            trailingIcon = {
-                Box(
-                    Modifier.size(40.dp).semantics { contentDescription = "send" }.clickable { onEvent(SkyEvent.Send) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    SkyIcon("send", if (state.draft.isBlank()) Muted else Accent, Modifier.size(22.dp))
+        // 语义放在输入框外面。交给 OutlinedTextField 的 modifier 会被装饰层盖住，
+        // 无障碍树里只剩一个没有 EditableText 的 View，真输入法和 UiAutomator 都打不进去。
+        Box(
+            Modifier.fillMaxWidth().semantics {
+                testTagsAsResourceId = true
+                testTag = "composer"
+                contentDescription = "composer"
+                editableText = AnnotatedString(state.draft)
+                setText { updated ->
+                    onEvent(SkyEvent.Draft(updated.text))
+                    true
                 }
             },
-            maxLines = 4,
-        )
+        ) {
+            OutlinedTextField(
+                value = state.draft,
+                onValueChange = { onEvent(SkyEvent.Draft(it)) },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                placeholder = { Text(skyText(state.lang, "placeholder"), color = Muted) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onEvent(SkyEvent.Send) }),
+                trailingIcon = {
+                    Box(
+                        Modifier.size(40.dp).semantics { contentDescription = "send" }.clickable { onEvent(SkyEvent.Send) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        SkyIcon("send", if (state.draft.isBlank()) Muted else Accent, Modifier.size(22.dp))
+                    }
+                },
+                maxLines = 4,
+            )
+        }
         if (state.imeBottom > 0.dp) FakeKeyboard(state.imeBottom)
     }
 }

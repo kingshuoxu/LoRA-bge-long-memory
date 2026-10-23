@@ -176,12 +176,10 @@ private fun PhoneApp(
     var draft by remember { mutableStateOf("") }
     LaunchedEffect(e2e) {
         if (!e2e) return@LaunchedEffect
-        val pin = File(context.filesDir, "setup/e2e-draft.txt")
         while (true) {
             delay(200)
-            if (!pin.exists()) continue
-            val text = pin.readText()
-            if (text.isNotEmpty() && draft != text) draft = text
+            val text = E2eDraft.poll(context.filesDir) ?: continue
+            if (draft != text) draft = text
         }
     }
     var generating by remember { mutableStateOf(false) }
@@ -297,8 +295,7 @@ private fun PhoneApp(
             is SkyEvent.Lang -> lang = event.lang
             is SkyEvent.Tab -> tab = event.tab
             is SkyEvent.Draft -> {
-                val pin = File(context.filesDir, "setup/e2e-draft.txt")
-                draft = if (e2e && pin.exists()) pin.readText() else event.text
+                draft = if (e2e) E2eDraft.poll(context.filesDir) ?: event.text else event.text
             }
             SkyEvent.NewChat -> {
                 currentId = store.newConversation().id
@@ -329,7 +326,7 @@ private fun PhoneApp(
                 onCleared()
             }
             SkyEvent.Send -> {
-                if (e2e) File(context.filesDir, "setup/e2e-draft.txt").delete()
+                if (e2e) E2eDraft.clear(context.filesDir)
                 val text = draft.trim()
                 if (text.isEmpty() || generating) return@SkyFrame
                 val conversation = current ?: store.newConversation().also { currentId = it.id }

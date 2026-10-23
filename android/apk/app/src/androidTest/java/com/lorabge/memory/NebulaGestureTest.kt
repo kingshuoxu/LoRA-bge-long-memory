@@ -1,6 +1,9 @@
 package com.lorabge.memory
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.graphics.Rect
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -72,16 +75,24 @@ class NebulaGestureTest {
             contains(nebula.visibleBounds, gear.visibleBounds.centerX(), gear.visibleBounds.centerY()),
         )
         val ready = waitStatus(25_000) { status ->
-            status.optInt("frames") >= 1 &&
-                status.optString("renderer").isNotBlank() &&
-                status.optDouble("hitX") > 1.0 &&
-                status.optString("fallback") != "canvas"
+            val path = renderPath(status)
+            status.optInt("frames") >= 1 && path.isNotBlank() && when (path) {
+                "canvas" -> status.optString("renderer") == "compose-canvas"
+                else -> status.optString("renderer").isNotBlank() && status.optDouble("hitX") > 1.0
+            }
         }
         assertEqualsFresh(ready)
-        File(shots, "nebula-renderer.txt").writeText(
-            "renderer=${ready.optString("renderer")}\nversion=${ready.optString("version")}\nfallback=${ready.optString("fallback")}\n",
-        )
-        // aosp_atd 的 screenrecord 和 adb screencap 都是空的。UiAutomation 截图才有画面。
+        val beforeStill = capture("09-nebula-before.png")
+        val area = region(beforeStill, nebula.visibleBounds)
+        Thread.sleep(450)
+        val idleStill = capture("09-nebula-idle.png")
+        val variance = lumaVariance(idleStill, area)
+        val idleDiff = meanAbsDiff(beforeStill, idleStill, area)
+        beforeStill.recycle()
+        idleStill.recycle()
+        assertTrue("nebula region is flat, variance=$variance path=${renderPath(ready)}", variance > 6.0)
+        val touchesBefore = ready.optInt("touches")
+        // aosp_atd 的 screenrecord 和 adb screencap 都是空的。UiAutomation.takeScreenshot 才包含 WebView 的 GL 画面。
         val frames = File(shots, "frames")
         frames.mkdirs()
         frames.listFiles()?.forEach { it.delete() }
@@ -111,7 +122,14 @@ class NebulaGestureTest {
             abs(status.optDouble("cameraZ") - beforeZ) > 0.15 ||
                 abs(status.optDouble("cameraX") - beforeX) > 0.05
         }
-        Thread.sleep(900)
+        Thread.sleep(700)
+        val afterStill = capture("10-nebula-after.png")
+        val idleAgain = BitmapFactory.decodeFile(File(shots, "09-nebula-idle.png").absolutePath)
+            ?: error("idle nebula frame missing")
+        val afterArea = region(afterStill, (device.findObject(By.desc("nebula")) ?: nebula).visibleBounds)
+        val pixelDiff = meanAbsDiff(idleAgain, afterStill, afterArea)
+        idleAgain.recycle()
+        afterStill.recycle()
         val view = device.findObject(By.desc("nebula")) ?: nebula
         val hit = waitStatus(4_000) { it.optDouble("hitX") > 1.0 }
         val dpr = hit.optDouble("dpr", 1.0).coerceAtLeast(1.0)
@@ -136,6 +154,24 @@ class NebulaGestureTest {
         }
         File(shots, "nebula-status.json").writeText(File(context.filesDir, "setup/nebula-status.json").readText())
         device.takeScreenshot(File(shots, "08-nebula-fact.png"))
+        File(shots, "nebula-renderer.txt").writeText(
+            "renderer=${ready.optString("renderer")}\n" +
+                "version=${ready.optString("version")}\n" +
+                "path=${renderPath(moved)}\n" +
+                "fallback=${moved.optString("fallback")}\n" +
+                "touches=${moved.optInt("touches")}\n" +
+                "variance=$variance\n" +
+                "idleDiff=$idleDiff\n" +
+                "pixelDiff=$pixelDiff\n",
+        )
+        assertTrue(
+            "gesture did not change nebula pixels idle=$idleDiff moved=$pixelDiff",
+            pixelDiff > 2.0 && pixelDiff + 0.5 >= idleDiff,
+        )
+        assertTrue(
+            "renderer received no touch events before=${touchesBefore} after=${moved.optInt("touches")} path=${renderPath(moved)}",
+            moved.optInt("touches") > touchesBefore,
+        )
         assertTrue(
             "pinch did not change zoom from $beforeZoom\n$zoomed",
             abs(zoomed.optDouble("zoom") - beforeZoom) > 0.15,
@@ -150,6 +186,83 @@ class NebulaGestureTest {
             stop.set(true)
             grabber.join(4_000)
         }
+    }
+
+    private fun renderPath(status: JSONObject): String {
+        val path = status.optString("path")
+        if (path == "webgl2" || path == "webgl1" || path == "canvas") return path
+        return when (status.optString("version")) {
+            "webgl2" -> "webgl2"
+            "webgl", "webgl1" -> "webgl1"
+            "canvas" -> "canvas"
+            else -> when (status.optString("fallback")) {
+                "webgl1" -> "webgl1"
+                "canvas" -> "canvas"
+                else -> ""
+            }
+        }
+    }
+
+    private fun capture(name: String): Bitmap {
+        val file = File(shots, name)
+        assertTrue("UiAutomation screenshot failed for $name", device.takeScreenshot(file))
+        return BitmapFactory.decodeFile(file.absolutePath) ?: error("could not decode $name")
+    }
+
+    private fun region(bitmap: Bitmap, bounds: Rect): Rect {
+        val sx = bitmap.width.toFloat() / device.displayWidth.coerceAtLeast(1)
+        val sy = bitmap.height.toFloat() / device.displayHeight.coerceAtLeast(1)
+        val left = (bounds.left * sx).toInt().coerceIn(0, bitmap.width - 2)
+        val top = (bounds.top * sy).toInt().coerceIn(0, bitmap.height - 2)
+        val right = (bounds.right * sx).toInt().coerceIn(left + 1, bitmap.width)
+        val bottom = (bounds.bottom * sy).toInt().coerceIn(top + 1, bitmap.height)
+        return Rect(left, top, right, bottom)
+    }
+
+    private fun lumaVariance(bitmap: Bitmap, area: Rect): Double {
+        var count = 0
+        var mean = 0.0
+        var m2 = 0.0
+        var y = area.top
+        while (y < area.bottom) {
+            var x = area.left
+            while (x < area.right) {
+                val pixel = bitmap.getPixel(x, y)
+                val luma = (Color.red(pixel) + Color.green(pixel) + Color.blue(pixel)) / 3.0
+                count += 1
+                val delta = luma - mean
+                mean += delta / count
+                m2 += delta * (luma - mean)
+                x += 4
+            }
+            y += 4
+        }
+        return if (count < 2) 0.0 else m2 / (count - 1)
+    }
+
+    private fun meanAbsDiff(first: Bitmap, second: Bitmap, area: Rect): Double {
+        val right = minOf(area.right, first.width, second.width)
+        val bottom = minOf(area.bottom, first.height, second.height)
+        val left = area.left.coerceAtLeast(0)
+        val top = area.top.coerceAtLeast(0)
+        if (right <= left || bottom <= top) return 0.0
+        var sum = 0.0
+        var count = 0
+        var y = top
+        while (y < bottom) {
+            var x = left
+            while (x < right) {
+                val a = first.getPixel(x, y)
+                val b = second.getPixel(x, y)
+                sum += abs(Color.red(a) - Color.red(b)) +
+                    abs(Color.green(a) - Color.green(b)) +
+                    abs(Color.blue(a) - Color.blue(b))
+                count += 1
+                x += 4
+            }
+            y += 4
+        }
+        return if (count == 0) 0.0 else sum / count
     }
 
     private fun assertEqualsFresh(status: JSONObject) {

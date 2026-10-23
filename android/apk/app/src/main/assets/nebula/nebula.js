@@ -1277,6 +1277,7 @@ export function createNebula(canvas, hooks) {
 
   const activePointers = new Map();
   let pinchDist = 0;
+  let touches = 0;
   function zoomBy(factor) {
     userMoved = true;
     const offset = camTarget.clone().sub(look);
@@ -1284,6 +1285,7 @@ export function createNebula(canvas, hooks) {
     camTarget.copy(look).add(offset);
   }
   canvas.addEventListener("pointerdown", (event) => {
+    touches += 1;
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (activePointers.size >= 2) {
       const pts = [...activePointers.values()];
@@ -1509,8 +1511,10 @@ export function createNebula(canvas, hooks) {
       cameraZ: camTarget.z,
       cameraX: camTarget.x,
       dpr: window.devicePixelRatio || 1,
+      path: webgl2 ? "webgl2" : "webgl1",
       fallback: "none",
       frames: frameCount,
+      touches,
       hitX,
       hitY,
       freshLabels: labels.filter((item) => item.fresh).length,

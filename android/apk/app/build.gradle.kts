@@ -72,6 +72,17 @@ android {
         }
     }
 
+    // 草稿注入只在显式打开的仪器测试包里。发布用的 debug 包和 release 包都走空实现，dex 里没有这条路径。
+    val e2eHooks = findProperty("lorabge.e2eHooks") == "true"
+    sourceSets {
+        getByName("debug") {
+            java.srcDir(if (e2eHooks) "src/e2eHooks/java" else "src/e2eHooksOff/java")
+        }
+        getByName("release") {
+            java.srcDir("src/e2eHooksOff/java")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

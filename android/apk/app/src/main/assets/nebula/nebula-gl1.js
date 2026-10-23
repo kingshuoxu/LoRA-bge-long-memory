@@ -429,9 +429,11 @@ export function createGl1Nebula(canvas, hooks) {
   }
 
   const pointers = new Map();
+  let touches = 0;
   let pinch = 0;
   let moved = 0;
   canvas.addEventListener("pointerdown", (event) => {
+    touches += 1;
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size >= 2) {
       const pts = [...pointers.values()];
@@ -518,8 +520,10 @@ export function createGl1Nebula(canvas, hooks) {
         cameraZ: zoom,
         cameraX: yaw,
         dpr: window.devicePixelRatio || 1,
+        path: "webgl1",
         fallback: "webgl1",
         frames,
+        touches,
         hitX,
         hitY,
         freshLabels: experts.filter((expert) => expert.explicit).length,

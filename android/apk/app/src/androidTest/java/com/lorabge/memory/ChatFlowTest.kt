@@ -68,13 +68,41 @@ class ChatFlowTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         context.startActivity(intent)
         val composer = waitDesc("composer", 25_000)
+        assertTrue(
+            "composer is ${composer.className} with no editable text; semantics did not expose an EditText",
+            composer.className.contains("EditText"),
+        )
         composer.click()
         val imeTop = waitForIme()
-        fillComposer("我的猫猫叫咪咪")
-        val bottom = (device.findObject(By.descStartsWith("composer")) ?: composer).visibleBounds.bottom
+        typeWithIme("hello")
+        val held = waitUntil(8_000) {
+            device.findObject(By.desc("composer"))?.text?.contains("hello") == true
+        }
+        if (!held) {
+            val hierarchy = File(shots, "composer-missing.xml")
+            device.dumpWindowHierarchy(hierarchy)
+            val desc = device.findObject(By.desc("composer"))
+            error("focused field never received IME text hello, class=${desc?.className} text=${desc?.text}\n" + hierarchy.readText().take(2500))
+        }
+        val field = device.findObject(By.desc("composer")) ?: composer
+        val send = waitDesc("send", 5_000)
+        val bottom = field.visibleBounds.bottom
+        val sendBottom = send.visibleBounds.bottom
         File(shots, "ime-window.txt").writeText(device.executeShellCommand("dumpsys window"))
         shot("01-ime.png")
         assertTrue("input bottom $bottom is under ime $imeTop", bottom <= imeTop + 8)
+        assertTrue("send bottom $sendBottom is under ime $imeTop", sendBottom <= imeTop + 8)
+        send.click()
+        waitText("hello", 8_000)
+        val settled = waitUntil(25_000) {
+            device.findObject(By.descStartsWith("typing-")) == null && (
+                device.hasObject(By.textContains("没有")) ||
+                    device.hasObject(By.textContains("生成失败")) ||
+                    device.hasObject(By.textContains("Couldn't")) ||
+                    device.hasObject(By.textContains("llama"))
+                )
+        }
+        assertTrue("hello was sent but the reply never settled, so later sends would be ignored", settled)
 
         sendComposer("__e2e_wait__")
         val typingNode = device.wait(Until.findObject(By.descStartsWith("typing-")), 8_000)
@@ -142,28 +170,45 @@ class ChatFlowTest {
         waitText(expect, 8_000)
     }
 
+    /** ASCII only. This is a real soft-keyboard commit into the focused field. */
+    private fun typeWithIme(text: String) {
+        val encoded = buildString(text.length) {
+            for (ch in text) {
+                when (ch) {
+                    ' ' -> append("%s")
+                    '%' -> append("%%")
+                    else -> append(ch)
+                }
+            }
+        }
+        device.executeShellCommand("input text $encoded")
+    }
+
     /**
-     * 外层 contentDescription 不是输入框，ACTION_SET_TEXT 失败也不抛错。
-     * 端到端把草稿写进 setup/e2e-draft.txt，界面读出来再显示在 contentDescription 上。
+     * 中文走仪器测试才编译进来的草稿文件。`input text` 打不了汉字。
+     * 键盘是否挡住输入栏由上面的 hello 断言负责，不靠这个文件。
      */
     private fun fillComposer(text: String) {
         File(context.filesDir, "setup").mkdirs()
         File(context.filesDir, "setup/e2e-draft.txt").writeText(text)
-        val shown = waitUntil(8_000) { device.hasObject(By.desc("composer $text")) }
+        val shown = waitUntil(8_000) {
+            device.findObject(By.desc("composer"))?.text?.contains(text) == true
+        }
         if (shown) return
-        val desc = device.findObject(By.descStartsWith("composer"))?.contentDescription
-        error("composer never held [$text], desc=$desc")
+        val node = device.findObject(By.desc("composer"))
+        error("composer never held [$text], class=${node?.className} text=${node?.text}")
     }
 
     private fun sendComposer(text: String) {
         fillComposer(text)
         clickDesc("send")
         val posted = waitUntil(8_000) {
-            device.findObject(By.textContains(text)) != null && !device.hasObject(By.desc("composer $text"))
+            device.findObject(By.textContains(text)) != null &&
+                device.findObject(By.desc("composer"))?.text.orEmpty().contains(text).not()
         }
         if (posted) return
-        val desc = device.findObject(By.descStartsWith("composer"))?.contentDescription
-        error("send did not post [$text], desc=$desc")
+        val node = device.findObject(By.desc("composer"))
+        error("send did not post [$text], class=${node?.className} text=${node?.text}")
     }
 
     private fun waitForIme(): Int {

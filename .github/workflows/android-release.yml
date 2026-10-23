@@ -74,6 +74,10 @@ jobs:
           STAGE=android/out/release
           mkdir -p "$STAGE"
           APK=android/apk/app/build/outputs/apk/debug/app-debug.apk
+          if unzip -p "$APK" 'classes*.dex' | grep -a -q 'e2e-draft.txt'; then
+            echo "发布包里有 e2e-draft.txt，草稿注入不能出仪器测试包" >&2
+            exit 1
+          fi
           cp "$APK" "$STAGE/app-debug.apk"
           cp android/apk/app/src/main/assets/setup_manifest.json "$STAGE/manifest.json"
           SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}

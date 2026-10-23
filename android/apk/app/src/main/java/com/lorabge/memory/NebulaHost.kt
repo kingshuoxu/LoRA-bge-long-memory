@@ -135,8 +135,10 @@ private fun writeNebulaStatus(context: android.content.Context, json: String) {
     } else {
         "renderer=${obj.optString("renderer")}\n" +
             "version=${obj.optString("version")}\n" +
+            "path=${obj.optString("path").ifBlank { obj.optString("fallback") }}\n" +
             "fallback=${obj.optString("fallback")}\n" +
             "frames=${obj.optInt("frames")}\n" +
+            "touches=${obj.optInt("touches")}\n" +
             "zoom=${obj.optDouble("zoom")}\n" +
             "cameraZ=${obj.optDouble("cameraZ")}\n" +
             "skyRenderer=${obj.optString("skyRenderer")}\n"

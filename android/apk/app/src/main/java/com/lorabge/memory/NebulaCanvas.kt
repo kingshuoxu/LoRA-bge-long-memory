@@ -20,14 +20,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import org.json.JSONObject
+import java.io.File
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -42,11 +46,46 @@ internal fun NebulaCanvas(
     animate: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     val scene = remember(json) { parseNebulaScene(json) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var zoom by remember { mutableFloatStateOf(1f) }
     var selected by remember { mutableIntStateOf(-1) }
     var spin by remember { mutableFloatStateOf(0f) }
+    var touches by remember { mutableIntStateOf(0) }
+    var canvasWidth by remember { mutableFloatStateOf(1f) }
+    var canvasHeight by remember { mutableFloatStateOf(1f) }
+    LaunchedEffect(scene) {
+        val file = File(context.filesDir, "setup/nebula-status.json")
+        file.parentFile?.mkdirs()
+        var frames = 0
+        while (isActive) {
+            frames += 1
+            val picked = scene.nodes.getOrNull(selected)
+            val hit = scene.nodes.firstOrNull()?.let { node ->
+                nebulaCenter(node, canvasWidth, canvasHeight, pan, zoom)
+            }
+            val body = JSONObject()
+                .put("renderer", "compose-canvas")
+                .put("version", "canvas")
+                .put("path", "canvas")
+                .put("fallback", "canvas")
+                .put("frames", frames)
+                .put("zoom", zoom.toDouble())
+                .put("cameraX", pan.x.toDouble())
+                .put("cameraZ", pan.y.toDouble())
+                .put("touches", touches)
+                .put("dpr", 1.0)
+                .put("hitX", hit?.x?.toDouble() ?: 0.0)
+                .put("hitY", hit?.y?.toDouble() ?: 0.0)
+                .put("freshLabels", 0)
+                .put("detail", picked != null)
+                .put("detailText", picked?.facts?.firstOrNull().orEmpty().ifBlank { picked?.label.orEmpty() })
+                .put("kind", "canvas")
+            file.writeText(body.toString())
+            delay(250)
+        }
+    }
     LaunchedEffect(animate) {
         if (!animate) return@LaunchedEffect
         val start = withFrameNanos { it }
@@ -59,11 +98,16 @@ internal fun NebulaCanvas(
     Box(
         modifier
             .semantics { contentDescription = "nebula" }
+            .onSizeChanged {
+                canvasWidth = it.width.toFloat().coerceAtLeast(1f)
+                canvasHeight = it.height.toFloat().coerceAtLeast(1f)
+            }
             .pointerInput(scene) {
                 awaitPointerEventScope {
                     while (true) {
                         val down = awaitPointerEvent()
                         val first = down.changes.firstOrNull { it.pressed } ?: continue
+                        touches += 1
                         var moved = false
                         var pinch = 0f
                         while (true) {
