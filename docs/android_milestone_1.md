@@ -106,7 +106,7 @@ System image must match the host architecture.
 
 工作流 `.github/workflows/android-apk.yml`,名字 `Android APK`。在 `android/**` 或该工作流文件的 push / pull request 上跑。宿主已带 Android SDK,不再用 `android-actions/setup-android`(它会去装已经废弃的 `tools` 包)。步骤是装 SDK 35、NDK `27.2.12479018`、CMake 3.22.1,按 `android/trainer/build_android.sh` 编出 `libtrain-mft.so`,下载 Adreno zip 并校验 sha256,然后 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest`。产物名 **`lorabge-memory-arm64-debug`**,里面是签名调试 APK `app-debug.apk`。调试签名是 Android Gradle 的默认 debug keystore,不是上架用的发布签名。
 
-绿的一次运行:[Android APK 39868513636](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39868513636)(push `a8c7d64`,默认 4 个 epoch)。同一提交的 pull request 运行 [39868518100](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39868518100) 也是绿的。产物名 **`lorabge-memory-arm64-debug`**。上一趟绿的是 [39837168967](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39837168967)。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`。
+绿的一次运行:[Android APK 39895706987](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895706987)(push `61d2b0c`)。同一提交的 pull request 运行 [39895710520](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895710520) 也是绿的。产物名 **`lorabge-memory-arm64-debug`**。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`。
 
 模拟器没有放进 CI,arm64 镜像在 x86 宿主上是指令翻译,容易超时。
 
