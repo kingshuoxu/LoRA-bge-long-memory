@@ -1,7 +1,7 @@
 """已知实体只回答记住的取值，不借用别的属性，也不把是非题说成「是」。"""
 import unittest
 
-from memory_core.correct import propose_from_records
+from memory_core.correct import propose_from_records, _about_someone_else, _matched_someone_else
 from memory_core.extract import pattern_extract
 from memory_core.grounding import acknowledge_statement, resolve_stored_reply
 from memory_core.paraphrase import polar_reply_from_fact
@@ -174,6 +174,7 @@ class ReplyPolicyTests(unittest.TestCase):
             "沈星河的电话是多少？",
             "沈星河喜欢吃什么？",
             "沈星河的单车是什么颜色？",
+            "沈星河的车是什么颜色？",
         ):
             resolved = resolve_stored_reply(question, [expert], [])
             self.assertIsNotNone(resolved, question)
@@ -186,6 +187,15 @@ class ReplyPolicyTests(unittest.TestCase):
         expert = _Expert(BAI)
         expert.writable = True
         proposal = propose_from_records("我的猫猫叫咪咪", [expert], model=object(), tok=object(), device="cpu")
+        self.assertIsNone(proposal)
+
+    def test_another_persons_statement_is_not_a_correction(self):
+        shen = _Expert([_fact("沈星河", "猫的名字", "云朵", "沈星河的猫叫云朵。")])
+        shen.writable = True
+        self.assertTrue(_about_someone_else("昭澈的猫叫阿栗。", [shen]))
+        self.assertTrue(_matched_someone_else("昭澈的猫叫阿栗。", "沈星河"))
+        self.assertFalse(_matched_someone_else("沈星河的猫的名字不是云朵，正确的是暮雪。", "沈星河"))
+        proposal = propose_from_records("昭澈的猫叫阿栗。", [shen], model=object(), tok=object(), device="cpu")
         self.assertIsNone(proposal)
 
 

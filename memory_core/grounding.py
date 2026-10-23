@@ -401,7 +401,10 @@ def ground_if_unknown(
 
 
 def _short_object(query: str, heads: list[str]) -> bool:
-    """问句里的事物是事实事物名的较短后缀。车对得上汽车，单车对不上自行车。"""
+    """问句里的事物只比事实里的事物名少一个字，并且是它的后缀。
+
+    车对得上汽车。自行车比车多两个字，单车也不是自行车的后缀，这两对都不算同一个事物。
+    """
     if not any(has_cjk(head) for head in heads):
         return False
     from memory_core.paraphrase import _chunk_object
@@ -410,7 +413,7 @@ def _short_object(query: str, heads: list[str]) -> bool:
         piece = _chunk_object(chunk)
         if not piece:
             continue
-        if any(has_cjk(head) and len(head) > len(piece) and head.endswith(piece) for head in heads):
+        if any(has_cjk(head) and len(head) == len(piece) + 1 and head.endswith(piece) for head in heads):
             return True
     return False
 

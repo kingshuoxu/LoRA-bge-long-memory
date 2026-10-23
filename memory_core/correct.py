@@ -192,6 +192,42 @@ def _correction_mark(text: str) -> bool:
     return bool(_CORRECTION_MARK.search(text or ""))
 
 
+def _stated_entities(text: str) -> list[str]:
+    from memory_core.extract import pattern_extract
+
+    names = []
+    for fact in pattern_extract(text):
+        name = str(fact.get("entity") or "").strip()
+        if name and name.casefold() not in {"我", "i", "me"} and name not in names:
+            names.append(name)
+    return names
+
+
+def _about_someone_else(text: str, records: list[Any]) -> bool:
+    """点了另一个人、又没有改口的标记，就不是在改已有的事实。"""
+    if _correction_mark(text):
+        return False
+    names = _stated_entities(text)
+    if not names:
+        return False
+    stored = []
+    for record in records:
+        memory = getattr(record, "fact_memory", None) or {}
+        for fact in memory.get("facts") or []:
+            if isinstance(fact, dict) and not fact.get("superseded"):
+                stored.append(str(fact.get("entity") or ""))
+        stored.extend(str(name) for name in (getattr(record, "entities", None) or []))
+    return not any(_same_entity(name, have) for name in names for have in stored if have)
+
+
+def _matched_someone_else(text: str, fact_entity: str) -> bool:
+    """句子里写出的主语和被改的那条事实不是同一个人。"""
+    names = _stated_entities(text)
+    if not names:
+        return False
+    return not any(_same_entity(name, fact_entity) for name in names)
+
+
 def utterance_is_question(text: str) -> bool:
     """提问不是纠正。是非问句、反意疑问句和带问号的句子都算。"""
     raw = (text or "").strip()
@@ -600,6 +636,8 @@ def propose_from_records(
 
     if _speaker_only(text) and not _correction_mark(text):
         return None
+    if _about_someone_else(text, records):
+        return None
     if model is None or tok is None or device is None:
         model, tok, device = _default_llm()
     parsed = classify_correction(text, model, tok, device)
@@ -610,6 +648,8 @@ def propose_from_records(
         return None
     record, index, fact, score = matched
     if _speaker_only(text) and str(fact.get("entity") or "").casefold() not in {"我", "i", "me"}:
+        return None
+    if _matched_someone_else(text, str(fact.get("entity") or "")):
         return None
     old_value = str(fact.get("value") or fact.get("answer") or "")
     picked = parsed["new_value"]
