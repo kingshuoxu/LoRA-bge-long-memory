@@ -1,7 +1,7 @@
 """专家目录：router.jsonl、router_key.pt、key_texts.json、fact_memory.json、fact_spans.pt、fact_gate.json。
 
-旧的五个研究专家没有 fact_memory.json，读取时退回 key_texts 的实体抽取。
-新专家把实体、事实和来源对话写进 fact_memory.json，路由和边界守卫读这份表。
+研究专家的 fact_memory.json 是事实列表，桌面不把它当成显式记忆。
+新专家把实体、事实和来源对话写成对象，路由和边界守卫读这份表。
 """
 from __future__ import annotations
 
@@ -74,6 +74,9 @@ def load_gate(experts_dir: Path) -> dict[str, float]:
     path = experts_dir / "fact_gate.json"
     if path.is_file():
         data = json.loads(path.read_text(encoding="utf-8"))
+        # 研究仓库把事实 τ 写在 tau 上，并带 reranker。那份文件不抬高桌面的路由阈值。
+        if "reranker" in data and "fact_tau" not in data:
+            return defaults
         for key in defaults:
             if key in data:
                 defaults[key] = float(data[key])
@@ -171,8 +174,10 @@ def load_record(experts_dir: Path, entry: dict, writable: bool) -> ExpertRecord 
     fact_memory = None
     explicit = False
     sources: list[dict[str, str]] = []
-    if memory_path.is_file():
-        fact_memory = json.loads(memory_path.read_text(encoding="utf-8"))
+    loaded = json.loads(memory_path.read_text(encoding="utf-8")) if memory_path.is_file() else None
+    # 研究评测把事实写成列表。那份文件留给 eval，桌面仍按 key_texts 走最大相似度。
+    if isinstance(loaded, dict):
+        fact_memory = loaded
         explicit = True
         entities = [str(item) for item in fact_memory.get("entities", []) if str(item).strip()]
         sources = list(fact_memory.get("source_conversations") or [])

@@ -24,7 +24,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed, extract_entities_from_key_texts, verify_entity_guard
+from router import embed, extract_entities_from_key_texts, load_fact_memory, load_router, route_from_scores
 
 MODEL = "models/Qwen2.5-0.5B-Instruct"
 
@@ -68,10 +68,12 @@ def main():
 
     device = pick_device(args)
     tok = AutoTokenizer.from_pretrained(args.model)
-    base = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float16).to(device)
+    base = AutoModelForCausalLM.from_pretrained(
+        args.model, torch_dtype=(torch.float32 if str(device) == "cpu" else torch.float16)
+    ).to(device)
 
     # 注册所有专家(每个 adapter 独立,不合并)
-    router = [json.loads(l) for l in (args.experts / "router.jsonl").open(encoding="utf-8")]
+    router = load_router(args.experts / "router.jsonl")
     first = router[0]
     model = PeftModel.from_pretrained(base, args.experts / first["expert"], adapter_name=first["expert"])
     for e in router[1:]:
@@ -88,17 +90,16 @@ def main():
             expert_entities[e["expert"]] = extract_entities_from_key_texts(texts)
         else:
             expert_entities[e["expert"]] = []
-    print(f"已注册专家: {list(keys)}, τ={args.tau}, qidx={args.qidx} (带 Entity Guard)")
+    fact_memory = load_fact_memory(args.experts)
+    n_facts = len(fact_memory.entities) if fact_memory is not None else 0
+    print(f"已注册专家: {list(keys)}, τ={args.tau}, qidx={args.qidx} (带 Entity Guard, 事实 {n_facts})")
 
     def route_query(text: str):
         q = embed([text])[0]
-        # 每个专家内取最大相似度(检索式路由):问句命中任意一条事实即候选
+        # 每个专家内取最大相似度。有在册实体时实体优先,否则 top-1 ≥ τ 且守卫通过才挂载。
         sim_scores = {name: (k @ q).max().item() for name, k in keys.items()}
-        best, s = max(sim_scores.items(), key=lambda kv: kv[1])
-        # 二级路由校验: 1. 相似度 >= tau; 2. 实体守卫准入检查
-        entity_pass = verify_entity_guard(text, expert_entities.get(best, []))
-        fired = (s >= args.tau) and entity_pass
-        return best, s, fired, entity_pass
+        best, s, fired = route_from_scores(text, expert_entities, sim_scores, args.tau, fact_memory)
+        return best, s, fired, fired
 
     # ---- 选择性:常识问题不应激活任何专家;激活了则进一步看是否答错(有效损伤) ----
     records = []  # --save-answers 用

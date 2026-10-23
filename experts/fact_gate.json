@@ -1,0 +1,11 @@
+{
+  "tau": 0.622,
+  "mask": "某",
+  "value_mask": "某值",
+  "use_paraphrases": false,
+  "use_reranker": false,
+  "reranker": "models/bge-reranker-base",
+  "reranker_cut": 5.0434,
+  "reranker_delta": 0.1643,
+  "reranker_passage": "statement"
+}

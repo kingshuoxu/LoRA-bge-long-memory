@@ -20,7 +20,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent))
-from router import embed
+from router import embed, resolve_key_path
 from calibrate_surprise import mean_token_loss
 from calibrate_qa_gate import self_answer, _norm
 
@@ -60,7 +60,7 @@ class AutoWriter:
         if rpath.exists():
             for line in rpath.open(encoding="utf-8"):
                 e = json.loads(line)
-                self.keys[e["expert"]] = torch.load(e["key_path"], weights_only=True)
+                self.keys[e["expert"]] = torch.load(resolve_key_path(e["key_path"]), weights_only=True)
                 self.next_batch = max(self.next_batch, e["batch"] + 1)
 
     def _route_sim(self, text: str) -> float:

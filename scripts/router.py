@@ -1,10 +1,21 @@
-"""路由 embedding 与实体守卫:
-1. 用 bge-small-zh-v1.5(CPU,24M)把文本编码成向量;
-2. 实体守卫 (Entity Guard): 专家二级校验,防御淘汰/删除专家后的路由空洞与交叉误射。
+"""路由 embedding、实体守卫和实体优先路由。
 
-train_expert 用它生成专家路由键,eval_memory 用它编码查询并校验实体准入。
+1. 用 bge-small-zh-v1.5(CPU,24M)把文本编码成向量。
+2. 实体守卫:拿在册实体做最长匹配,两侧不能是名字音节。
+3. 实体优先:问句里只有一个在册实体,且名字旁边有公司类线索,就直接去那家专家。
+   点了好几家时,能确定主语才去那家;比较句或主语已不在册就弃权。
+   问句和该实体写过的事实对不上,也弃权。
+   没有在册实体时,才退回 bge top-1 ≥ τ 且守卫通过。
+   两字名左右必须是问句套话里的字,避免从「埃菲尔」里切出「菲尔」。
+   事实闸不看属性类别:把实体名换成同一个占位符,用 bge 比较问句和这条事实的原文。
+   写入时的改写问句和窄带交叉编码器可以打开,fact_gate.json 里默认都是关的。
+
+train_expert 用它生成路由键,eval_memory 用它决定挂哪家专家。
 """
+import json
 import re
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
@@ -43,26 +54,94 @@ def router_key(texts: list[str]) -> torch.Tensor:
     return F.normalize(embed(texts).mean(dim=0), p=2, dim=0)
 
 
-def extract_entities_from_key_texts(texts: list[str]) -> list[str]:
-    """从专家的 key_texts 中提取在册实体列表(按长度降序排序)。"""
-    entities = set()
-    for t in texts:
-        if "公司" in t:
-            idx = t.find("公司")
-            prefix = t[:idx]
-            for p in ["请告诉我", "请问", "谁是", "请说出", "我想知道"]:
-                if prefix.startswith(p):
-                    prefix = prefix[len(p):]
-            prefix = prefix.strip()
-            if len(prefix) >= 2:
-                entities.add(prefix)
-    # 按长度降序,优先匹配长实体名
-    return sorted(entities, key=lambda x: -len(x))
+# 与 scripts/gen_data.py 的 SYL 保持一致。虚构实体只由这些字拼成,
+# 紧挨着的音节表示「名字还没写完」,不能把更短的在册名算进去。
+_NAME_SYLLABLES = set("佐布雷塔尔维纳克洛姆萨丁格鲁佩奥辛达莫菲昆莱索巴特希德温珈缪")
+
+# key_texts 里出现在实体名两侧的问句套话。按长度从长到短剥,避免「请」先吃掉「请告诉我」。
+_LEAD_PHRASES = (
+    "去哪座城市可以找到",
+    "大家最熟知的",
+    "请告诉我",
+    "能告诉我",
+    "请说出",
+    "谁在管",
+    "我想知道",
+    "我想去",
+    "你知道",
+    "查一下",
+    "请问",
+    "谁是",
+    "提到",
+    "诶",
+)
+# 实体名后面的机构后缀和训练问法里的「这家 / 把」(「{e}这家公司」「{e}把公司总部」)。
+_TRAIL_PHRASES = (
+    "股份有限公司",
+    "有限责任公司",
+    "集团公司",
+    "有限公司",
+    "这家",
+    "集团",
+    "公司",
+    "企业",
+    "股份",
+    "控股",
+    "把",
+)
+_PUNCT = " \t\u3000:：,，.。?？!！、；;\"'“”‘’（）()【】[]"
 
 
-# 这些后缀会被「的」之前的非贪婪匹配吞进实体名。剥掉之后剩下的才是人名。
+def resolve_key_path(key_path: str | Path) -> Path:
+    """router.jsonl 在 Windows 上会把 key_path 写成反斜杠,Linux 上先归一化。"""
+    return Path(str(key_path).replace("\\", "/"))
+
+
+def load_router(path: str | Path) -> list[dict]:
+    """读 router.jsonl,并把 key_path 收成当前系统能打开的相对路径。"""
+    entries = []
+    for line in Path(path).open(encoding="utf-8"):
+        if not line.strip():
+            continue
+        entry = json.loads(line)
+        if entry.get("key_path"):
+            entry["key_path"] = resolve_key_path(entry["key_path"]).as_posix()
+        entries.append(entry)
+    return entries
+
+
+def _strip_affixes(span: str) -> str:
+    span = span.strip(_PUNCT)
+    leads = sorted(_LEAD_PHRASES, key=len, reverse=True)
+    trails = sorted(_TRAIL_PHRASES, key=len, reverse=True)
+    changed = True
+    while changed and span:
+        changed = False
+        for phrase in leads:
+            if span.startswith(phrase) and len(span) > len(phrase):
+                span = span[len(phrase):].strip(_PUNCT)
+                changed = True
+                break
+        if changed:
+            continue
+        for phrase in trails:
+            if span.endswith(phrase) and len(span) - len(phrase) >= 2:
+                span = span[:-len(phrase)].strip(_PUNCT)
+                changed = True
+                break
+    return span
+
+
+# 个人事实里,「最喜欢 / 住在哪里」会被「的」之前的匹配吞进名字。研究公司名不以这些词结尾。
 _CJK_MODIFIERS = ("最喜欢", "比较喜欢", "非常喜欢", "喜欢", "住在哪里", "住在")
 _TITLES = ("professor", "prof", "miss", "mrs", "ms", "mr", "dr")
+_LATIN_STOP = {
+    "what", "where", "who", "which", "when", "how", "whose", "why",
+    "is", "are", "was", "were", "do", "does", "did",
+    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or",
+    "please", "tell", "me",
+}
+_LATIN_VERBS = {"lives", "live", "keeps", "keep", "has", "had", "have"}
 
 
 def _peel_cjk_modifiers(name: str) -> str:
@@ -81,19 +160,10 @@ def _peel_cjk_modifiers(name: str) -> str:
     return core
 
 
-def canonicalize_entity(name: str) -> str | None:
-    """收成可比的实体名。
-
-    中文只剥掉吞进名字的修饰词，研究问句抽出的公司名原样返回。
-    拉丁名忽略大小写、称谓（Dr / Mr / Ms / Professor）和结尾的所有格。
-    """
-    raw = re.sub(r"\s+", " ", (name or "").strip())
-    if not raw:
-        return None
-    if re.search(r"[一-龥]", raw):
-        return _peel_cjk_modifiers(raw).strip() or None
-    text = re.sub(r"['’]s$", "", raw, flags=re.IGNORECASE).strip(" .,;:!?\"'")
-    parts = [part for part in text.split(" ") if part]
+def _canonicalize_latin(name: str) -> str | None:
+    """拉丁名忽略大小写、称谓和结尾的所有格。没有汉字时才走这里。"""
+    text = re.sub(r"['’]s$", "", name, flags=re.IGNORECASE).strip(" .,;:!?\"'")
+    parts = [part for part in re.sub(r"\s+", " ", text).split(" ") if part]
     while parts and parts[0].rstrip(".").lower() in _TITLES:
         parts = parts[1:]
     tokens = []
@@ -107,36 +177,8 @@ def canonicalize_entity(name: str) -> str | None:
     return " ".join(tokens)
 
 
-def entity_key(name: str) -> str | None:
-    """守卫比较用的键。拉丁名折叠大小写，中文保持剥修饰词之后的原字。"""
-    canon = canonicalize_entity(name)
-    if not canon:
-        return None
-    if re.search(r"[一-龥]", canon):
-        return canon
-    return canon.casefold()
-
-
-def _finish_cjk_entity(name: str) -> str:
-    """研究问句的捕获保持原样。只有整段都以修饰词结尾时才剥回人名。"""
-    peeled = _peel_cjk_modifiers(name.strip())
-    if peeled != name.strip() and re.fullmatch(r"[一-龥]{2,8}", peeled):
-        return peeled
-    return name.strip()
-
-
-# 人名走到这些词就停。它们是问句的骨架，不是名字的一部分。
-_LATIN_STOP = {
-    "what", "where", "who", "which", "when", "how", "whose", "why",
-    "is", "are", "was", "were", "do", "does", "did",
-    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or",
-    "please", "tell", "me",
-}
-_LATIN_VERBS = {"lives", "live", "keeps", "keep", "has", "had", "have"}
-
-
 def _latin_tokens(query: str) -> list[str]:
-    # 所有格单独成词。否则 Chen's 会被当成一个词，人名停在所有格前面。
+    # 所有格单独成词。否则 Chen's 会被当成一个词,人名停在所有格前面。
     return [item.group(0) for item in re.finditer(r"['’]s|[A-Za-z]+(?:-[A-Za-z]+)*", query)]
 
 
@@ -155,14 +197,11 @@ def _take_name(tokens: list[str]) -> str | None:
     tokens = _prefer_capitalized_span(tokens)
     if not tokens:
         return None
-    canon = canonicalize_entity(" ".join(tokens))
-    if not canon or re.search(r"[一-龥]", canon):
-        return None
-    return canon
+    return _canonicalize_latin(" ".join(tokens))
 
 
 def _latin_entity(query: str) -> str | None:
-    """从没有汉字的问句里找人名：多词、所有格、称谓，以及 does / lives 两边。"""
+    """从没有汉字的问句里找人名:多词、所有格、称谓,以及 does / lives 两边。"""
     tokens = _latin_tokens(query)
     found: list[str] = []
 
@@ -217,38 +256,158 @@ def _latin_entity(query: str) -> str | None:
     return (multi or found)[0]
 
 
+def canonicalize_entity(span: str) -> str | None:
+    """把一段前缀收成实体名。收不干净就丢掉,不要把整句留下来。
+
+    汉字仍先剥问句套话和机构后缀,再去掉吞进名字的「喜欢 / 住在」。
+    没有汉字时收成拉丁人名。研究公司名不以这些修饰词结尾,名单不变。
+    """
+    raw = str(span or "").strip()
+    if not raw:
+        return None
+    if not re.search(r"[一-龥]", raw):
+        return _canonicalize_latin(raw)
+    name = _strip_affixes(raw)
+    peeled = _peel_cjk_modifiers(name)
+    if re.fullmatch(r"[一-龥]{2,8}", peeled):
+        return peeled
+    return None
+
+
+def entity_key(name: str) -> str | None:
+    """守卫比较用的键。拉丁名折叠大小写,中文保持剥修饰词之后的原字。"""
+    canon = canonicalize_entity(name)
+    if not canon:
+        return None
+    if re.search(r"[一-龥]", canon):
+        return canon
+    return canon.casefold()
+
+
+def extract_entities_from_key_texts(texts: list[str]) -> list[str]:
+    """从专家的 key_texts 中提取在册实体(按长度降序)。
+
+    陈述句总是「{实体}公司…」。问句里的「请问 / 这家 / 去哪座城市可以找到」
+    会先剥掉,避免名单里留下整句。
+    """
+    found: set[str] = set()
+    for text in texts:
+        for match in re.finditer(r"公司|集团", text):
+            clause = re.split(r"[\s,，。！？?!：:、；;]", text[:match.start()])[-1]
+            name = canonicalize_entity(clause)
+            if name:
+                found.add(name)
+    return sorted(found, key=lambda x: -len(x))
+
+
+def _registered_names(expert_entities: list[str] | set[str]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw in expert_entities:
+        name = canonicalize_entity(str(raw))
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def mentioned_entities(query: str, entities: list[str] | set[str]) -> list[str]:
+    """问句里按最长优先、带名字边界命中的在册实体。
+
+    左或右紧挨着名字音节(或另一家实体用过的字)则不算命中:
+    「莫特」不会命中「巴莫特」,「菲尔」不会命中「菲尔萨」。
+    「集团 / 公司 / 的」不是名字音节,所以「塔佐巴洛集团」仍命中「塔佐巴洛」。
+    """
+    names = _registered_names(entities)
+    if not names:
+        return []
+    compact = re.sub(r"[\s\u3000]+", "", query)
+    alphabet = set(_NAME_SYLLABLES)
+    for name in names:
+        alphabet.update(name)
+    hits: list[str] = []
+    occupied = [False] * len(compact)
+    for entity in sorted(names, key=len, reverse=True):
+        start = 0
+        while True:
+            index = compact.find(entity, start)
+            if index < 0:
+                break
+            end = index + len(entity)
+            start = index + 1
+            if any(occupied[index:end]):
+                continue
+            if index > 0 and compact[index - 1] in alphabet:
+                continue
+            if end < len(compact) and compact[end] in alphabet:
+                continue
+            # 两字名左右必须是问句套话里出现过的字。否则「菲尔」会从「埃菲尔」里切出来。
+            if not _short_name_neighbors_ok(compact, index, end):
+                continue
+            hits.append(entity)
+            for pos in range(index, end):
+                occupied[pos] = True
+    return hits
+
+
+def _latin_registered(expert_entities: list[str] | set[str]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw in expert_entities:
+        text = str(raw)
+        if re.search(r"[一-龥]", text):
+            continue
+        canon = _canonicalize_latin(text)
+        if not canon:
+            continue
+        key = canon.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(canon)
+    return names
+
+
+def _latin_query_hit(query: str, names: list[str]) -> bool:
+    if not names:
+        return False
+    found = _latin_entity(query)
+    if found and any(found.casefold() == name.casefold() for name in names):
+        return True
+    folded = query.casefold()
+    for name in names:
+        key = name.casefold()
+        if " " in key:
+            if key in folded:
+                return True
+            continue
+        if re.search(rf"(?<![a-z]){re.escape(key)}(?![a-z])", folded):
+            return True
+    return False
+
+
 def extract_query_entity(query: str) -> str | None:
-    """从用户问句或陈述句中抽取主语实体名称。"""
-    pats = [
-        "请告诉我", "请问", "谁是", "请说出", "我想知道", "我想去",
-        "查一下:", "查一下：", "查一下", "诶,", "诶，", "提到", "你知道",
-        "能告诉我", "去哪座城市可以找到", "大家最熟知的", "谁在管"
-    ]
-    q = query.strip()
-    for p in sorted(pats, key=lambda x: -len(x)):
-        if q.startswith(p):
-            q = q[len(p):]
+    """从问句开头猜一个实体名。
+
+    研究问句仍走句首汉字和机构后缀。那一步没抽到时,个人事实再认「喜欢 / 住在」。
+    没有汉字的问句认拉丁人名。准入判断以 verify_entity_guard 为准。
+    """
+    compact = re.sub(r"[\s\u3000]+", "", query.strip())
+    for phrase in sorted(_LEAD_PHRASES, key=len, reverse=True):
+        if compact.startswith(phrase):
+            compact = compact[len(phrase):].lstrip(",，:：")
             break
-
-    # 特殊模式 1: {entity}这家公司把总部 / {entity}把公司总部
-    m = re.search(r"^([一-龥]{2,8}?)(?:这家公司|公司)?把(?:公司)?总部", q)
-    if m:
-        return _finish_cjk_entity(m.group(1))
-
-    # 优先匹配带"公司"后缀
-    m = re.search(r"^([一-龥]{2,8}?)(?:这家)?公司", q)
-    if m:
-        return _finish_cjk_entity(m.group(1))
-
-    # 匹配各种动词/介词/修饰词开头的模式
-    m = re.search(r"^([一-龥]{2,8}?)(?:的|是|主打|最具有|最出名|最畅销|现在的|总部是在|产品叫|公司)", q)
-    if m:
-        return _finish_cjk_entity(m.group(1))
-
-    # 上面三种没抽到时，个人事实的「喜欢 / 住在」不再把修饰词留在名字里。
-    # 研究问句要么已经在上面返回，要么不以这两个词收束，这里不会改它们。
-    if re.search(r"[一-龥]", q):
-        personal = re.match(r"^([一-龥]{2,4})(?:喜欢|住在)", q)
+    match = re.match(r"([一-龥]{2,16})", compact)
+    if match:
+        span = match.group(1)
+        cut = re.match(r"(.+?)(?=的|是|把|这|和|与|或|吧|吗|呢|啊)", span)
+        if cut:
+            span = cut.group(1)
+        name = canonicalize_entity(span)
+        if name and re.search(r"[一-龥]", name):
+            return name
+    if re.search(r"[一-龥]", compact):
+        personal = re.match(r"^([一-龥]{2,4})(?:喜欢|住在)", compact)
         if personal:
             return personal.group(1)
         return None
@@ -256,28 +415,552 @@ def extract_query_entity(query: str) -> str | None:
 
 
 def verify_entity_guard(query: str, expert_entities: list[str] | set[str]) -> bool:
-    """实体守卫二级校验:检查 query 中的实体是否在该候选专家的在册实体库中(精确匹配防子串碰撞)。"""
+    """实体守卫:问句是否以名字边界提到了该专家的在册实体。
+
+    名单为空时放行(没有实体表就无法做二级校验,保持旧行为)。
+    汉字名仍走音节边界。拉丁名另比大小写、称谓和所有格,不改变汉字判断。
+    名单非空但一个干净名字都收不出来时拒绝,避免整句短语被当成子串放行。
+    """
     if not expert_entities:
         return True
-    names = [str(entity) for entity in expert_entities if entity]
-    q_entity = extract_query_entity(query)
-    if q_entity:
-        q_key = entity_key(q_entity) or q_entity
-        for entity in names:
-            if q_entity == entity:
-                return True
-            e_key = entity_key(entity) or entity
-            if q_key == e_key:
-                return True
-        return False
-    # 未正则抽取到实体时(如口语特殊句式),退回长实体优先的子串匹配
-    if any(entity in query for entity in names):
+    names = _registered_names(expert_entities)
+    cjk_names = [name for name in names if re.search(r"[一-龥]", name)]
+    if cjk_names and mentioned_entities(query, cjk_names):
         return True
-    folded = query.casefold()
-    for entity in names:
-        key = entity_key(entity)
-        if key and not re.search(r"[一-龥]", key) and key in folded:
-            return True
+    if _latin_query_hit(query, _latin_registered(expert_entities)):
+        return True
+    if not cjk_names and not _latin_registered(expert_entities):
+        return False
     return False
+
+
+def _compact_query(query: str) -> str:
+    return re.sub(r"[\s\u3000]+", "", query)
+
+
+def find_name_spans(query: str) -> list[tuple[str, int, int]]:
+    """问句里连续的名字音节(长度 ≥ 2)。虚构实体名正好是这样一段。"""
+    compact = _compact_query(query)
+    spans: list[tuple[str, int, int]] = []
+    i = 0
+    n = len(compact)
+    while i < n:
+        if compact[i] in _NAME_SYLLABLES:
+            j = i + 1
+            while j < n and compact[j] in _NAME_SYLLABLES:
+                j += 1
+            if j - i >= 2:
+                spans.append((compact[i:j], i, j))
+            i = j
+        else:
+            i += 1
+    return spans
+
+
+# 问句像在问一家公司时才允许「看见实体就直达专家」。
+# 百科/常识里偶然出现的两字音节(如「奥丁」)没有这些词,仍走 bge + τ。
+_BUSINESS_CUES = (
+    "公司", "集团", "企业", "股份", "董事长", "总经理", "创始人", "老板",
+    "CEO", "首席", "总裁", "总部", "成立", "创办", "建厂", "产品", "旗舰",
+    "干啥", "咋样", "面试", "掌门", "负责人", "一把手",
+)
+# 多实体问句里,这些紧贴名字的套话指出「在问谁」或「这个不是问的对象」。
+_SUBJECT_BEFORE = ("想问的是", "问的是", "说说", "讲讲")
+_DISMISS_BEFORE = ("先别说", "先不说", "别说", "除了")
+_DISMISS_AFTER = ("我倒是知道", "我知道")
+_AMBIGUOUS_MARKERS = ("相比", "比较", "哪个更", "哪家更", "谁更")
+
+
+def _has_business_cue(query: str) -> bool:
+    return any(cue in query for cue in _BUSINESS_CUES)
+
+
+# 两字实体只在这些紧邻字旁边算命中。名单来自训练问法和真实问法里两字名的实际邻居,
+# 不含「埃 / 福 / 铁」这种会把「菲尔」「克纳」从真实词里切出来的字。
+_SHORT_NAME_LEN = 2
+_SHORT_LEFT_OK = set("到问说下是去于我管道和出的")
+_SHORT_RIGHT_OK = set("公的集这是企股吧咋和最现我相了把总主产")
+
+
+def _cjk(char: str) -> bool:
+    return "\u4e00" <= char <= "\u9fff"
+
+
+def _short_name_neighbors_ok(compact: str, start: int, end: int) -> bool:
+    if end - start > _SHORT_NAME_LEN:
+        return True
+    if start > 0 and _cjk(compact[start - 1]) and compact[start - 1] not in _SHORT_LEFT_OK:
+        return False
+    if end < len(compact) and _cjk(compact[end]) and compact[end] not in _SHORT_RIGHT_OK:
+        return False
+    return True
+
+
+def write_fact_memory(facts: list[dict], path: str | Path) -> None:
+    """把事实原文落盘。不写属性类别,推理时只拿这些句子做语义比较。"""
+    records = []
+    for fact in facts:
+        records.append({
+            "entity": fact["entity"],
+            "value": fact.get("value", ""),
+            "statement": fact["statement"],
+            "questions": [qa["q"] for qa in fact.get("qa", [])],
+        })
+        paraphrases = [str(q) for q in fact.get("paraphrases") or [] if str(q).strip()]
+        if paraphrases:
+            records[-1]["paraphrases"] = paraphrases
+    Path(path).write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class FactMemory:
+    """一条事实是否答得了这句问话。
+
+    写入时存陈述句和当时的问句,也可以带上基座模型改写的问句。
+    比较前把在册实体换成同一个占位符,陈述句里的答案也换成占位符。
+    问句至少要达到校准过的 τ,并且不能更像另一条已存事实。
+    窄带里被拒绝的问句,再用交叉编码器看陈述句答不答得了。
+    """
+
+    def __init__(
+        self,
+        records: list[dict],
+        tau: float,
+        mask: str = "某",
+        value_mask: str = "某值",
+        use_paraphrases: bool = False,
+    ):
+        self.tau = float(tau)
+        self.mask = mask
+        self.value_mask = value_mask
+        self.use_paraphrases = use_paraphrases
+        self.reranker = None
+        self.rerank_calls = 0
+        grouped: dict[str, list[str]] = {}
+        statements: dict[str, str] = {}
+        order: list[str] = []
+        for record in records:
+            name = str(record["entity"])
+            if name not in grouped:
+                grouped[name] = []
+                order.append(name)
+            grouped[name].extend(self._masked_texts(record))
+            if name not in statements and record.get("statement"):
+                value = str(record.get("value", "")).rstrip("年")
+                statements[name] = self._mask_fact(str(record["statement"]), name, value)
+        self.entities = order
+        self._names_by_len = sorted(order, key=len, reverse=True)
+        self._statement = statements
+        texts: list[str] = []
+        spans: dict[str, tuple[int, int]] = {}
+        owners: list[str] = []
+        for name in order:
+            start = len(texts)
+            texts.extend(grouped[name])
+            spans[name] = (start, len(texts))
+            owners.extend([name] * (len(texts) - start))
+        self._spans = spans
+        self._texts = texts
+        self._owners = owners
+        self._vec = embed(texts) if texts else torch.empty(0, 0)
+
+    def _masked_texts(self, record: dict) -> list[str]:
+        entity = str(record["entity"])
+        value = str(record.get("value", "")).rstrip("年")
+        raws: list[str] = []
+        if record.get("statement"):
+            raws.append(str(record["statement"]))
+        raws.extend(str(q) for q in record.get("questions") or [])
+        if self.use_paraphrases:
+            raws.extend(str(q) for q in record.get("paraphrases") or [])
+        raws.extend(str(q) for q in record.get("texts") or [])
+        return [self._mask_fact(text, entity, value) for text in raws if text]
+
+    def _mask_fact(self, text: str, entity: str, value: str) -> str:
+        pieces = [(entity, self.mask)]
+        if value:
+            pieces.append((value, self.value_mask))
+        for src, dst in sorted(pieces, key=lambda item: len(item[0]), reverse=True):
+            text = text.replace(src, dst)
+        return text
+
+    def mask_query(self, query: str) -> str:
+        """问句里每个在册实体都换成同一个占位符,剩下的词才拿去比。"""
+        for name in self._names_by_len:
+            if name and name in query:
+                query = query.replace(name, self.mask)
+        return query
+
+    def _different_mask(self, entity: str) -> torch.Tensor:
+        """同一条事实的拷贝(别的实体、同样的掩码原文)不拿来当反例。"""
+        cache = getattr(self, "_diff_cache", None)
+        if cache is None:
+            cache = {}
+            self._diff_cache = cache
+        if entity not in cache:
+            start, end = self._spans[entity]
+            own_block = self._vec[start:end]
+            duplicated = (self._vec @ own_block.T).max(dim=1).values >= 0.999
+            duplicated[start:end] = True
+            cache[entity] = ~duplicated
+        return cache[entity]
+
+    def _split_scores(self, sims: torch.Tensor, entity: str) -> tuple[float, float]:
+        start, end = self._spans[entity]
+        own = float(sims[start:end].max())
+        keep = self._different_mask(entity)
+        if not bool(keep.any()):
+            return own, -1.0
+        return own, float(sims[keep].max())
+
+    def scores(self, query: str, entity: str) -> tuple[float, float]:
+        """返回 (这条事实的最高相似度, 其他不同事实的最高相似度)。"""
+        if entity not in self._spans or self._vec.numel() == 0:
+            return -1.0, -1.0
+        query_vec = embed([self.mask_query(query)])[0]
+        return self._split_scores(self._vec @ query_vec, entity)
+
+    def boundary_distance(self, own: float, other: float) -> float:
+        """到「own≥τ 且 own≥other」这条边界的距离。正数是安全接受,负数是被拒绝的幅度。"""
+        gap_tau = own - self.tau
+        gap_other = own - other
+        if gap_tau >= 0 and gap_other >= 0:
+            return min(gap_tau, gap_other)
+        short = 0.0
+        if gap_tau < 0:
+            short = max(short, -gap_tau)
+        if gap_other < 0:
+            short = max(short, -gap_other)
+        return -short
+
+    def in_band(self, own: float, other: float) -> bool:
+        if self.reranker is None:
+            return False
+        return abs(self.boundary_distance(own, other)) <= self.reranker.delta
+
+    def _bi_accept(self, own: float, other: float) -> bool:
+        return own >= self.tau and own + 1e-6 >= other
+
+    def allows(self, query: str, entity: str) -> bool:
+        ok, _own, _other = self.decide_many([(query, entity)])[0]
+        return ok
+
+    def _passage(self, entity: str, text_index: int) -> str:
+        if self.reranker is not None and self.reranker.passage == "best" and 0 <= text_index < len(self._texts):
+            return self._texts[text_index]
+        return self._statement.get(entity, "")
+
+    def decide_many(self, pairs: list[tuple[str, str]]) -> list[tuple[bool, float, float]]:
+        """批量判断 (问句, 实体)。实体不在库里视为答不了。
+
+        双编码器先做决定。窄带里只复议被拒绝的问句:交叉编码器觉得
+        这条事实的陈述句答得了,并且胜过另一条事实,才改成接受。
+        已经接受的不翻案。调参集上,翻案会把「老大」那句从 CEO 事实上拿掉。
+        """
+        if not pairs or self._vec.numel() == 0:
+            return [(False, -1.0, -1.0) for _ in pairs]
+        masked = [self.mask_query(query) for query, _entity in pairs]
+        query_vecs = embed(masked)
+        sims = query_vecs @ self._vec.T
+        masks = {
+            entity: self._different_mask(entity)
+            for entity in {entity for _query, entity in pairs}
+            if entity in self._spans
+        }
+        drafted = []
+        band_pairs: list[tuple[str, str]] = []
+        band_at: list[int] = []
+        for index, (_query, entity) in enumerate(pairs):
+            if entity not in self._spans:
+                drafted.append((False, -1.0, -1.0, False))
+                continue
+            start, end = self._spans[entity]
+            if end <= start:
+                drafted.append((False, -1.0, -1.0, False))
+                continue
+            own_local = int(torch.argmax(sims[index, start:end]))
+            own = float(sims[index, start + own_local])
+            keep = masks[entity]
+            if bool(keep.any()):
+                other_idx = int(torch.argmax(sims[index].masked_fill(~keep, -1e9)))
+                other = float(sims[index, other_idx])
+                other_entity = self._owners[other_idx]
+            else:
+                other_idx = -1
+                other = -1.0
+                other_entity = ""
+            accept = self._bi_accept(own, other)
+            # 只把双编码器拒绝、又落在窄带里的问句交给交叉编码器。
+            # 调参边界上的「老大」陈述句得分是负的,交叉编码器会把它翻成弃权;
+            # 所以已经接受的不再翻案。
+            ambiguous = (not accept) and self.in_band(own, other)
+            drafted.append((accept, own, other, ambiguous))
+            if ambiguous:
+                own_passage = self._passage(entity, start + own_local)
+                other_passage = self._passage(other_entity, other_idx) if other_entity else ""
+                band_pairs.append((masked[index], own_passage))
+                band_pairs.append((masked[index], other_passage or self.mask))
+                band_at.append(index)
+        if band_pairs and self.reranker is not None:
+            scores = self.reranker.score(band_pairs)
+            self.rerank_calls += len(band_at)
+            for slot, index in enumerate(band_at):
+                own_r = scores[slot * 2]
+                other_r = scores[slot * 2 + 1]
+                _accept, own, other, _ambiguous = drafted[index]
+                drafted[index] = (own_r >= self.reranker.cut and own_r + 1e-6 >= other_r, own, other, True)
+        return [(ok, own, other) for ok, own, other, _ambiguous in drafted]
+
+
+class FactReranker:
+    """窄带里用的交叉编码器。分数是 logit,切分在调参集上取。"""
+
+    def __init__(self, model_path: str | Path, cut: float, delta: float, passage: str = "statement"):
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        self.cut = float(cut)
+        self.delta = float(delta)
+        self.passage = passage
+        self.tok = AutoTokenizer.from_pretrained(model_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        self.model.eval()
+
+    @torch.no_grad()
+    def score(self, pairs: list[tuple[str, str]], batch_size: int = 16) -> list[float]:
+        if not pairs:
+            return []
+        out: list[float] = []
+        for start in range(0, len(pairs), batch_size):
+            chunk = [[query, passage] for query, passage in pairs[start:start + batch_size]]
+            inputs = self.tok(
+                chunk, padding=True, truncation=True, max_length=128, return_tensors="pt",
+            )
+            logits = self.model(**inputs).logits.view(-1)
+            out.extend(float(value) for value in logits)
+        return out
+
+
+def load_fact_gate(experts_dir: str | Path) -> dict:
+    """阈值跟着这套已校准的专家走。新训出来的目录没另存文件时,沿用同一份。"""
+    candidates = [
+        Path(experts_dir) / "fact_gate.json",
+        Path(__file__).resolve().parents[1] / "experts" / "fact_gate.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"缺少事实闸阈值,已查找: {', '.join(str(p) for p in candidates)}")
+
+
+def load_fact_records(experts_dir: str | Path) -> list[dict]:
+    records: list[dict] = []
+    for path in sorted(Path(experts_dir).glob("expert_*/fact_memory.json")):
+        records.extend(json.loads(path.read_text(encoding="utf-8")))
+    return records
+
+
+def load_fact_memory(
+    experts_dir: str | Path,
+    extra_records: list[dict] | None = None,
+    use_paraphrases: bool | None = None,
+    use_reranker: bool | None = None,
+) -> FactMemory | None:
+    """读各专家的 fact_memory.json 并编码。没有文件就返回 None,调用方不额外拦截。
+
+    改写问句和交叉编码器默认跟 fact_gate.json 走。评测要对比几种做法时,显式传 False。
+    """
+    records = load_fact_records(experts_dir)
+    if extra_records:
+        records = records + list(extra_records)
+    if not records:
+        return None
+    gate = load_fact_gate(experts_dir)
+    if use_paraphrases is None:
+        use_paraphrases = bool(gate.get("use_paraphrases", False))
+    if use_reranker is None:
+        use_reranker = bool(gate.get("use_reranker", False))
+    memory = FactMemory(
+        records,
+        tau=float(gate["tau"]),
+        mask=str(gate.get("mask", "某")),
+        value_mask=str(gate.get("value_mask", "某值")),
+        use_paraphrases=use_paraphrases,
+    )
+    if use_reranker:
+        model_path = Path(gate.get("reranker", "models/bge-reranker-base"))
+        if not model_path.is_absolute():
+            model_path = Path(__file__).resolve().parents[1] / model_path
+        memory.reranker = FactReranker(
+            model_path,
+            cut=float(gate["reranker_cut"]),
+            delta=float(gate["reranker_delta"]),
+            passage=str(gate.get("reranker_passage", "statement")),
+        )
+    return memory
+
+
+def _fact_allows(query: str, name: str, fact_memory: FactMemory | None) -> bool:
+    """没有事实库就不拦截。有事实库时,这条事实答不了这句问话就拒绝。"""
+    if fact_memory is None:
+        return True
+    return fact_memory.allows(query, name)
+
+
+# 线索必须挨着名字。问句别处出现「公司 / 产品」不能把一个两字音节直接送进专家。
+_CUE_WINDOW = 12
+
+
+def _cue_near(compact: str, start: int, end: int, window: int = _CUE_WINDOW) -> bool:
+    for cue in _BUSINESS_CUES:
+        from_idx = 0
+        while True:
+            index = compact.find(cue, from_idx)
+            if index < 0:
+                break
+            cue_end = index + len(cue)
+            from_idx = index + 1
+            if index < end and cue_end > start:
+                continue
+            gap = start - cue_end if cue_end <= start else index - end
+            if gap <= window:
+                return True
+    return False
+
+
+def _pick_subject(compact: str, spans: list[tuple[str, int, int]]) -> str | None:
+    """多个名字里哪一个是问句主语。定不下来就返回 None(调用方弃权)。"""
+    subjects: list[str] = []
+    dismissed: set[int] = set()
+    for text, start, end in spans:
+        left = compact[max(0, start - 12):start]
+        right = compact[end:end + 12]
+        if any(left.endswith(p) for p in _DISMISS_BEFORE) or any(right.startswith(p) for p in _DISMISS_AFTER):
+            dismissed.add(start)
+        if any(left.endswith(p) for p in _SUBJECT_BEFORE):
+            subjects.append(text)
+    if len(subjects) == 1:
+        return subjects[0]
+    if any(marker in compact for marker in _AMBIGUOUS_MARKERS):
+        return None
+    survivors = [text for text, start, _end in spans if start not in dismissed]
+    if len(survivors) == 1 and dismissed:
+        return survivors[0]
+    return None
+
+
+def _entity_owners(expert_entities: dict[str, list[str] | set[str]]) -> dict[str, str | None]:
+    owner: dict[str, str | None] = {}
+    for expert, raw in expert_entities.items():
+        for name in _registered_names(raw):
+            if name in owner and owner[name] != expert:
+                owner[name] = None
+            else:
+                owner.setdefault(name, expert)
+    return owner
+
+
+def route_decision(
+    query: str,
+    expert_entities: dict[str, list[str] | set[str]],
+    sims: dict[str, float] | None = None,
+    tau: float = 0.6,
+    fact_memory: FactMemory | None = None,
+) -> dict:
+    """实体优先路由。
+
+    问句里只有一个在册实体,且名字旁边有公司类线索:直接去那家专家,不再看 bge top-1。
+    没有在册实体:退回 bge top-1,相似度 ≥ τ 且守卫通过才挂载。
+    有好几个名字(在册或已删除的音节串):能确定主语、主语仍在册、且主语旁有线索才去那家;
+    主语不在册、比较句说不清在问谁、或没有线索,就弃权回基座,不去另一家。
+    已经选中实体之后,再用事实库判断这条事实答不答得了这句问话;答不了就弃权。
+    """
+    sims = sims or {}
+    owners = _entity_owners(expert_entities)
+    compact = _compact_query(query)
+    spans = find_name_spans(compact)
+    best_expert = max(sims, key=sims.get) if sims else None
+    best_sim = sims[best_expert] if best_expert is not None else 0.0
+
+    def blocked(reason: str) -> dict:
+        return {
+            "expert": None,
+            "candidate": best_expert,
+            "fired": False,
+            "reason": reason,
+            "sim": best_sim,
+        }
+
+    def bge_fallback() -> dict:
+        if best_expert is None:
+            return blocked("no_expert")
+        names = mentioned_entities(query, expert_entities.get(best_expert, []))
+        guard = bool(names) if expert_entities.get(best_expert) else verify_entity_guard(query, [])
+        if best_sim < tau or not guard:
+            return blocked("bge_block")
+        if names and not any(_fact_allows(query, name, fact_memory) for name in names):
+            return blocked("abstain_fact")
+        return {
+            "expert": best_expert,
+            "candidate": best_expert,
+            "fired": True,
+            "reason": "bge",
+            "sim": best_sim,
+        }
+
+    if len(spans) >= 2:
+        subject = _pick_subject(compact, spans)
+        if subject is None:
+            return blocked("abstain")
+        expert = owners.get(subject)
+        span = next((item for item in spans if item[0] == subject), None)
+        neighbor_ok = bool(span) and _short_name_neighbors_ok(compact, span[1], span[2])
+        if expert and span and neighbor_ok and _cue_near(compact, span[1], span[2]):
+            if not _fact_allows(query, subject, fact_memory):
+                return blocked("abstain_fact")
+            return {
+                "expert": expert,
+                "candidate": expert,
+                "fired": True,
+                "reason": "subject",
+                "sim": sims.get(expert, 0.0),
+            }
+        # 主语写出来了但不在册,或旁边没有公司类线索:不要改去另一个被点到的名字。
+        if expert and span and neighbor_ok:
+            reason = "abstain_no_cue"
+        elif span and not neighbor_ok:
+            reason = "abstain_short_name"
+        else:
+            reason = "abstain_unregistered_subject"
+        return blocked(reason)
+
+    if len(spans) == 1:
+        name, start, end = spans[0]
+        expert = owners.get(name)
+        if expert and _short_name_neighbors_ok(compact, start, end) and _cue_near(compact, start, end):
+            if not _fact_allows(query, name, fact_memory):
+                return blocked("abstain_fact")
+            return {
+                "expert": expert,
+                "candidate": expert,
+                "fired": True,
+                "reason": "entity",
+                "sim": sims.get(expert, 0.0),
+            }
+    return bge_fallback()
+
+
+def route_from_scores(
+    query: str,
+    expert_entities: dict[str, list[str] | set[str]],
+    sims: dict[str, float],
+    tau: float,
+    fact_memory: FactMemory | None = None,
+) -> tuple[str | None, float, bool]:
+    """给 eval / 测试用的三元组:(专家或 None, 相似度, 是否挂载)。"""
+    decision = route_decision(query, expert_entities, sims, tau, fact_memory)
+    if decision["fired"]:
+        return decision["expert"], decision["sim"], True
+    candidate = decision.get("candidate")
+    sim = sims.get(candidate, 0.0) if candidate else 0.0
+    return candidate, sim, False
 
 
