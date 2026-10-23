@@ -65,7 +65,7 @@ function installMode(info) {
   if (!info || !info.packaged) return "dev";
   if (info.platform === "win32") return "nsis";
   if (info.platform === "linux") return info.appImage ? "appimage" : "deb";
-  if (info.platform === "darwin") return info.macSigned ? "mac-auto" : "mac-manual";
+  if (info.platform === "darwin") return "mac-manual";
   return "manual";
 }
 
@@ -75,16 +75,13 @@ function assetNameRank(name, mode, arch) {
   if (mode === "nsis") return lower.endsWith(".exe") ? 2 : 0;
   if (mode === "appimage") return lower.endsWith(".appimage") ? 2 : 0;
   if (mode === "mac-manual") {
-    if (!lower.endsWith(".dmg")) return 0;
-    if (arch === "arm64" && lower.includes("arm64")) return 3;
-    if (arch !== "arm64" && (lower.includes("x64") || lower.includes("x86_64"))) return 3;
-    return 1;
-  }
-  if (mode === "mac-auto") {
-    if (!lower.endsWith(".zip")) return 0;
-    if (arch === "arm64" && lower.includes("arm64")) return 3;
-    if (arch !== "arm64" && (lower.includes("x64") || lower.includes("x86_64"))) return 3;
-    return 1;
+    const dmg = lower.endsWith(".dmg");
+    const zip = lower.endsWith(".zip");
+    if (!dmg && !zip) return 0;
+    let rank = dmg ? 2 : 1;
+    if (arch === "arm64" && lower.includes("arm64")) rank += 2;
+    if (arch !== "arm64" && (lower.includes("x64") || lower.includes("x86_64"))) rank += 2;
+    return rank;
   }
   return 0;
 }

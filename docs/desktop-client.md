@@ -23,8 +23,8 @@ GitHub Actions 工作流 `.github/workflows/desktop-packages.yml` 会打出这�
 |---|---|---|
 | Linux x64 | `lora-memory-linux-appimage-deb` | `.AppImage` 和 `.deb` |
 | Windows x64 | `lora-memory-windows-nsis` | NSIS 安装程序 `.exe` |
-| macOS arm64 | `lora-memory-macos-arm64-dmg` | `.dmg` 和给自动更新用的 `.zip` |
-| macOS Intel x64 | `lora-memory-macos-x64-dmg` | `.dmg` 和给自动更新用的 `.zip` |
+| macOS arm64 | `lora-memory-macos-arm64-dmg` | 未签名的 `.dmg`，另有 `.zip` |
+| macOS Intel x64 | `lora-memory-macos-x64-dmg` | 未签名的 `.dmg`，另有 `.zip` |
 
 安装包不含模型，也不含仓库里那五个研究专家（那些权重在 Git LFS 里）。第一次打开会下载模型。
 
@@ -185,7 +185,7 @@ npx electron-builder --publish never
 
 - Linux 还需要 `fakeroot`、`dpkg`。产物在 `desktop/dist/`：AppImage 和 deb。建议在 Ubuntu 22.04 上打，glibc 更老，22.04 和 24.04 都能跑。
 - Windows 产物是 NSIS 的 `.exe`。
-- macOS arm64 用 `macos-15` 一类的 Apple Silicon runner，Intel 用 `macos-15-intel`。产物是 `.dmg` 和 `.zip`。zip 给已签名应用的自动更新用，dmg 给手动替换。
+- macOS arm64 用 `macos-15` 一类的 Apple Silicon runner，Intel 用 `macos-15-intel`。产物是未签名的 `.dmg` 和 `.zip`。构建不签名，也不做公证，不需要 Apple 的 secret。
 
 ## 应用内更新
 
@@ -195,15 +195,17 @@ npx electron-builder --publish never
 
 deb 不能原地替换。它只提示有新版本，并给出下载链接，同时把 deb 下到用户数据目录的 `updates/`。
 
-macOS 的静默更新走 Squirrel.Mac，只接受带 Developer ID 的签名，并且当前系统还要公证，否则替换后的应用会被 Gatekeeper 拦住。临时签名（`codesign -s -`，签名是 adhoc，没有 `Authority=Developer ID Application`）没有稳定的团队身份，公证也不能盖在临时签名上，所以自动更新不会生效。没有 Developer ID 时，客户端改成下载对应架构的 dmg，并提示把新应用拖进去替换。用户数据在应用包外面，替换不会清掉。
+macOS 安装包不签名，也不做公证。Apple ID 没有加入 Developer Program，就没有 Developer ID，临时签名也不能让 Gatekeeper 把后面换上的应用当成已信任的程序。所以 mac 不走静默替换：客户端读取发布目录里的 `desktop-release.json`，后台下载对应架构的 dmg（没有 dmg 时用 zip），中断后续传，并用清单里的 SHA256 核对。核对通过后在访达里显示这个文件。打开磁盘映像，把应用拖到「应用程序」并选择替换；zip 要先解压。对话、专家和模型在 `~/Library/Application Support/lora-bge-memory/`，不在应用包里，替换不会清掉。
 
-GitHub 下载慢时，可以在设置里填一个镜像地址。镜像目录要和 Release 一样，放 `latest.yml`、`latest-mac.yml`、`latest-linux.yml`、blockmap、安装包，以及 `desktop-release.json`。客户端先试 GitHub，请求超时或失败再试镜像。
+第一次打开未签名的应用时，不要直接双击。在访达里按住 Control 点按应用（或右键），选「打开」，再在对话框里点「打开」。之后可以从程序坞打开。系统设置里的「隐私与安全性」也可以放行。
+
+GitHub 下载慢时，可以在设置里填一个镜像地址。镜像目录要和 Release 一样，放 `latest.yml`、`latest-mac.yml`、`latest-linux.yml`、blockmap、安装包，以及带 SHA256 的 `desktop-release.json`。客户端先试 GitHub，请求超时或失败再试镜像。
 
 各系统要准备的密钥：
 
 - Linux：不用密钥。AppImage 自动更新，deb 只给下载链接。
-- Windows：不用密钥也能自动更新。SmartScreen 可能提示未知发布者。要 Authenticode 签名时，把 p12 做 base64 放进 Actions secret `CSC_LINK`，密码放进 `CSC_KEY_PASSWORD`。工作流只有在 `CSC_LINK` 有值时才打开 `signAndEditExecutable`。
-- macOS：静默更新需要 Apple Developer Program 的 Developer ID Application 证书，以及公证。证书同样用 `CSC_LINK`（p12 的 base64）和 `CSC_KEY_PASSWORD`。公证二选一：`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`，或者 `APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`。这些 secret 要加在仓库的 Actions secrets 里。拉取请求默认不签名。只有 Developer ID、没有公证，在现在的 macOS 上也不够。没这些 secret 时，安装包不签名，用户按提示手动替换 dmg。
+- Windows：不用密钥也能自动更新。SmartScreen 可能提示未知发布者。要 Authenticode 签名时，把 p12 做 base64 放进 Actions secret `CSC_LINK`，密码放进 `CSC_KEY_PASSWORD`。工作流只有在 `CSC_LINK` 有值时才给 Windows 打开签名。macOS 构建固定跳过签名和公证。
+- macOS：不用密钥。
 
 已经装过、但那一版还没有更新代码的客户端，要手动装一次这个版本，之后才能在应用里更新。
 
@@ -247,7 +249,7 @@ Linux / Windows 安装包里的 PyTorch 是 CPU 轮子，`torch.cuda.is_availabl
 ## 已知限制
 
 - 本仓库的验证机是 Linux CPU。macOS 和 Windows 的安装包由 CI 编译并上传，没有在对应系统上打开过。
-- 没有填上面的签名 secret 时，安装包不签名。macOS 第一次打开需要在「隐私与安全性」里放行。Windows SmartScreen 可能提示未知发布者。临时签名不能让 macOS 自动更新。
+- macOS 安装包不签名，也不公证。第一次打开要在访达里按住 Control 点按应用，选「打开」。更新是下载 dmg 或 zip 后手动拖到「应用程序」替换，不会自动替换正在运行的应用。Windows SmartScreen 可能提示未知发布者。
 - 基座是 Qwen2.5-0.5B。巩固前请看一眼抽出的事实，小模型会漏，也会说多余的话；原文对不上的会被丢掉。
 - CPU 训练比 GPU 慢。一次只巩固少量事实是可以接受的；几十条以上会久得多。
 - 默认安装包不含 CUDA。MPS 只在 macOS 的官方 torch 里，这次没有在 Mac 上实测。

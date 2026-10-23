@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("desktop", {
+  platform: process.platform,
   updateState() {
     return ipcRenderer.invoke("update:get");
   },

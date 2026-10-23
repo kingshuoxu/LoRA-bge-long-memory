@@ -45,10 +45,11 @@ class PublishBundleTests(unittest.TestCase):
             "LoRA-bge-memory-0.2.0-linux-amd64.deb",
             "latest-linux.yml",
             "app.AppImage.blockmap",
-        ])
+        ], {"LoRA-bge-memory-0.2.0-linux-amd64.deb": "abc"})
         self.assertEqual(manifest["files"], [{
             "name": "LoRA-bge-memory-0.2.0-linux-amd64.deb",
             "url": "LoRA-bge-memory-0.2.0-linux-amd64.deb",
+            "sha256": "abc",
         }])
 
     def test_collect_skips_builder_debug(self):

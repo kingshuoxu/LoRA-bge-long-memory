@@ -1,12 +1,12 @@
 "use strict";
 
 const { app, shell } = require("electron");
-const { spawnSync } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const path = require("path");
 const { autoUpdater } = require("electron-updater");
+const { downloadVerified } = require("./download-file");
 const plan = require("./update-plan");
 
 autoUpdater.autoDownload = false;
@@ -42,21 +42,18 @@ function readMirror() {
   }
 }
 
-function macSigned() {
-  if (process.platform !== "darwin") return false;
-  const result = spawnSync("codesign", ["-dv", "--verbose=2", process.execPath], { encoding: "utf8" });
-  const text = `${result.stdout || ""}\n${result.stderr || ""}`;
-  // 临时签名（adhoc）没有 Developer ID，Squirrel 不会收。
-  return /Authority=Developer ID Application:/.test(text);
-}
-
 function currentMode() {
   return plan.installMode({
     packaged: app.isPackaged,
     platform: process.platform,
     appImage: Boolean(process.env.APPIMAGE),
-    macSigned: macSigned(),
   });
+}
+
+function revealDownload(file) {
+  if (!file || !fs.existsSync(file)) return;
+  if (process.platform === "darwin") shell.showItemInFolder(file);
+  else shell.openPath(file);
 }
 
 function publish(partial) {
@@ -122,55 +119,15 @@ async function latestRelease() {
   return plan.newestDesktopRelease(releases);
 }
 
-function downloadFile(url, dest, onProgress) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith("http:") ? http : https;
-    const req = lib.get(url, { headers: { "User-Agent": "lora-bge-memory" } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        downloadFile(new URL(res.headers.location, url).href, dest, onProgress).then(resolve, reject);
-        return;
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        reject(new Error(`HTTP ${res.statusCode}`));
-        return;
-      }
-      const total = Number(res.headers["content-length"] || 0);
-      let got = 0;
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      const file = fs.createWriteStream(dest);
-      res.on("data", (chunk) => {
-        got += chunk.length;
-        if (onProgress) onProgress(got, total);
-      });
-      res.pipe(file);
-      file.on("finish", () => file.close(() => resolve(dest)));
-      file.on("error", reject);
-    });
-    req.on("error", reject);
-  });
-}
-
-function manualCopy(release, mode) {
-  const asset = plan.pickAsset(release.assets, mode, process.arch);
-  if (!asset) return null;
-  return {
-    version: release.version,
-    notes: release.notes,
-    url: asset.browser_download_url || asset.url || "",
-    name: asset.name || path.basename(asset.url || "update.bin"),
-  };
-}
-
-async function manualFromMirror(mirror, mode) {
-  const manifest = await requestJson(new URL("desktop-release.json", mirror).href);
+async function manualFromBase(base, mode) {
+  const manifest = await requestJson(new URL("desktop-release.json", base).href);
   const version = String(manifest.version || "");
   if (!version || plan.compareVersions(version, app.getVersion()) <= 0) return null;
   const files = Array.isArray(manifest.files) ? manifest.files : [];
   const asset = plan.pickAsset(files.map((item) => ({
     name: item.name,
-    url: new URL(item.url || item.name, mirror).href,
+    url: new URL(item.url || item.name, base).href,
+    sha256: item.sha256,
   })), mode, process.arch);
   if (!asset) return null;
   return {
@@ -178,6 +135,7 @@ async function manualFromMirror(mirror, mode) {
     notes: plan.notesText(manifest.notes),
     url: asset.url,
     name: asset.name,
+    sha256: String(asset.sha256 || "").toLowerCase(),
   };
 }
 
@@ -191,10 +149,21 @@ async function deliverManual(info) {
     percent: 0,
     error: "",
   });
-  await downloadFile(info.url, dest, (got, total) => {
-    publish({ status: "downloading", percent: total ? Math.round((got / total) * 100) : 0 });
-  });
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await downloadVerified(info.url, dest, info.sha256, (got, total) => {
+        publish({ status: "downloading", percent: total ? Math.round((got / total) * 100) : 0 });
+      });
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) throw lastError;
   publish({ status: "manual", version: info.version, notes: info.notes, url: info.url, file: dest, percent: 100 });
+  revealDownload(dest);
 }
 
 function bindAutoUpdater() {
@@ -283,31 +252,38 @@ async function checkAutomatic(urls) {
 }
 
 async function checkManual(mirror) {
-  let info = null;
-  let mirrorError = null;
-  if (mirror) {
-    try {
-      info = await manualFromMirror(mirror, currentMode());
-    } catch (err) {
-      mirrorError = err;
+  const bases = [];
+  try {
+    const release = await latestRelease();
+    if (release && plan.compareVersions(release.version, app.getVersion()) > 0) {
+      bases.push(plan.githubDownloadBase(release.tag));
+    } else if (release) {
+      publish({ status: "current", version: app.getVersion(), error: "" });
+      return state;
     }
+  } catch (err) {
+    if (!mirror) throw err;
   }
-  if (!info) {
-    try {
-      const release = await latestRelease();
-      if (release && plan.compareVersions(release.version, app.getVersion()) > 0) {
-        info = manualCopy(release, currentMode());
-      }
-    } catch (err) {
-      if (!info) throw mirrorError || err;
-    }
-  }
-  if (!info) {
+  if (mirror) bases.push(mirror);
+  if (!bases.length) {
     publish({ status: "current", version: app.getVersion(), error: "" });
     return state;
   }
-  await deliverManual(info);
-  return state;
+  let lastError = null;
+  for (const base of bases) {
+    try {
+      const info = await manualFromBase(base, currentMode());
+      if (!info) {
+        publish({ status: "current", version: app.getVersion(), error: "" });
+        return state;
+      }
+      await deliverManual(info);
+      return state;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error("没有可用的更新地址");
 }
 
 async function checkForUpdates() {
@@ -321,7 +297,7 @@ async function checkForUpdates() {
     }
     const mirror = readMirror() || plan.normalizeMirror(process.env.LORA_MEMORY_UPDATE_URL || "");
     try {
-      if (mode === "appimage" || mode === "nsis" || mode === "mac-auto") {
+      if (mode === "appimage" || mode === "nsis") {
         let release = null;
         try {
           release = await latestRelease();
@@ -345,12 +321,12 @@ async function checkForUpdates() {
 }
 
 function installUpdate() {
-  if (state.status === "downloaded" && (state.mode === "appimage" || state.mode === "nsis" || state.mode === "mac-auto")) {
+  if (state.status === "downloaded" && (state.mode === "appimage" || state.mode === "nsis")) {
     setImmediate(() => autoUpdater.quitAndInstall(false, true));
     return state;
   }
   if (state.file && fs.existsSync(state.file)) {
-    shell.openPath(state.file);
+    revealDownload(state.file);
     return state;
   }
   if (state.url) shell.openExternal(state.url);

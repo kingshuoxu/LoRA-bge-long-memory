@@ -48,13 +48,18 @@ def merge_update_info(documents: list[dict], notes: str = "") -> dict:
     return result
 
 
-def release_manifest(version: str, tag: str, notes: str, names: list[str]) -> dict:
+def release_manifest(version: str, tag: str, notes: str, names: list[str], digests: dict[str, str] | None = None) -> dict:
+    digests = digests or {}
     files = []
     for name in names:
         lower = name.lower()
         if not lower.endswith((".appimage", ".deb", ".exe", ".dmg", ".zip")):
             continue
-        files.append({"name": name, "url": name})
+        item = {"name": name, "url": name}
+        digest = digests.get(name)
+        if digest:
+            item["sha256"] = digest
+        files.append(item)
     return {"version": version, "tag": tag, "notes": notes, "files": files}
 
 
@@ -114,7 +119,8 @@ def assemble(artifacts: Path, out: Path, tag: str, notes: str) -> dict:
         for name, path in bucket.items():
             target = out / name
             target.write_bytes(path.read_bytes())
-    manifest = release_manifest(version, tag, notes, sorted(installers))
+    digests = {name: _sha256(path) for name, path in installers.items()}
+    manifest = release_manifest(version, tag, notes, sorted(installers), digests)
     (out / "desktop-release.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest
 

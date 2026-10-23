@@ -281,7 +281,7 @@ CMMLU 11582 条题干四种都是激活 0（其中 10 条题干里出现了在�
 
 ## 桌面客户端
 
-macOS、Windows、Linux 的本地对话程序在 `docs/desktop-client.md`。聊天走现有的 bge 路由和实体守卫；勾选历史对话后可以审阅抽出的事实，再训练一个新的 LoRA 专家。安装包由 `.github/workflows/desktop-packages.yml` 构建。
+macOS、Windows、Linux 的本地对话程序在 `docs/desktop-client.md`。聊天走现有的 bge 路由和实体守卫；勾选历史对话后可以审阅抽出的事实，再训练一个新的 LoRA 专家。安装包由 `.github/workflows/desktop-packages.yml` 构建。macOS 安装包不签名：第一次打开要在访达里按住 Control 点按应用，选「打开」，再在对话框里点「打开」。直接双击会被 Gatekeeper 拦住。
 
 ## 局限
 

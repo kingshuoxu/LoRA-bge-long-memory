@@ -29,7 +29,7 @@ assert.equal(plan.installMode({ packaged: true, platform: "linux", appImage: tru
 assert.equal(plan.installMode({ packaged: true, platform: "linux", appImage: false }), "deb");
 assert.equal(plan.installMode({ packaged: true, platform: "win32" }), "nsis");
 assert.equal(plan.installMode({ packaged: true, platform: "darwin", macSigned: false }), "mac-manual");
-assert.equal(plan.installMode({ packaged: true, platform: "darwin", macSigned: true }), "mac-auto");
+assert.equal(plan.installMode({ packaged: true, platform: "darwin", macSigned: true }), "mac-manual");
 
 const assets = [
   { name: "LoRA-bge-memory-0.2.0-linux-amd64.deb" },
@@ -39,9 +39,10 @@ const assets = [
   { name: "LoRA-bge-memory-0.2.0-mac-arm64.zip" },
 ];
 assert.equal(plan.pickAsset(assets, "deb", "x64").name.endsWith(".deb"), true);
+assert.equal(plan.pickAsset(assets, "mac-manual", "arm64").name.endsWith(".dmg"), true);
 assert.equal(plan.pickAsset(assets, "mac-manual", "arm64").name.includes("arm64"), true);
 assert.equal(plan.pickAsset(assets, "mac-manual", "x64").name.includes("x64"), true);
-assert.equal(plan.pickAsset(assets, "mac-auto", "arm64").name.endsWith(".zip"), true);
+assert.equal(plan.pickAsset([{ name: "LoRA-bge-memory-0.2.0-mac-arm64.zip" }], "mac-manual", "arm64").name.endsWith(".zip"), true);
 assert.equal(plan.notesText([{ version: "0.2.0", note: "修复" }, "第二段"]), "修复\n\n第二段");
 
 console.log("UPDATE_PLAN_OK");

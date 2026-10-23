@@ -28,6 +28,7 @@
       "preload.js",
       "updater.js",
       "update-plan.js",
+      "download-file.js",
       "package.json",
       "node_modules/**/*"
     ],
@@ -128,7 +129,9 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "notarize": false
     },
     "dmg": {
       "title": "LoRA 长记忆"

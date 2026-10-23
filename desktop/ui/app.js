@@ -929,7 +929,7 @@ function updateDetail(info) {
     return t("settings.manualDeb", { version: info.version || "" });
   }
   if (info.mode === "mac-manual" && (info.status === "manual" || info.status === "available" || info.status === "downloaded")) {
-    return t("settings.manualMac", { version: info.version || "" });
+    return `${t("settings.manualMac", { version: info.version || "" })}\n${t("settings.gatekeeper")}`;
   }
   if (info.status === "downloaded") return t("settings.downloaded", { version: info.version || "" });
   if (info.status === "available" || info.status === "manual") return t("settings.available", { version: info.version || "" });
@@ -971,6 +971,7 @@ function renderUpdate() {
     if (!button) continue;
     button.hidden = !(canRestart || canManual);
     if (canRestart) button.textContent = t("settings.restart");
+    else if (info.mode === "mac-manual" && info.file) button.textContent = t("settings.reveal");
     else if (info.file) button.textContent = t("settings.openFile");
     else button.textContent = t("settings.download");
   }
@@ -978,6 +979,8 @@ function renderUpdate() {
     && state.updateDismissed !== `${info.status}:${info.version || ""}:${info.error || ""}`;
   const banner = $("update-banner");
   if (banner) banner.hidden = !showBanner;
+  const gate = $("settings-gatekeeper");
+  if (gate) gate.hidden = !(window.desktop && window.desktop.platform === "darwin");
 }
 
 function bindUpdates() {
