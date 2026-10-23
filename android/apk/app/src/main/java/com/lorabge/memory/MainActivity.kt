@@ -32,7 +32,13 @@ class MainActivity : ComponentActivity() {
         if (intent?.getStringExtra("mode") == "benchmark" || intent?.action == TrainService.ACTION_BENCHMARK) {
             startBenchmark(store)
         }
+        val benchmark = intent?.getStringExtra("mode") == "benchmark" || intent?.action == TrainService.ACTION_BENCHMARK
         setContent {
+            var ready by remember { mutableStateOf(benchmark || !FetchService.needsSetup(this)) }
+            if (!ready) {
+                SetupScreen(onFinished = { ready = true })
+                return@setContent
+            }
             PhoneApp(store, engine, onTrain = {
                 if (Build.VERSION.SDK_INT >= 33 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)

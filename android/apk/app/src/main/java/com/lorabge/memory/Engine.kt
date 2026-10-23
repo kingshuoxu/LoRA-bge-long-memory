@@ -155,6 +155,10 @@ class Engine(private val context: Context, private val store: MemoryStore) {
 
     fun importExternal() {
         val incoming = File(context.getExternalFilesDir(null), "import")
+        importBundle(incoming)
+    }
+
+    fun importBundle(incoming: File) {
         if (!incoming.exists()) return
         val routerFile = File(incoming, "router.jsonl")
         if (routerFile.exists()) {

@@ -44,13 +44,13 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.sin
 
-private val Night = Color(0xFF070910)
-private val Ink = Color(0xFFEEF3FB)
-private val Muted = Color(0xFFA9B6C9)
-private val Accent = Color(0xFFB7D7FF)
-private val Accent2 = Color(0xFF7EF0E0)
-private val Gold = Color(0xFFF2D291)
-private val Glass = Color(0x6B080C16)
+internal val Night = Color(0xFF070910)
+internal val Ink = Color(0xFFEEF3FB)
+internal val Muted = Color(0xFFA9B6C9)
+internal val Accent = Color(0xFFB7D7FF)
+internal val Accent2 = Color(0xFF7EF0E0)
+internal val Gold = Color(0xFFF2D291)
+internal val Glass = Color(0x6B080C16)
 
 enum class SkyTab { Chat, Consolidate, Nebula, Library }
 
@@ -212,7 +212,7 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
 }
 
 @Composable
-private fun rememberSerif(): ComposeFontFamily {
+internal fun rememberSerif(): ComposeFontFamily {
     val context = LocalContext.current
     return remember {
         val latin = Font.Builder(context.resources, R.font.eb_garamond).build()
@@ -247,7 +247,7 @@ private fun TabChip(label: String, on: Boolean, click: () -> Unit) {
 }
 
 @Composable
-private fun MilkyWay(paused: Boolean) {
+internal fun MilkyWay(paused: Boolean) {
     var phase by remember { mutableFloatStateOf(0.4f) }
     LaunchedEffect(paused) {
         if (paused) return@LaunchedEffect

@@ -27,7 +27,11 @@ cd android/apk && ./gradlew assembleDebug
 
 ## 装到小米 15
 
-手机开开发者选项和 USB 调试,数据线连上电脑,`adb devices` 能看到设备。然后:
+手机浏览器打开预发布里的 `app-debug.apk` 直接安装。第一次打开会自己下载对话基座、bge、训练用的 safetensors 和五个专家,装好就可以用,中间不用电脑。下载页能看到每个文件的进度、速度和当前镜像,可以暂停再继续,也可以只在 Wi-Fi 下下载。清单地址可以改成自己的 URL。
+
+镜像按这个顺序试,失败就换下一个:ModelScope、hf-mirror.com、huggingface.co,最后才是 GitHub Release。带 `bert-bge-cased` 的 bge 和五个专家只在这次发布的文件里。官方 f16 只有在字节和我们转换的那份完全一样时才会排在基座前面。
+
+电脑上的 adb 仍然可以用,但不是必须的。手机开开发者选项和 USB 调试,数据线连上电脑,`adb devices` 能看到设备。然后:
 
 ```bash
 sh android/phone/push_adb.sh

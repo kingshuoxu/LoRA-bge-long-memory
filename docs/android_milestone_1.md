@@ -96,6 +96,8 @@ x86 OpenBLAS 和这份 arm64 OpenBLAS 的第 1 步 loss 都是 **4.07324**,梯�
 
 小米 15 上的墙钟还没量到。纯 C++ 时,450 行研究批次在这台 Xeon 上要数小时;换成 OpenBLAS 之后,巩固这 32 条在这台机器上是几分钟。手机用同一份 ARMv8 库,8 个性能核。真机数字用 `android/phone/run_device_benchmark.sh`,它会装 APK、推模型、跑这 4 条事实,并打印墙钟、峰值 RSS、热区温度和上面三项回忆。把整段输出贴回来即可。
 
+只装 APK、没有电脑时,第一次打开会按清单自己下载。清单在预发布标签 `android-v0.1.0` 的 `manifest.json`,也打进了那次发布的 APK。镜像顺序是 ModelScope、hf-mirror.com、huggingface.co、GitHub Release。带大小写补丁的 bge 和五个专家只从这次发布的文件取。下载可以暂停,断了用 HTTP Range 续上,下完对 SHA256,空间不够会先停。下完会导入专家并做路由自检。
+
 ## arm64 冒烟(不是手机)
 
 `android/router/memory-route-aarch64` 是 Linux 静态二进制,在 x86_64 上用 `qemu-aarch64-static` 跑过一条实体路由:问「塔佐巴洛公司的总部在哪里?」,输出 `expert_0`、`fired=true`、`reason=entity`。这只说明同一份 C++ 在 arm64 指令下还能做实体优先,不是安卓 bionic,也不是 APK。
