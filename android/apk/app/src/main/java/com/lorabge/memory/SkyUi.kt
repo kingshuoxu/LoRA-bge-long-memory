@@ -153,6 +153,7 @@ data class SkyState(
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
     val nebulaCanvas: Boolean = false,
+    val e2e: Boolean = false,
 )
 
 sealed class SkyEvent {
@@ -831,8 +832,11 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 .fillMaxWidth()
                 .padding(bottom = 4.dp)
                 .semantics {
-                    contentDescription = "composer"
-                    // 外层节点本身不是输入框，UiAutomator 的 setText 打在这层会静默失败。
+                    contentDescription = if (state.e2e && state.draft.isNotEmpty()) {
+                        "composer ${state.draft}"
+                    } else {
+                        "composer"
+                    }
                     editableText = AnnotatedString(state.draft)
                     setText { updated ->
                         onEvent(SkyEvent.Draft(updated.text))

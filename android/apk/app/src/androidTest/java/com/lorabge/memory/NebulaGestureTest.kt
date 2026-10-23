@@ -13,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
 /**
@@ -80,15 +81,22 @@ class NebulaGestureTest {
         File(shots, "nebula-renderer.txt").writeText(
             "renderer=${ready.optString("renderer")}\nversion=${ready.optString("version")}\nfallback=${ready.optString("fallback")}\n",
         )
-        // aosp_atd 没有可用的屏幕编码器，screenrecord 会写出 0 字节。
-        // 主机在看到 record.on 之后用 screencap 自己串成 mp4。
-        File(shots, "record.on").writeText("1")
-        val recorder = Thread {
-            device.executeShellCommand("screenrecord --time-limit 22 --bit-rate 4000000 /sdcard/nebula-gesture.mp4")
+        // aosp_atd 的 screenrecord 和 adb screencap 都是空的。UiAutomation 截图才有画面。
+        val frames = File(shots, "frames")
+        frames.mkdirs()
+        frames.listFiles()?.forEach { it.delete() }
+        val stop = AtomicBoolean(false)
+        val grabber = Thread {
+            var index = 0
+            while (!stop.get() && index < 80) {
+                val file = File(frames, "%04d.png".format(index))
+                if (device.takeScreenshot(file) && file.length() > 500) index++
+                Thread.sleep(250)
+            }
         }
+        grabber.start()
         try {
-        recorder.start()
-        Thread.sleep(700)
+        Thread.sleep(400)
         val before = waitStatus(4_000) { it.optInt("frames") >= 1 }
         val beforeZoom = before.optDouble("zoom")
         nebula.pinchOpen(0.6f, 18)
@@ -137,10 +145,10 @@ class NebulaGestureTest {
             abs(moved.optDouble("cameraZ") - beforeZ) > 0.15 || abs(moved.optDouble("cameraX") - beforeX) > 0.05,
         )
         assertTrue("fact card did not open\n${opened ?: hit}", opened != null)
-        Thread.sleep(1500)
+        Thread.sleep(1200)
         } finally {
-            File(shots, "record.on").delete()
-            recorder.join(3_000)
+            stop.set(true)
+            grabber.join(4_000)
         }
     }
 

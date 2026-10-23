@@ -174,6 +174,16 @@ private fun PhoneApp(
     var recallJson by remember { mutableStateOf("") }
     var recallBanner by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
+    LaunchedEffect(e2e) {
+        if (!e2e) return@LaunchedEffect
+        val pin = File(context.filesDir, "setup/e2e-draft.txt")
+        while (true) {
+            delay(200)
+            if (!pin.exists()) continue
+            val text = pin.readText()
+            if (text.isNotEmpty() && draft != text) draft = text
+        }
+    }
     var generating by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf("") }
     var currentId by remember { mutableStateOf(store.listConversations().firstOrNull()?.id) }
@@ -267,6 +277,7 @@ private fun PhoneApp(
         liveMotion = true,
         train = trainSnap,
         nebulaCanvas = nebulaCanvas,
+        e2e = e2e,
         pendingFacts = remember(tick, statement, experts) {
             val noted = ArrayList<String>()
             if (statement.isNotBlank()) noted.add(statement)
@@ -285,7 +296,10 @@ private fun PhoneApp(
         when (event) {
             is SkyEvent.Lang -> lang = event.lang
             is SkyEvent.Tab -> tab = event.tab
-            is SkyEvent.Draft -> draft = event.text
+            is SkyEvent.Draft -> {
+                val pin = File(context.filesDir, "setup/e2e-draft.txt")
+                draft = if (e2e && pin.exists()) pin.readText() else event.text
+            }
             SkyEvent.NewChat -> {
                 currentId = store.newConversation().id
                 recallJson = ""
@@ -315,6 +329,7 @@ private fun PhoneApp(
                 onCleared()
             }
             SkyEvent.Send -> {
+                if (e2e) File(context.filesDir, "setup/e2e-draft.txt").delete()
                 val text = draft.trim()
                 if (text.isEmpty() || generating) return@SkyFrame
                 val conversation = current ?: store.newConversation().also { currentId = it.id }

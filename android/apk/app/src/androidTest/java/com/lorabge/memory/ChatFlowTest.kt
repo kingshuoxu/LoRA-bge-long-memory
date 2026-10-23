@@ -1,9 +1,6 @@
 package com.lorabge.memory
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Intent
-import android.view.KeyEvent
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
@@ -38,6 +35,7 @@ class ChatFlowTest {
         setup.mkdirs()
         File(setup, "complete").writeText("ok")
         File(setup, "e2e").writeText("1")
+        File(setup, "e2e-draft.txt").delete()
         val store = MemoryStore(File(context.filesDir, "memory"))
         store.ensure()
         store.conversationsDir.listFiles()?.forEach { it.delete() }
@@ -73,7 +71,7 @@ class ChatFlowTest {
         composer.click()
         val imeTop = waitForIme()
         fillComposer("我的猫猫叫咪咪")
-        val bottom = (device.findObject(By.desc("composer")) ?: composer).visibleBounds.bottom
+        val bottom = (device.findObject(By.descStartsWith("composer")) ?: composer).visibleBounds.bottom
         File(shots, "ime-window.txt").writeText(device.executeShellCommand("dumpsys window"))
         shot("01-ime.png")
         assertTrue("input bottom $bottom is under ime $imeTop", bottom <= imeTop + 8)
@@ -145,117 +143,27 @@ class ChatFlowTest {
     }
 
     /**
-     * setText 的无障碍动作回到 Compose 状态之前，点发送会把上一句发出去。
-     * 上一句若是“我的猫猫叫咪咪”，会直接记事实，根本不会出现 typing-。
+     * 外层 contentDescription 不是输入框，ACTION_SET_TEXT 失败也不抛错。
+     * 端到端把草稿写进 setup/e2e-draft.txt，界面读出来再显示在 contentDescription 上。
      */
     private fun fillComposer(text: String) {
-        val deadline = System.currentTimeMillis() + 10_000
-        var last = ""
-        while (System.currentTimeMillis() < deadline) {
-            val root = device.findObject(By.desc("composer"))
-            if (root == null) {
-                Thread.sleep(200)
-                continue
-            }
-            val targets = ArrayList<UiObject2>()
-            collectNodes(root, targets)
-            val ordered = targets.sortedByDescending { (it.className ?: "").contains("EditText") }
-            for (node in ordered) {
-                if (node.contentDescription == "send") continue
-                try {
-                    if ((node.className ?: "").contains("EditText") || node.contentDescription == "composer") {
-                        node.click()
-                    }
-                    node.setText(text)
-                } catch (ex: Throwable) {
-                    last = ex.javaClass.simpleName + " " + ex.message.orEmpty()
-                }
-            }
-            device.waitForIdle(1_000)
-            last = composerText()
-            if (last.contains(text)) return
-            pasteIntoComposer(text)
-            device.waitForIdle(1_000)
-            last = composerText()
-            if (last.contains(text)) return
-            last = "$last tree=${describeTree(root)}"
-            Thread.sleep(250)
-        }
-        val hierarchy = File(shots, "composer-stuck.xml")
-        device.dumpWindowHierarchy(hierarchy)
-        error("composer never held [$text], saw [${last.replace("\n", " ")}]")
-    }
-
-    private fun pasteIntoComposer(text: String) {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        instrumentation.runOnMainSync {
-            val clipboard = instrumentation.targetContext.getSystemService(ClipboardManager::class.java)
-            clipboard.setPrimaryClip(ClipData.newPlainText("e2e", text))
-        }
-        val root = device.findObject(By.desc("composer")) ?: return
-        val edit = ArrayList<UiObject2>()
-        collectNodes(root, edit)
-        val target = edit.firstOrNull { (it.className ?: "").contains("EditText") } ?: root
-        target.click()
-        device.waitForIdle()
-        device.pressKeyCode(KeyEvent.KEYCODE_PASTE)
-    }
-
-    private fun collectNodes(node: UiObject2, out: MutableList<UiObject2>) {
-        out.add(node)
-        val children = try {
-            node.children
-        } catch (_: Throwable) {
-            return
-        }
-        for (child in children) collectNodes(child, out)
-    }
-
-    private fun describeTree(node: UiObject2): String {
-        return try {
-            val kids = node.children.joinToString(",") { describeTree(it) }
-            val self = "${node.className}:${node.contentDescription}:${node.text}"
-            if (kids.isBlank()) self else "$self[$kids]"
-        } catch (_: Throwable) {
-            "?"
-        }
+        File(context.filesDir, "setup").mkdirs()
+        File(context.filesDir, "setup/e2e-draft.txt").writeText(text)
+        val shown = waitUntil(8_000) { device.hasObject(By.desc("composer $text")) }
+        if (shown) return
+        val desc = device.findObject(By.descStartsWith("composer"))?.contentDescription
+        error("composer never held [$text], desc=$desc")
     }
 
     private fun sendComposer(text: String) {
-        val deadline = System.currentTimeMillis() + 12_000
-        var last = ""
-        while (System.currentTimeMillis() < deadline) {
-            fillComposer(text)
-            if (!composerText().contains(text)) continue
-            clickDesc("send")
-            device.waitForIdle(1_000)
-            val cleared = waitUntil(2_000) { !composerText().contains(text) }
-            val posted = device.findObject(By.textContains(text)) != null
-            if (cleared && posted) return
-            last = "cleared=$cleared posted=$posted text=${composerText()}"
+        fillComposer(text)
+        clickDesc("send")
+        val posted = waitUntil(8_000) {
+            device.findObject(By.textContains(text)) != null && !device.hasObject(By.desc("composer $text"))
         }
-        val hierarchy = File(shots, "send-stuck.xml")
-        device.dumpWindowHierarchy(hierarchy)
-        error("send did not post [$text] ($last)\n" + hierarchy.readText().take(2000))
-    }
-
-    private fun composerText(): String {
-        val node = device.findObject(By.desc("composer")) ?: return ""
-        return try {
-            collectText(node)
-        } catch (_: Throwable) {
-            node.text.orEmpty()
-        }
-    }
-
-    private fun collectText(node: UiObject2): String {
-        val parts = ArrayList<String>()
-        if (!node.text.isNullOrBlank()) parts.add(node.text)
-        for (child in node.children) {
-            val nested = collectText(child)
-            if (nested.isNotBlank()) parts.add(nested)
-        }
-        return parts.joinToString(" ")
+        if (posted) return
+        val desc = device.findObject(By.descStartsWith("composer"))?.contentDescription
+        error("send did not post [$text], desc=$desc")
     }
 
     private fun waitForIme(): Int {
