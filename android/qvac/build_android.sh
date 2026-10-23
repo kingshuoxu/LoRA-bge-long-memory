@@ -1,6 +1,6 @@
 #!/bin/sh
 # 用和桌面同一份 QVAC 源码编 Android arm64 的 libllama。
-# 提交 b73e75af5,再打上 bert-bge-cased 补丁,这样大写词不会被 WPM 折成小写。
+# 仓库 tetherto/qvac-fabric-llm.cpp,提交 b73e75af5,再打上 bert-bge-cased 补丁,这样大写词不会被 WPM 折成小写。
 # 优先打开 Vulkan,小米 15 的 Adreno 830 走这条。着色器工具链编不过时退回 CPU,并在日志里写明。
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")"/../.. && pwd)
@@ -16,11 +16,14 @@ if [ -z "$NDK" ] || [ ! -f "$NDK/build/cmake/android.toolchain.cmake" ]; then
   echo "找不到 Android NDK。设置 ANDROID_NDK_ROOT。" >&2
   exit 1
 fi
+# 桌面用的是 tetherto/qvac-fabric-llm.cpp 的 b73e75af5。公开的 finetune 镜像里没有这个提交。
+REPO=https://github.com/tetherto/qvac-fabric-llm.cpp.git
 if [ ! -e "$SRC/.git" ]; then
-  git clone --filter=blob:none https://github.com/tether-ai-research/qvac-fabric-llm-finetune.git "$SRC"
+  git init "$SRC"
+  git -C "$SRC" remote add origin "$REPO"
 fi
 git -C "$SRC" fetch --depth 1 origin "$COMMIT"
-git -C "$SRC" reset --hard "$COMMIT"
+git -C "$SRC" checkout --force --detach FETCH_HEAD
 git -C "$SRC" clean -fd -e build-android
 git -C "$SRC" apply --check "$PATCH"
 git -C "$SRC" apply "$PATCH"

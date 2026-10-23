@@ -125,7 +125,7 @@ System image must match the host architecture.
 
 ## CI
 
-工作流 `.github/workflows/android-apk.yml`,名字 `Android APK`。在 `android/**` 或该工作流文件的 push / pull request 上跑。宿主已带 Android SDK,不再用 `android-actions/setup-android`(它会去装已经废弃的 `tools` 包)。步骤是装 SDK 35、NDK `27.2.12479018`、CMake 3.22.1、glslc,按 `android/trainer/build_android.sh` 编 OpenBLAS ARMv8 和 `libtrain-mft.so`,再按 `android/qvac/build_android.sh` 从 QVAC `b73e75af5` 加大小写补丁编 `libllama.so`(先试 Vulkan,着色器失败才退回 CPU),然后 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest`。单元测试里有 Paparazzi 截图。产物名 **`lorabge-memory-arm64-debug`**,里面是签名调试 APK `app-debug.apk`。调试签名是 Android Gradle 的默认 debug keystore,不是上架用的发布签名。
+工作流 `.github/workflows/android-apk.yml`,名字 `Android APK`。在 `android/**` 或该工作流文件的 push / pull request 上跑。宿主已带 Android SDK,不再用 `android-actions/setup-android`(它会去装已经废弃的 `tools` 包)。步骤是装 SDK 35、NDK `27.2.12479018`、CMake 3.22.1、glslc,按 `android/trainer/build_android.sh` 编 OpenBLAS ARMv8 和 `libtrain-mft.so`,再按 `android/qvac/build_android.sh` 从 `tetherto/qvac-fabric-llm.cpp` 的 `b73e75af5` 加大小写补丁编 `libllama.so`(先试 Vulkan,着色器失败才退回 CPU),然后 `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest`。单元测试里有 Paparazzi 截图。产物名 **`lorabge-memory-arm64-debug`**,里面是签名调试 APK `app-debug.apk`。调试签名是 Android Gradle 的默认 debug keystore,不是上架用的发布签名。
 
 上一版下载 `29fe08c` zip、GEMM 仍是纯 C++ 的绿运行:[Android APK 39895706987](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895706987)(push `61d2b0c`),同一提交的 pull request 运行 [39895710520](https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/39895710520)。本提交改为现场编 OpenBLAS 和 Vulkan `libllama`,运行 URL 写在 PR 描述里。产物名仍是 **`lorabge-memory-arm64-debug`**。解出来的 `libtrain-mft.so` 是 arm64 PIE,解释器 `/system/bin/linker64`,LOAD 对齐 `0x4000`,并链进 `cblas_sgemm`。
 
