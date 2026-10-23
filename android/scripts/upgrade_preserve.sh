@@ -171,9 +171,41 @@ echo "upgrade preserved memory, models, settings; versionCode 1003"
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest,com.lorabge.memory.NebulaGestureTest --no-daemon
-gradle_status=$?
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon
+chat_status=$?
 set -e
+if [ "$chat_status" -ne 0 ]; then
+  echo "对话流程失败" >&2
+fi
+# 星云单独跑。UiAutomation.takeScreenshot 在 aosp_atd 上只有 WebView 的纯色底，没有 GL。
+# 等测试写好 nebula-ready，再用模拟器控制台录物理画面，这一路包含 SwiftShader 画出来的像素。
+set +e
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
+nebula_pid=$!
+recorded=0
+for _ in $(seq 1 150); do
+  if "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e/nebula-ready >/dev/null 2>&1; then
+    "$ADB" -s "emulator-$PORT" emu screenrecord start nebula-gesture.webm >"$STAGE/screenrecord-start.txt" 2>&1 || true
+    recorded=1
+    break
+  fi
+  if ! kill -0 "$nebula_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+wait "$nebula_pid"
+nebula_status=$?
+if [ "$recorded" = 1 ]; then
+  "$ADB" -s "emulator-$PORT" emu screenrecord stop nebula-gesture.webm >"$STAGE/screenrecord-stop.txt" 2>&1 || true
+  sleep 2
+fi
+set -e
+if [ "$chat_status" -ne 0 ]; then
+  gradle_status=$chat_status
+else
+  gradle_status=$nebula_status
+fi
 # aosp_atd 没有 tar。逐个 cat 出来。测试失败也要留下截图。
 mkdir -p "$STAGE/shots" "$STAGE/shots/frames"
 : >"$STAGE/e2e-ls.txt"
@@ -195,6 +227,71 @@ done <"$STAGE/e2e-ls.txt"
 if ls "$STAGE/shots/frames/"*.png >/dev/null 2>&1; then
   ffmpeg -y -framerate 2 -i "$STAGE/shots/frames/%04d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4" || true
 fi
+WEBM=$(find "$ANDROID_AVD_HOME" "$HOME/.android" -name 'nebula-gesture.webm' 2>/dev/null | head -1 || true)
+if [ -n "$WEBM" ] && [ -s "$WEBM" ]; then
+  cp "$WEBM" "$STAGE/shots/nebula-gesture.webm"
+  ffmpeg -y -i "$WEBM" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4"
+  python3 - "$WEBM" "$STAGE/shots/nebula-pixels.txt" << 'PY'
+import subprocess, sys
+webm, report = sys.argv[1:]
+probe = subprocess.check_output([
+    "ffprobe", "-v", "error", "-select_streams", "v:0",
+    "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", webm,
+], text=True).strip()
+width, height = (int(part) for part in probe.split("x"))
+crop_w = max(2, width * 7 // 10)
+crop_h = max(2, height * 5 // 10)
+crop_x = max(0, (width - crop_w) // 2)
+crop_y = max(0, height * 18 // 100)
+raw = subprocess.check_output([
+    "ffmpeg", "-v", "error", "-i", webm,
+    "-vf", f"fps=2,crop={crop_w}:{crop_h}:{crop_x}:{crop_y}",
+    "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+])
+frame_bytes = crop_w * crop_h * 3
+count = len(raw) // frame_bytes
+if count < 2:
+    raise SystemExit(f"screenrecord produced {count} frames")
+
+def metrics(buf):
+    total = 0
+    samples = 0
+    # 先算亮度均值，再算方差。每隔 6 个像素取样。
+    step = 6 * 3
+    values = []
+    for index in range(0, len(buf) - 2, step):
+        luma = (buf[index] + buf[index + 1] + buf[index + 2]) / 3
+        values.append(luma)
+        total += luma
+        samples += 1
+    mean = total / samples
+    var = sum((value - mean) ** 2 for value in values) / max(1, samples - 1)
+    return var
+
+def diff(a, b):
+    total = 0
+    samples = 0
+    step = 6 * 3
+    for index in range(0, min(len(a), len(b)) - 2, step):
+        total += abs(a[index] - b[index]) + abs(a[index + 1] - b[index + 1]) + abs(a[index + 2] - b[index + 2])
+        samples += 1
+    return total / samples
+
+frames = [raw[i * frame_bytes:(i + 1) * frame_bytes] for i in range(count)]
+variances = [metrics(frame) for frame in frames]
+spread = max(diff(frames[0], frame) for frame in frames[1:])
+best = max(variances)
+text = f"frames={count}\nvariance={best:.2f}\npixelDiff={spread:.2f}\nwidth={width}\nheight={height}\n"
+open(report, "w", encoding="utf-8").write(text)
+print(text)
+if best <= 6 or spread <= 2:
+    raise SystemExit(f"emulator screenrecord nebula region is flat or still\n{text}")
+PY
+else
+  echo "没有模拟器控制台录像。UiAutomation 截不到 WebGL。" >&2
+  cat "$STAGE/screenrecord-start.txt" >&2 || true
+  cat "$STAGE/screenrecord-stop.txt" >&2 || true
+fi
 if [ "$gradle_status" -ne 0 ]; then
   echo "仪器测试失败，已尽量保存截图和录像" >&2
   find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true
@@ -206,6 +303,9 @@ done
 grep -q '^path=' "$STAGE/shots/nebula-renderer.txt"
 grep -q '^variance=' "$STAGE/shots/nebula-renderer.txt"
 grep -q '^pixelDiff=' "$STAGE/shots/nebula-renderer.txt"
+test -s "$STAGE/shots/nebula-pixels.txt"
+grep -q '^variance=' "$STAGE/shots/nebula-pixels.txt"
+grep -q '^pixelDiff=' "$STAGE/shots/nebula-pixels.txt"
 # 仪器测试包才允许带草稿注入。这里确认这次装上去的测试包带了它，发布包在 release workflow 里做相反的检查。
 if ! unzip -p app/build/outputs/apk/debug/app-debug.apk 'classes*.dex' | grep -a -q 'e2e-draft.txt'; then
   echo "仪器测试包缺少 e2e-draft.txt，中文句子不会进输入框" >&2

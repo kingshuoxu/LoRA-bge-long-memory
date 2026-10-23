@@ -125,13 +125,13 @@ class ChatFlowTest {
         if (imeTopOrNull() != null) device.pressBack()
         shot("03-ack.png")
 
-        clickText("记忆库")
+        clickTab("tab-library")
         waitText("待巩固", 8_000)
         waitText("我的猫猫叫咪咪", 8_000)
         shot("04-pending.png")
 
-        clickText("巩固")
-        waitText("立即训练", 8_000).click()
+        clickTab("tab-consolidate")
+        scrollToText("立即训练").click()
         val train = waitText("确认并训练", 8_000)
         if (!train.visibleBounds.isEmpty) train.click() else {
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 12)
@@ -152,7 +152,7 @@ class ChatFlowTest {
             text.contains("第 4/4 步") || text.contains("已完成") || text.contains("已登记")
         }
 
-        clickText("对话")
+        clickTab("tab-chat")
         clickDesc("newChat")
         ask("我的猫叫什么名字？", "咪咪")
         shot("06-recall-cat.png")
@@ -250,6 +250,29 @@ class ChatFlowTest {
 
     private fun clickText(text: String) {
         waitText(text, 8_000).click()
+    }
+
+    /** 底栏在键盘打开时会收起。「巩固」也不能用包含匹配，否则会点到「待巩固」。 */
+    private fun clickTab(desc: String) {
+        if (imeTopOrNull() != null) device.pressBack()
+        waitDesc(desc, 8_000).click()
+    }
+
+    private fun scrollToText(text: String): UiObject2 {
+        val first = device.wait(Until.findObject(By.text(text)), 2_000)
+        if (first != null && !first.visibleBounds.isEmpty) return first
+        repeat(4) {
+            device.swipe(
+                device.displayWidth / 2,
+                device.displayHeight * 3 / 4,
+                device.displayWidth / 2,
+                device.displayHeight / 5,
+                18,
+            )
+            val found = device.wait(Until.findObject(By.text(text)), 1_500)
+            if (found != null && !found.visibleBounds.isEmpty) return found
+        }
+        return device.wait(Until.findObject(By.text(text)), 2_000) ?: error("missing text $text")
     }
 
     private fun waitText(text: String, timeoutMs: Long): UiObject2 {

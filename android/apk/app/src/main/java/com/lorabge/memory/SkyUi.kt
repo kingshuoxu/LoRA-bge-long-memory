@@ -532,7 +532,13 @@ private fun BottomNav(state: SkyState, nav: Dp, onEvent: (SkyEvent) -> Unit) {
 
 @Composable
 private fun NavItem(icon: String, label: String, on: Boolean, click: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = click).padding(horizontal = 8.dp, vertical = 4.dp)) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .semantics { contentDescription = "tab-$icon" }
+            .clickable(onClick = click)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
         SkyIcon(icon, if (on) Accent2 else Muted, Modifier.size(22.dp))
         Text(label, color = if (on) Accent2 else Muted, fontSize = 12.sp)
     }
