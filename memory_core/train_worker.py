@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from memory_core.device import pick_device, train_dtype
 from memory_core.models_mgr import ensure_models, qwen_path
 from memory_core.routing import bind_bge
-from memory_core.store import atomic_write_json, next_batch_id, register_expert
+from memory_core.store import atomic_write_json, next_batch_id, read_json, register_expert
 
 from memory_core.prompts import has_cjk, system_for, with_brief
 
@@ -97,7 +97,8 @@ def _read_status(job_dir: Path) -> dict:
     path = _status_path(job_dir)
     if not path.is_file():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = read_json(path)
+    return data if isinstance(data, dict) else {}
 
 
 def _update(job_dir: Path, **kwargs) -> dict:

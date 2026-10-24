@@ -42,6 +42,7 @@ from memory_core.store import (
     add_tombstone,
     atomic_write_json,
     delete_writable_expert,
+    read_json,
     load_experts,
     next_batch_id,
     read_tombstones,
@@ -587,7 +588,7 @@ class MemoryService:
         path = self.home / "previews" / preview_id / "status.json"
         if not path.is_file():
             raise ServiceError("找不到这次抽取")
-        return json.loads(path.read_text(encoding="utf-8"))
+        return read_json(path)
 
     def _preview_running(self) -> bool:
         return self._preview_thread is not None and self._preview_thread.is_alive()
@@ -876,7 +877,7 @@ class MemoryService:
             status_path = job_dir / "status.json"
             if not status_path.is_file():
                 return
-            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status = read_json(status_path)
             if status.get("status") == "running":
                 status["status"] = "failed"
                 status["error"] = f"训练进程退出（代码 {code}）。详见 train.log"
@@ -890,7 +891,7 @@ class MemoryService:
         if not pointer.is_file():
             return None
         try:
-            job_id = json.loads(pointer.read_text(encoding="utf-8"))["id"]
+            job_id = read_json(pointer)["id"]
         except (json.JSONDecodeError, KeyError):
             return None
         return self.job_status(job_id)
@@ -899,7 +900,7 @@ class MemoryService:
         path = self.jobs_dir / job_id / "status.json"
         if not path.is_file():
             raise ServiceError("找不到这个训练任务")
-        return json.loads(path.read_text(encoding="utf-8"))
+        return read_json(path)
 
     def job_running(self) -> bool:
         """状态已经结束时不再挡住对话。进程可能还要一瞬间才退出。"""

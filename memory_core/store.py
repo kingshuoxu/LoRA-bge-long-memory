@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -458,8 +459,53 @@ def file_stamp(paths: list[Path]) -> float:
     return stamp
 
 
+# Windows 上读着 status.json 的时候 os.replace 会报 PermissionError（Errno 13）。
+# 训练进程在写，界面和验收在读，撞上就歇一下再试，文件格式不变。
+_SHARE_ATTEMPTS = 8
+
+
+def _transient_share(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    winerror = getattr(exc, "winerror", None)
+    return winerror in {5, 32, 33}
+
+
 def atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    delay = 0.05
+    try:
+        for attempt in range(_SHARE_ATTEMPTS):
+            try:
+                tmp.write_text(text, encoding="utf-8")
+                os.replace(tmp, path)
+                return
+            except OSError as exc:
+                if not _transient_share(exc) or attempt + 1 == _SHARE_ATTEMPTS:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, 0.4)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def read_json(path: Path) -> Any:
+    """读一份刚被替换的 JSON。共享冲突或半截内容时重试。"""
+    delay = 0.05
+    for attempt in range(_SHARE_ATTEMPTS):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            if attempt + 1 == _SHARE_ATTEMPTS:
+                raise
+        except OSError as exc:
+            if not _transient_share(exc) or attempt + 1 == _SHARE_ATTEMPTS:
+                raise
+        time.sleep(delay)
+        delay = min(delay * 2, 0.4)
+    raise RuntimeError(f"读不到 {path}")
