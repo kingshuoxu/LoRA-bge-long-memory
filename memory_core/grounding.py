@@ -433,7 +433,7 @@ def _answer_attr(fact: dict) -> str:
     「汽车 / 珍珠白的」仍是颜色，「鹦鹉 / 叫小翠」仍是名字。
     只看取值和原句的形态，不把某个词写死成属性。
     """
-    from memory_core.extract import _EN_COLOR, _ZH_COLOR
+    from memory_core.extract import _ZH_COLOR, looks_like_en_color
 
     attr = str(fact.get("attr") or "").strip()
     value = str(fact.get("value") or fact.get("answer") or "").strip()
@@ -445,7 +445,7 @@ def _answer_attr(fact: dict) -> str:
             attr = f"{attr}颜色" if attr else "颜色"
         return attr
     lowered = attr.casefold()
-    if value and _EN_COLOR.match(value) and "color" not in lowered and "colour" not in lowered:
+    if value and looks_like_en_color(value) and "color" not in lowered and "colour" not in lowered:
         attr = f"{attr} color" if attr else "color"
     return attr
 

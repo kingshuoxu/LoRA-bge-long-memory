@@ -82,12 +82,28 @@ def _normalize_value(value: str) -> str:
 _EN_COLOR_WORD = (
     "red|blue|green|yellow|black|white|grey|gray|orange|purple|pink|brown|gold|silver|"
     "beige|navy|teal|cyan|magenta|maroon|ivory|cream|vermilion|scarlet|crimson|azure|"
-    "indigo|violet|khaki|tan|olive|coral|turquoise|charcoal|burgundy|amber|lilac"
+    "indigo|violet|khaki|tan|olive|coral|turquoise|charcoal|burgundy|amber|lilac|"
+    "copper|sage|slate|pewter|rust|bronze|mauve|ochre|plum"
 )
 _EN_COLOR = re.compile(
     rf"^(?:(?:dark|light|deep|pale|navy|royal|sky|hot)\s+)?(?:{_EN_COLOR_WORD})$",
     re.IGNORECASE,
 )
+
+
+def looks_like_en_color(value: str) -> bool:
+    """取值是一个颜色词，或最后一个词是颜色词，例如 blue、sage green。"""
+    text = re.sub(r"\s+", " ", (value or "").strip())
+    if not text or has_cjk(text):
+        return False
+    if _EN_COLOR.match(text):
+        return True
+    parts = text.split(" ")
+    if not 1 <= len(parts) <= 3:
+        return False
+    if not re.fullmatch(_EN_COLOR_WORD, parts[-1], flags=re.IGNORECASE):
+        return False
+    return all(re.fullmatch(r"[A-Za-z]+", part) for part in parts)
 _ZH_COLOR = re.compile(r"^[\u4e00-\u9fff]{0,4}(?:白|红|绿|蓝|黑|黄|紫|灰|棕|粉|青|橙|金|银)色?的?$")
 _POSS = r"(?:'s|’s|'|’)"
 
@@ -108,7 +124,7 @@ def _refine_attr(attr: str, value: str, how: str, raw: str) -> str:
     if how in {"named", "called"} and not lowered.endswith("name"):
         attr = f"{attr}'s name"
         lowered = attr.casefold()
-    if _EN_COLOR.match(value.strip()) and "color" not in lowered and "colour" not in lowered:
+    if looks_like_en_color(value) and "color" not in lowered and "colour" not in lowered:
         attr = f"{attr} color"
     if re.search(r"\bbrand\b", raw, re.IGNORECASE) and "brand" not in attr.casefold():
         attr = f"{attr} brand"

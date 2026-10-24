@@ -203,6 +203,98 @@ def _one_off_span(name: str, query: str) -> str | None:
     return None
 
 
+_EN_SKIP = frozenset({
+    "where", "what", "who", "when", "which", "how", "why",
+    "the", "a", "an", "give", "tell", "me",
+    "does", "did", "do", "is", "are", "was", "were",
+})
+# 公司名后面常见的组织形式。换掉或追加这些词，仍然是另一个名字。
+_ORG_FORM = frozenset({
+    "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+    "labs", "lab", "co", "company", "group", "plc", "gmbh", "lp",
+})
+
+
+def _bare_en_token(word: str) -> str:
+    word = re.sub(r"(?:'s|’s)$", "", word, flags=re.IGNORECASE)
+    return word.strip(".")
+
+
+def _en_content(token: str) -> bool:
+    folded = token.casefold()
+    return folded not in _EN_SKIP and folded not in _ORG_FORM and len(token) >= 3
+
+
+def _cap_token_spans(query: str) -> list[list[str]]:
+    """连续的大写词。Inc / Labs 这种组织形式可以接在名字后面。"""
+    spans: list[list[str]] = []
+    current: list[str] = []
+    for match in re.finditer(r"[A-Za-z][A-Za-z0-9'’-]*", query):
+        bare = _bare_en_token(match.group(0))
+        if not bare:
+            continue
+        is_cap = bare[:1].isupper()
+        is_form = bare.casefold() in _ORG_FORM
+        if is_cap or (current and is_form):
+            current.append(bare)
+            continue
+        if current:
+            spans.append(current)
+            current = []
+    if current:
+        spans.append(current)
+    return spans
+
+
+def _trim_skip(tokens: list[str]) -> list[str]:
+    while tokens and tokens[0].casefold() in _EN_SKIP:
+        tokens = tokens[1:]
+    while tokens and tokens[-1].casefold() in _EN_SKIP:
+        tokens = tokens[:-1]
+    return tokens
+
+
+def _en_tokens_near(stored: list[str], asked: list[str]) -> bool:
+    """多词英文名少了一个词、截断了一个词，或只换了其中一个词。"""
+    if not stored or not asked:
+        return False
+    if [token.casefold() for token in stored] == [token.casefold() for token in asked]:
+        return False
+    if len(stored) == len(asked):
+        diffs = [index for index, (left, right) in enumerate(zip(stored, asked)) if left.casefold() != right.casefold()]
+        if len(diffs) == 1 and any(_en_content(stored[index]) for index in range(len(stored)) if index not in diffs):
+            return True
+        if stored[:-1] and all(left.casefold() == right.casefold() for left, right in zip(stored[:-1], asked[:-1])):
+            short, long = asked[-1], stored[-1]
+            if len(short) > len(long):
+                short, long = long, short
+            if long.casefold().startswith(short.casefold()) and len(short) >= 3 and 1 <= len(long) - len(short) <= 2:
+                return any(_en_content(token) for token in stored[:-1])
+        return False
+    if len(asked) == len(stored) - 1 and all(left.casefold() == right.casefold() for left, right in zip(stored, asked)):
+        return any(_en_content(token) and len(token) >= 4 for token in asked)
+    if len(asked) == len(stored) + 1 and asked[-1].casefold() in _ORG_FORM:
+        return all(left.casefold() == right.casefold() for left, right in zip(stored, asked[:-1]))
+    return False
+
+
+def _en_token_near(name: str, query: str) -> str | None:
+    """问句里的英文名和已存实体共用一个词，但另一个词被截断、换掉，或改成了 Inc / Labs。"""
+    if not name or has_cjk(name):
+        return None
+    stored = [_bare_en_token(token) for token in name.split() if _bare_en_token(token)]
+    if not stored:
+        return None
+    for raw in _cap_token_spans(query):
+        asked = _trim_skip(list(raw))
+        if not _en_tokens_near(stored, asked):
+            continue
+        span = " ".join(asked)
+        if span:
+            return span
+    return None
+
+
 def near_miss_span(name: str, query: str) -> str | None:
     """问句里的名字和已存实体差一点：多出来的字、少一两个字、改了一个字，或后面又接了拉丁词。"""
     if not name or not query:
@@ -240,7 +332,7 @@ def near_miss_span(name: str, query: str) -> str | None:
     found = pattern.search(query)
     if found:
         return found.group(0)
-    return None
+    return _en_token_near(name, query)
 
 
 def entity_mentioned(name: str, query: str) -> bool:

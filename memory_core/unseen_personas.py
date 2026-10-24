@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import random
 
-SEED = 20261025
+SEED = 20261026
 
 _BLOCK = {
     "周晚宁", "陈拾光", "许知夏", "江澄月", "苏小北",
@@ -15,8 +15,10 @@ _BLOCK = {
     "柏若岚", "星禾科技", "星禾",
     "沈若衡", "澜汐生物", "澜汐",
     "岑衡川", "云篆智造", "云篆", "裴临川",
+    "祁砚舟", "澄湾智造", "澄湾", "祁砚",
     "Maren Holst", "Cobalt Reef Instruments", "Sigrid Vale",
     "Lysandra Keene", "Meridian Moss Analytics",
+    "Cassian Vale", "Amberquill Robotics", "Amberquill", "Cassian",
 }
 
 
@@ -196,6 +198,9 @@ def build(seed: int = SEED) -> dict:
             (f"What is {en_org}{possessive} flagship product?", en_product),
             (f"What is the office cat at {en_org} called?", en_cat),
             (f"How many employees does {en_org} have?", en_staff),
+            (f"What color is {en_person}'s car?", en_color),
+            (f"What colour is {en_person}'s car?", en_color),
+            (f"What color does {en_person}'s car have?", en_color),
         ],
         "en_yes": [
             (f"Does {en_person} live in {en_city}?", True, en_city),
@@ -213,6 +218,10 @@ def build(seed: int = SEED) -> dict:
         ],
         "en_near": [
             (f"Who founded {en_org} Inc?", en_founder),
+            (f"Where does {en_person.split()[0]} {en_person.split()[-1][:-1]} live?", en_city),
+            (f"What is {en_person.split()[0]} {'Holt' if en_person.split()[-1] != 'Holt' else 'Marsh'}'s hometown?", en_town),
+            (f"Where is {en_org.split()[0]} Inc headquartered?", en_base),
+            (f"Who founded {en_org.split()[0]} Labs?", en_founder),
         ],
         "en_abstain": [
             f"How old is {en_person}'s parrot?",

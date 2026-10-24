@@ -77,6 +77,12 @@ class ExtractTests(unittest.TestCase):
         car = pattern_extract("Marcus Whitfield's car is blue.")[0]
         self.assertEqual(car["attr"], "car color")
         self.assertEqual(car["value"], "blue")
+        mixed = pattern_extract("Nadia Pell's car is sage green.")[0]
+        self.assertEqual(mixed["attr"], "car color")
+        self.assertEqual(mixed["value"], "sage green")
+        copper = pattern_extract("Nadia Pell's car is copper.")[0]
+        self.assertEqual(copper["attr"], "car color")
+        self.assertEqual(copper["value"], "copper")
 
     def test_named_and_called_keep_the_name_attribute(self):
         named = pattern_extract("Elena Brooks's dog is named Juniper.")

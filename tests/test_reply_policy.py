@@ -378,6 +378,47 @@ class ReplyPolicyTests(unittest.TestCase):
         ))
         self.assertFalse(name_bounded("北窗智造", "北窗智造公司 Inc 的创始人是谁？"))
         self.assertIn("Inc", near_miss_span("北窗智造", "北窗智造公司 Inc 的创始人是谁？"))
+        person = _Expert([
+            _fact("Nadia Pell", "car", "sage green", "Nadia Pell's car is sage green."),
+            _fact("Nadia Pell", "where they live", "Brindle", "Nadia Pell lives in Brindle."),
+            _fact("Nadia Pell", "hometown", "Redwick", "Nadia Pell's hometown is Redwick."),
+        ])
+        org = _Expert([
+            _fact("Copperline Studio", "headquarters", "Halver", "Copperline Studio is headquartered in Halver."),
+            _fact("Copperline Studio", "founder", "Ida Okada", "Copperline Studio was founded by Ida Okada."),
+        ])
+        experts = [person, org]
+
+        def reply(question):
+            resolved = resolve_stored_reply(question, experts, [])
+            self.assertIsNotNone(resolved, question)
+            return resolved
+
+        for question in (
+            "What color is Nadia Pell's car?",
+            "What colour is Nadia Pell's car?",
+            "What color does Nadia Pell's car have?",
+        ):
+            color = reply(question)
+            self.assertIn("sage green", color[0], (question, color[0]))
+            self.assertEqual(color[3], "entity_first", question)
+        self.assertIn("Brindle", reply("Where does Nadia Pell live?")[0])
+        for question, banned in (
+            ("Where does Nadia Pel live?", "Brindle"),
+            ("What is Nadia Holt's hometown?", "Redwick"),
+            ("Where is Copperline Inc headquartered?", "Halver"),
+            ("Who founded Copperline Labs?", "Ida Okada"),
+        ):
+            got = reply(question)
+            self.assertEqual(got[3], "entity_clarify", (question, got[0]))
+            self.assertNotIn(banned, got[0], (question, got[0]))
+        bike = resolve_stored_reply(
+            "What color is Nadia Pell's bicycle?",
+            [_Expert([_fact("Nadia Pell", "car", "sage green", "Nadia Pell's car is sage green.")])],
+            [],
+        )
+        self.assertIsNotNone(bike)
+        self.assertNotIn("sage green", bike[0])
         decision = type("D", (), {"fact_pass": True, "entity_pass": True})()
         recall = {"fact_gate": {"answer_from_fact": True, "matched": True}, "matched_facts": [{"value": "叶晚照"}]}
         forget_fact_hit(decision, recall)
