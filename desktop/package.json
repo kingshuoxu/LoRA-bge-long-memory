@@ -1,0 +1,143 @@
+{
+  "name": "lora-bge-memory",
+  "version": "0.2.5",
+  "private": true,
+  "description": "LoRA 长记忆桌面客户端",
+  "author": "LoRA-bge-long-memory",
+  "homepage": "https://github.com/kingshuoxu/LoRA-bge-long-memory",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.lorabge.memory",
+    "productName": "LoRA-bge-memory",
+    "executableName": "lora-bge-memory",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "updater.js",
+      "update-plan.js",
+      "download-file.js",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kingshuoxu",
+        "repo": "LoRA-bge-long-memory",
+        "releaseType": "prerelease"
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "../packaging/runtime",
+        "to": "runtime"
+      },
+      {
+        "from": "../memory_core",
+        "to": "app/memory_core",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "../backend",
+        "to": "app/backend",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "../scripts",
+        "to": "app/scripts",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "ui",
+        "to": "ui"
+      },
+      {
+        "from": "../packaging/e2e-check.sh",
+        "to": "e2e-check.sh"
+      },
+      {
+        "from": "../packaging/e2e-check.cmd",
+        "to": "e2e-check.cmd"
+      }
+    ],
+    "artifactName": "LoRA-bge-memory-${version}-${os}-${arch}.${ext}",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "maintainer": "LoRA-bge-long-memory",
+      "synopsis": "用 LoRA 专家保存长期记忆的本地对话",
+      "description": "本地多轮对话。选中历史对话后可巩固成 LoRA 专家，并在之后的对话里自动挂载。",
+      "desktop": {
+        "Name": "LoRA 长记忆",
+        "Comment": "用 LoRA 专家保存长期记忆的本地对话",
+        "Categories": "Utility;"
+      }
+    },
+    "deb": {
+      "afterInstall": "build/after-install.sh",
+      "afterRemove": "build/after-remove.sh",
+      "depends": [
+        "libgtk-3-0 | libgtk-3-0t64",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0 | libatspi2.0-0t64",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2 | libasound2t64"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": true,
+      "shortcutName": "LoRA 长记忆"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "notarize": false
+    },
+    "dmg": {
+      "title": "LoRA 长记忆"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  }
+}

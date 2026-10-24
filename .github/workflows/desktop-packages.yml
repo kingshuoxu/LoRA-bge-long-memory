@@ -1,0 +1,238 @@
+name: Desktop packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
+
+concurrency:
+  group: desktop-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x64
+            artifact: lora-memory-linux-appimage-deb
+          - os: windows-latest
+            label: windows-x64
+            artifact: lora-memory-windows-nsis
+          - os: macos-15
+            label: macos-arm64
+            artifact: lora-memory-macos-arm64-dmg
+          - os: macos-15-intel
+            label: macos-x64
+            artifact: lora-memory-macos-x64-dmg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean
+          df -h
+
+      - name: Free disk space (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          @(
+            "C:\Program Files (x86)\Android",
+            "C:\hostedtoolcache\windows\go",
+            "C:\hostedtoolcache\windows\Ruby",
+            "C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk"
+          ) | ForEach-Object { if (Test-Path $_) { Remove-Item -Recurse -Force $_ -ErrorAction SilentlyContinue } }
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, @{n="FreeGB";e={[math]::Round($_.Free/1GB,1)}}
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          rm -rf "$HOME/Library/Caches/Homebrew" || true
+          xcrun simctl delete unavailable || true
+          df -h /
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Migration and extraction tests
+        shell: bash
+        run: python -m unittest tests.test_legacy_wal tests.test_extract
+
+      - name: Build embedded CPython and PyTorch
+        shell: bash
+        run: python packaging/build_runtime.py
+
+      - name: Import check
+        shell: bash
+        run: |
+          if [ -x packaging/runtime/bin/python3 ]; then
+            packaging/runtime/bin/python3 -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
+          else
+            packaging/runtime/python.exe -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
+          fi
+
+      - name: Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools xvfb
+
+      - name: Install Electron builder
+        working-directory: desktop
+        run: npm ci
+
+      - name: GUI smoke
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            xvfb-run -a npx electron gui-smoke.js
+          else
+            npx electron gui-smoke.js
+          fi
+
+      - name: Build installer
+        working-directory: desktop
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          # 没有证书时保持 signAndEditExecutable=false。填了 CSC_LINK 才签名。
+          if [ -n "${CSC_LINK:-}" ]; then
+            npx electron-builder --publish never -c.win.signAndEditExecutable=true
+          else
+            npx electron-builder --publish never
+          fi
+
+      - name: Cache embedding and base models
+        uses: actions/cache@v4
+        with:
+          path: model-cache
+          key: lora-bge-models-v1
+
+      - name: AppImage upgrade keeps user data
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+        run: bash packaging/appimage-upgrade.sh
+
+      - name: Packaged training check
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          HF_HUB_DISABLE_TELEMETRY: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          # 安装包里 .sh 和 .cmd 都在。按系统选，不能拿 find 的第一项，
+          # 否则 macOS 会选中 .cmd 再去调用不存在的 cygpath。
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            name="e2e-check.cmd"
+          else
+            name="e2e-check.sh"
+          fi
+          script=""
+          for candidate in $(find desktop/dist -type f -name "$name"); do
+            script="$candidate"
+            break
+          done
+          if [ -z "$script" ]; then
+            echo "packaged $name was not found" >&2
+            exit 1
+          fi
+          root="$(dirname "$script")"
+          if [ -d "$root/app/models" ] || [ -e "$root/app/models/bge-small-zh-v1.5" ]; then
+            echo "packaged app must not ship a cwd-relative models directory" >&2
+            exit 1
+          fi
+          home="${RUNNER_TEMP:-/tmp}/lora-e2e-home"
+          rm -rf "$home"
+          mkdir -p "$LORA_MEMORY_MODELS" "$home"
+          echo "running packaged training check from $root via $script"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            # cmd /c 外面再套 \" 时，cmd 会把引号当成程序名。直接启动包内的
+            # python.exe，环境变量与 e2e-check.cmd 相同，并关掉 MSYS 的路径改写。
+            export PYTHONPATH="$(cygpath -w -a "$root/app")"
+            export LORA_MEMORY_UI="$(cygpath -w -a "$root/ui")"
+            export MSYS2_ARG_CONV_EXCL='*'
+            py="$(cygpath -w -a "$root/runtime/python.exe")"
+            win_home="$(cygpath -w -a "$home")"
+            win_models="$(cygpath -w -a "$LORA_MEMORY_MODELS")"
+            "$py" -m memory_core.e2e_check --fresh --home "$win_home" --models "$win_models" --device cpu
+          else
+            bash "$script" --fresh --home "$home" --models "$LORA_MEMORY_MODELS" --device cpu
+          fi
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: desktop/dist/*.*
+          retention-days: 14
+
+  publish:
+    name: publish-desktop-release
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: package
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lora-memory-*
+          path: release-artifacts
+
+      - name: Bundle release files
+        run: |
+          python -m pip install pyyaml
+          git log -1 --pretty=%s > release-notes.txt
+          python packaging/publish_desktop_release.py \
+            --artifacts release-artifacts \
+            --out release \
+            --tag "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.txt
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/* --clobber
+          else
+            gh release create "$tag" --prerelease --title "$tag" --notes-file release-notes.txt release/*
+          fi

@@ -1,0 +1,643 @@
+"""按事实比较问句，而不是按整个人。
+
+和已合并的事实语义闸同一套做法：比较前把在册实体换成「某」，把取值换成「某值」。
+每条事实单独存它的问句/陈述向量和属性短语向量。问句要达到校准过的 τ，
+并且不能更像另一条事实；同时还要够接近这条事实自己的属性短语。
+同一人没写过的属性因此回基座。这里不按关键词或属性名词表拦截。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import re
+
+import torch
+
+from memory_core.paths import ensure_scripts_path
+from memory_core.prompts import has_cjk
+
+CALIBRATED_TAU = 0.622
+# 问句和某条已存问法几乎重合时，属性短词不能再否决。
+# 0.91 卡在英文「狗的名字」改写 0.926 和「别人的狗」0.891 之间。
+NEAR_TAU = 0.91
+# 属性线在 persona_suite 的调参分片上选定。串属性不再靠抬高这条线，
+# 而由问句里的性质和事物名挡掉。训练问句几乎重合时仍走 NEAR_TAU。
+ATTR_TAU_ZH = 0.45
+ATTR_TAU_EN = 0.45
+MASK = "某"
+VALUE_MASK = "某值"
+
+
+def attr_tau(query: str) -> float:
+    """属性短词和问句不是同一个尺度，中英各自校准。"""
+    if has_cjk(query):
+        return ATTR_TAU_ZH
+    return ATTR_TAU_EN
+
+
+def _fold_gate_text(text: str) -> str:
+    """拉丁字母忽略大小写。掩码「某」是汉字，不能靠整句是否含汉字来判断。"""
+    return "".join(char.casefold() if char.isascii() else char for char in text)
+
+
+def _entity_surfaces(name: str) -> list[str]:
+    surfaces = []
+    raw = str(name or "").strip()
+    if raw:
+        surfaces.append(raw)
+    ensure_scripts_path()
+    from router import canonicalize_entity
+
+    canon = canonicalize_entity(raw)
+    if canon and canon not in surfaces:
+        surfaces.append(canon)
+    return surfaces
+
+
+# 名字后面可以接的语法字。紧挨着的另一个汉字（兰、科）会把名字延长成另一个实体。
+# 名字紧挨着这些字，仍是同一个人或同一家机构。
+# 「公司」的「公」、「总部」的「总」、「相关」的「相」都算语法，不是另一个名字。
+# 「成立」「偏爱」「毕业」的首字是谓语，不是另一个名字。
+# 多出来的名字音节（兰、科、司、智、制）不在这里，所以短名对不上更长的名字。
+_GRAMMAR = frozenset(
+    "的是叫吗呢吧啊呀在住有养会做从来去和与也还最现目正已不没家这那开骑弹玩"
+    "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本"
+    "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
+    "老总主靠自居公相年手电邮职生习股我"
+    "成偏毕"
+)
+
+_LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+
+
+def _mentions_self(query: str) -> bool:
+    """「我」只认「我的」或后面不再接汉字。避免「我们」「告诉我」误命中用户。"""
+    if "我的" in query:
+        return True
+    return bool(re.search(r"我(?![\u4e00-\u9fff])", query))
+
+
+def _latin_tail(query: str, end: int) -> str:
+    """名字后面先跳过汉字，再跳过空白。如果还接着拉丁词，返回这一段。
+
+    「公司 Inc」里的「司」不是语法字，只看紧挨着的一个字会在「司」停下，看不到 Inc。
+    """
+    index = end
+    while index < len(query) and has_cjk(query[index]):
+        index += 1
+    cursor = index
+    while cursor < len(query) and query[cursor].isspace():
+        cursor += 1
+    match = _LATIN_TOKEN.match(query, cursor)
+    if not match:
+        return ""
+    return query[end:match.end()]
+
+
+def name_bounded(name: str, query: str) -> bool:
+    """名字整段对上才算点名。后面多一个汉字、再接拉丁词，或英文名后再加一个大写词，都不是同一个名字。"""
+    if not name or not query:
+        return False
+    if has_cjk(name):
+        start = 0
+        while True:
+            index = query.find(name, start)
+            if index < 0:
+                return False
+            end = index + len(name)
+            before = query[index - 1] if index else ""
+            after = query[end] if end < len(query) else ""
+            before_ok = not before or not has_cjk(before) or before in _GRAMMAR
+            after_ok = not after or not has_cjk(after) or after in _GRAMMAR
+            if before_ok and after_ok and not _latin_tail(query, end):
+                return True
+            start = index + 1
+    pattern = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])", re.IGNORECASE)
+    for match in pattern.finditer(query):
+        rest = query[match.end():]
+        if re.match(r"^(?:'s|’s|'|’)?\s+[A-Z]", rest):
+            continue
+        return True
+    return False
+
+
+def name_extends(entity: str, found: str) -> bool:
+    """抽出的名字比已存实体更长，而且多出来的是名字而不是「的 / 那辆」。"""
+    if not entity or not found.startswith(entity) or len(found) == len(entity):
+        return False
+    extra = found[len(entity):]
+    if extra and has_cjk(extra[0]) and extra[0] not in _GRAMMAR:
+        return True
+    return bool(re.match(r"\s*[A-Z]", extra))
+
+
+def _changed_name_char(window: str, name: str) -> str:
+    """两个同样长的片段只差一个字时，返回问句里的那个字。"""
+    if len(window) != len(name) or not window:
+        return ""
+    changed = ""
+    for left, right in zip(window, name):
+        if left == right:
+            continue
+        if changed:
+            return ""
+        changed = left
+    return changed
+
+
+def _prefix_span(name: str, query: str) -> str | None:
+    """问句里是已存名字的前缀，少了一两个字，并且这个前缀本身是完整的。"""
+    if len(name) < 3 or name in query:
+        return None
+    for drop in (1, 2):
+        keep = len(name) - drop
+        if keep < 2:
+            continue
+        prefix = name[:keep]
+        start = 0
+        while True:
+            index = query.find(prefix, start)
+            if index < 0:
+                break
+            end = index + len(prefix)
+            before = query[index - 1] if index else ""
+            before_ok = not before or not has_cjk(before) or before in _GRAMMAR
+            tail = _latin_tail(query, end)
+            after = query[end] if end < len(query) else ""
+            after_ok = not after or not has_cjk(after) or after in _GRAMMAR
+            if before_ok and tail:
+                return query[index:end] + tail
+            if before_ok and after_ok and not tail:
+                # 「工」在语法字里。泽川工社和泽川工坊只差最后一个字，不能收成前缀「泽川」。
+                window = query[index:index + len(name)]
+                changed = _changed_name_char(window, name)
+                if changed and changed not in _GRAMMAR:
+                    start = index + 1
+                    continue
+                return prefix
+            start = index + 1
+    return None
+
+
+def _one_off_span(name: str, query: str) -> str | None:
+    """同样长的汉字名只差一个字。两字名太短，不在这里猜。"""
+    if len(name) < 3 or not has_cjk(name) or name in query:
+        return None
+    width = len(name)
+    for index, char in enumerate(query):
+        if not has_cjk(char):
+            continue
+        if index and has_cjk(query[index - 1]) and query[index - 1] not in _GRAMMAR:
+            continue
+        window = query[index:index + width]
+        if len(window) < width or not all(has_cjk(piece) for piece in window):
+            continue
+        changed = _changed_name_char(window, name)
+        if not changed or changed in _GRAMMAR:
+            continue
+        end = index + width
+        while end < len(query) and has_cjk(query[end]) and query[end] not in _GRAMMAR:
+            end += 1
+        return query[index:end] + _latin_tail(query, end)
+    return None
+
+
+_EN_SKIP = frozenset({
+    "where", "what", "who", "when", "which", "how", "why",
+    "the", "a", "an", "give", "tell", "me",
+    "does", "did", "do", "is", "are", "was", "were",
+})
+# 公司名后面常见的组织形式。换掉或追加这些词，仍然是另一个名字。
+_ORG_FORM = frozenset({
+    "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+    "labs", "lab", "co", "company", "group", "plc", "gmbh", "lp",
+})
+
+
+def _bare_en_token(word: str) -> str:
+    word = re.sub(r"(?:'s|’s)$", "", word, flags=re.IGNORECASE)
+    return word.strip(".")
+
+
+def _en_content(token: str) -> bool:
+    folded = token.casefold()
+    return folded not in _EN_SKIP and folded not in _ORG_FORM and len(token) >= 3
+
+
+def _cap_token_spans(query: str) -> list[list[str]]:
+    """连续的大写词。Inc / Labs 这种组织形式可以接在名字后面。"""
+    spans: list[list[str]] = []
+    current: list[str] = []
+    for match in re.finditer(r"[A-Za-z][A-Za-z0-9'’-]*", query):
+        bare = _bare_en_token(match.group(0))
+        if not bare:
+            continue
+        is_cap = bare[:1].isupper()
+        is_form = bare.casefold() in _ORG_FORM
+        if is_cap or (current and is_form):
+            current.append(bare)
+            continue
+        if current:
+            spans.append(current)
+            current = []
+    if current:
+        spans.append(current)
+    return spans
+
+
+def _trim_skip(tokens: list[str]) -> list[str]:
+    while tokens and tokens[0].casefold() in _EN_SKIP:
+        tokens = tokens[1:]
+    while tokens and tokens[-1].casefold() in _EN_SKIP:
+        tokens = tokens[:-1]
+    return tokens
+
+
+def _en_tokens_near(stored: list[str], asked: list[str]) -> bool:
+    """多词英文名少了一个词、截断了一个词，或只换了其中一个词。"""
+    if not stored or not asked:
+        return False
+    if [token.casefold() for token in stored] == [token.casefold() for token in asked]:
+        return False
+    if len(stored) == len(asked):
+        diffs = [index for index, (left, right) in enumerate(zip(stored, asked)) if left.casefold() != right.casefold()]
+        if len(diffs) == 1 and any(_en_content(stored[index]) for index in range(len(stored)) if index not in diffs):
+            return True
+        if stored[:-1] and all(left.casefold() == right.casefold() for left, right in zip(stored[:-1], asked[:-1])):
+            short, long = asked[-1], stored[-1]
+            if len(short) > len(long):
+                short, long = long, short
+            if long.casefold().startswith(short.casefold()) and len(short) >= 3 and 1 <= len(long) - len(short) <= 2:
+                return any(_en_content(token) for token in stored[:-1])
+        return False
+    if len(asked) == len(stored) - 1 and all(left.casefold() == right.casefold() for left, right in zip(stored, asked)):
+        return any(_en_content(token) and len(token) >= 4 for token in asked)
+    if len(asked) == len(stored) + 1 and asked[-1].casefold() in _ORG_FORM:
+        return all(left.casefold() == right.casefold() for left, right in zip(stored, asked[:-1]))
+    return False
+
+
+def _en_token_near(name: str, query: str) -> str | None:
+    """问句里的英文名和已存实体共用一个词，但另一个词被截断、换掉，或改成了 Inc / Labs。"""
+    if not name or has_cjk(name):
+        return None
+    stored = [_bare_en_token(token) for token in name.split() if _bare_en_token(token)]
+    if not stored:
+        return None
+    for raw in _cap_token_spans(query):
+        asked = _trim_skip(list(raw))
+        if not _en_tokens_near(stored, asked):
+            continue
+        span = " ".join(asked)
+        if span:
+            return span
+    return None
+
+
+def near_miss_span(name: str, query: str) -> str | None:
+    """问句里的名字和已存实体差一点：多出来的字、少一两个字、改了一个字，或后面又接了拉丁词。"""
+    if not name or not query:
+        return None
+    if has_cjk(name):
+        start = 0
+        while True:
+            index = query.find(name, start)
+            if index < 0:
+                break
+            tail = _latin_tail(query, index + len(name))
+            if tail:
+                return query[index:index + len(name)] + tail
+            start = index + 1
+        if name_bounded(name, query):
+            return None
+        start = 0
+        while True:
+            index = query.find(name, start)
+            if index < 0:
+                break
+            begin = index
+            while begin > 0 and has_cjk(query[begin - 1]) and query[begin - 1] not in _GRAMMAR:
+                begin -= 1
+            end = index + len(name)
+            while end < len(query) and has_cjk(query[end]) and query[end] not in _GRAMMAR:
+                end += 1
+            if begin != index or end != index + len(name):
+                return query[begin:end]
+            start = index + 1
+        return _prefix_span(name, query) or _one_off_span(name, query)
+    if name_bounded(name, query):
+        return None
+    pattern = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"\s+[A-Z][A-Za-z0-9]+\b")
+    found = pattern.search(query)
+    if found:
+        return found.group(0)
+    return _en_token_near(name, query)
+
+
+def entity_mentioned(name: str, query: str) -> bool:
+    """问句里是否点了这个实体。拉丁名忽略大小写、称谓和所有格。"""
+    if not name or not query:
+        return False
+    if name == "我":
+        return _mentions_self(query)
+    if name_bounded(name, query):
+        return True
+    ensure_scripts_path()
+    from router import entity_key
+
+    key = entity_key(name)
+    if not key or key == name:
+        return False
+    return name_bounded(key, query)
+
+
+def semantic_tau(gate: dict | None) -> float:
+    """事实语义闸的阈值。旧包把 fact_tau 写成 0.6，那是路由键的读取阈值，不够用。"""
+    if not gate:
+        return CALIBRATED_TAU
+    try:
+        value = float(gate.get("fact_tau", CALIBRATED_TAU))
+    except (TypeError, ValueError):
+        return CALIBRATED_TAU
+    if value <= 0.6:
+        return CALIBRATED_TAU
+    return value
+
+
+def _replace_surface(text: str, surface: str, mask: str) -> str:
+    if not surface:
+        return text
+    if has_cjk(surface):
+        return text.replace(surface, mask)
+    pattern = re.compile(r"(?<![A-Za-z])" + re.escape(surface) + r"(?![A-Za-z])", re.IGNORECASE)
+    return pattern.sub(mask, text)
+
+
+def mask_fact(text: str, entity: str, value: str, mask: str = MASK, value_mask: str = VALUE_MASK) -> str:
+    value = str(value or "").rstrip("年")
+    pieces = []
+    for surface in _entity_surfaces(entity):
+        pieces.append((surface, mask))
+    if value:
+        pieces.append((value, value_mask))
+    for src, dst in sorted(pieces, key=lambda item: len(item[0]), reverse=True):
+        text = _replace_surface(text, src, dst)
+    return _fold_gate_text(text)
+
+
+def mask_query(query: str, entities: list[str], mask: str = MASK) -> str:
+    surfaces = []
+    for name in {entity for entity in entities if entity}:
+        surfaces.extend(_entity_surfaces(name))
+    for surface in sorted(set(surfaces), key=len, reverse=True):
+        query = _replace_surface(query, surface, mask)
+    return _fold_gate_text(query)
+
+
+def _fact_value(fact: dict) -> str:
+    value = str(fact.get("value") or fact.get("answer") or "").strip()
+    if value:
+        return value
+    for qa in fact.get("qa") or []:
+        answer = str(qa.get("a") or "").strip()
+        if answer:
+            return answer
+    return ""
+
+
+def _masked_fact_texts(fact: dict) -> list[str]:
+    entity = str(fact.get("entity") or "").strip()
+    value = _fact_value(fact)
+    raws: list[str] = []
+    if fact.get("statement"):
+        raws.append(str(fact["statement"]))
+    for qa in fact.get("qa") or []:
+        if qa.get("q"):
+            raws.append(str(qa["q"]))
+    if fact.get("question"):
+        raws.append(str(fact["question"]))
+    for question in fact.get("gate_questions") or []:
+        if question:
+            raws.append(str(question))
+    seen: set[str] = set()
+    texts: list[str] = []
+    for raw in raws:
+        text = mask_fact(raw, entity, value).strip()
+        if text and text not in seen:
+            seen.add(text)
+            texts.append(text)
+    return texts
+
+
+@dataclass
+class FactBank:
+    entities: list[str]
+    question_vecs: torch.Tensor
+    question_owner: torch.Tensor
+    attr_vecs: torch.Tensor
+    attrs: list[str]
+    fact_entities: list[str] | None = None
+
+    @property
+    def n_facts(self) -> int:
+        return len(self.attrs)
+
+    def explain(self, query: str, tau: float = CALIBRATED_TAU, metas: list[dict] | None = None, attr_floor: float | None = None) -> dict:
+        """和 allows 同一次比较，并给出每条事实的问句分、属性分。
+
+        metas 与事实银行的下标对齐。passed 只标闸门真正接受的那条，
+        以及问句向量和它几乎重合、属性分也过线的事实。
+        """
+        empty = {
+            "matched": False,
+            "best_question_sim": 0.0,
+            "matched_attr": "",
+            "other_question_sim": -1.0,
+            "facts": [],
+        }
+        if self.n_facts == 0 or self.question_vecs.numel() == 0:
+            return empty
+        ensure_scripts_path()
+        from router import embed
+
+        names = list(self.fact_entities or [])
+        if len(names) < self.n_facts:
+            names.extend([""] * (self.n_facts - len(names)))
+        mentioned = [index for index, name in enumerate(names) if entity_mentioned(name, query)]
+        eligible = set(mentioned) if mentioned else set(range(self.n_facts))
+        query_vec = embed([mask_query(query, self.entities)])[0]
+        owns: list[float] = []
+        attr_scores: list[float] = []
+        for index in range(self.n_facts):
+            chosen = self.question_owner == index
+            owns.append(float((self.question_vecs[chosen] @ query_vec).max()))
+            attr_scores.append(float(self.attr_vecs[index] @ query_vec))
+        best = max(eligible, key=lambda index: owns[index])
+        best_block = self.question_vecs[self.question_owner == best]
+        duplicated = (self.question_vecs @ best_block.T).max(dim=1).values >= 0.999
+        other = -1.0
+        for index in eligible:
+            if index == best:
+                continue
+            usable = (self.question_owner == index) & ~duplicated
+            if not bool(usable.any()):
+                continue
+            other = max(other, float((self.question_vecs[usable] @ query_vec).max()))
+        own = owns[best]
+        floor = attr_tau(query) if attr_floor is None else float(attr_floor)
+        near = own >= NEAR_TAU
+        ok = own + 1e-6 >= other and (near or (own >= tau and attr_scores[best] >= floor))
+        facts = []
+        for index in range(self.n_facts):
+            mask = self.question_owner == index
+            near = index != best and bool(mask.any()) and bool(duplicated[mask].all())
+            passed = bool(
+                index in eligible
+                and ok
+                and (index == best or (near and owns[index] >= tau and attr_scores[index] >= floor))
+            )
+            meta = metas[index] if metas and index < len(metas) else {}
+            facts.append({
+                "fact_id": str(meta.get("fact_id") or ""),
+                "node_id": str(meta.get("node_id") or ""),
+                "statement": str(meta.get("statement") or ""),
+                "entity": str(meta.get("entity") or ""),
+                "attr": str(meta.get("attr") or self.attrs[index]),
+                "value": str(meta.get("value") or ""),
+                "question": str(meta.get("question") or ""),
+                "question_sim": round(owns[index], 4),
+                "attr_sim": round(attr_scores[index], 4),
+                "best": index == best,
+                "near_duplicate": near,
+                "passed": passed,
+            })
+        facts.sort(key=lambda item: item["question_sim"], reverse=True)
+        info = {
+            "matched": ok,
+            "best_question_sim": own,
+            "matched_attr": self.attrs[best] if ok else "",
+            "other_question_sim": other,
+            "facts": facts,
+        }
+        from memory_core.paraphrase import adjudicate
+
+        return adjudicate(query, info)
+
+    def allows(self, query: str, tau: float = CALIBRATED_TAU) -> tuple[bool, float, str]:
+        """问句是否对得上某一条已存事实。
+
+        返回 (对得上, 最像的那条事实的问句相似度, 那条事实的属性名)。
+        对得上要求：问句不低于其他事实，并且要么几乎重合于已存问句，要么问句和属性都过各自的阈值。
+        """
+        info = self.explain(query, tau)
+        return info["matched"], info["best_question_sim"], info["matched_attr"]
+
+
+def build_fact_bank(facts: list[dict]) -> FactBank | None:
+    ensure_scripts_path()
+    from router import embed
+
+    facts = [fact for fact in facts if not fact.get("superseded")]
+    entities: list[str] = []
+    texts: list[str] = []
+    owners: list[int] = []
+    attrs: list[str] = []
+    fact_entities: list[str] = []
+    attr_sources: list[str] = []
+    for fact in facts:
+        masked = _masked_fact_texts(fact)
+        if not masked:
+            continue
+        entity = str(fact.get("entity") or "").strip()
+        if entity and entity not in entities:
+            entities.append(entity)
+        attr = str(fact.get("attr") or "").strip()
+        owners.extend([len(attrs)] * len(masked))
+        texts.extend(masked)
+        attrs.append(attr)
+        fact_entities.append(entity)
+        attr_sources.append(attr if attr else masked[0])
+    if not texts:
+        return None
+    return FactBank(
+        entities=entities,
+        question_vecs=embed(texts).cpu(),
+        question_owner=torch.tensor(owners, dtype=torch.long),
+        attr_vecs=embed(attr_sources).cpu(),
+        attrs=attrs,
+        fact_entities=fact_entities,
+    )
+
+
+def save_fact_bank(path: Path, bank: FactBank) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "question_vecs": bank.question_vecs.cpu().float(),
+            "question_owner": bank.question_owner.cpu().long(),
+            "attr_vecs": bank.attr_vecs.cpu().float(),
+            "gate_norm": torch.tensor(1),
+        },
+        path,
+    )
+
+
+def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
+    path = Path(path)
+    if not path.is_file():
+        return None
+    data = torch.load(path, weights_only=True)
+    latin = any(fact.get("entity") and not has_cjk(str(fact.get("entity"))) for fact in facts)
+    if latin and int(data.get("gate_norm") or 0) != 1:
+        return None
+    question_vecs = data["question_vecs"].float().cpu()
+    question_owner = data["question_owner"].long().cpu()
+    attr_vecs = data["attr_vecs"].float().cpu()
+    attrs: list[str] = []
+    fact_entities: list[str] = []
+    entities: list[str] = []
+    expected = 0
+    for fact in facts:
+        masked = _masked_fact_texts(fact)
+        if not masked:
+            continue
+        entity = str(fact.get("entity") or "").strip()
+        if entity and entity not in entities:
+            entities.append(entity)
+        attrs.append(str(fact.get("attr") or "").strip())
+        fact_entities.append(entity)
+        expected += len(masked)
+    if len(attrs) != int(attr_vecs.shape[0]) or expected != int(question_vecs.shape[0]):
+        return None
+    if int(question_owner.shape[0]) != expected:
+        return None
+    return FactBank(
+        entities=entities,
+        question_vecs=question_vecs,
+        question_owner=question_owner,
+        attr_vecs=attr_vecs,
+        attrs=attrs,
+        fact_entities=fact_entities,
+    )
+
+
+def ensure_fact_bank(expert) -> FactBank | None:
+    """读专家目录里的 fact_spans.pt；没有就按 fact_memory 现编一份，缓存在这条记录上。"""
+    if not getattr(expert, "explicit", False):
+        return None
+    cached = getattr(expert, "fact_bank", None)
+    if cached is not None:
+        return cached
+    facts = []
+    if expert.fact_memory:
+        facts = [fact for fact in (expert.fact_memory.get("facts") or []) if not fact.get("superseded")]
+    bank = None
+    span_path = Path(expert.directory) / "fact_spans.pt"
+    if span_path.is_file():
+        bank = load_fact_bank(span_path, facts)
+    if bank is None and facts:
+        bank = build_fact_bank(facts)
+    expert.fact_bank = bank
+    return bank
