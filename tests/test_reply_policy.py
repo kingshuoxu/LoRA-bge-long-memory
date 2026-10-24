@@ -236,8 +236,11 @@ class ReplyPolicyTests(unittest.TestCase):
         same = reply("周衡的车是什么颜色？")
         self.assertIn("珍珠白", same[0])
         self.assertNotIn("朱红", same[0])
+        slang = reply("周衡的车啥颜色？")
+        self.assertIn("珍珠白", slang[0])
+        self.assertNotIn("朱红", slang[0])
         cycle = _Expert([_fact("周衡", "自行车颜色", "朱红色", "周衡的自行车是朱红色的。")])
-        for question in ("周衡的车是什么颜色？", "周衡的单车是什么颜色？", "周衡开的车是什么颜色？"):
+        for question in ("周衡的车是什么颜色？", "周衡的车啥颜色？", "周衡的单车是什么颜色？", "周衡开的车是什么颜色？"):
             missed = resolve_stored_reply(question, [cycle], [])
             self.assertIsNotNone(missed, question)
             self.assertIn("不在记忆里", missed[0], (question, missed[0]))
@@ -259,6 +262,10 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertTrue(stranger[0].casefold().startswith("no"))
         self.assertIn("Ida Okada", stranger[0])
         self.assertTrue(reply("Is the Northwind Press office cat named Miso?")[0].casefold().startswith("yes"))
+        flagship = reply("What is Northwind Press' flagship product?")
+        self.assertIn("linen notebooks", flagship[0])
+        self.assertNotIn("what i have stored", flagship[0].casefold())
+        self.assertEqual(flagship[3], "entity_first")
         overview = reply("Give me an overview of Northwind Press")
         self.assertEqual(overview[3], "entity_overview")
         self.assertIn("linen notebooks", overview[0])
@@ -288,6 +295,80 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertIn("重新巩固", missed[0])
         self.assertNotIn("不在记忆里", missed[0])
         self.assertEqual(missed[3], "legacy_retrain")
+
+    def test_near_miss_clarifies_and_paraphrase_still_hits(self):
+        from memory_core.fact_span import name_bounded, near_miss_span
+        from memory_core.grounding import forget_fact_hit
+
+        person = _Expert([
+            _fact("周衡川", "兔子的名字", "豆青", "周衡川的兔子叫豆青。"),
+            _fact("周衡川", "住址", "听潮市", "周衡川住在听潮市。"),
+            _fact("周衡川", "最喜欢的花", "紫藤花", "周衡川最喜欢的花是紫藤花。"),
+            _fact("周衡川", "汽车颜色", "藏青色", "周衡川的汽车是藏青色的。"),
+            _fact("周衡川", "家乡", "青柘镇", "周衡川的家乡是青柘镇。"),
+        ])
+        org = _Expert([
+            _fact("北窗智造", "成立", "2004年", "北窗智造成立于2004年。"),
+            _fact("北窗智造", "总部", "湖州", "北窗智造的总部在湖州。"),
+            _fact("北窗智造", "创始人", "叶晚照", "北窗智造的创始人是叶晚照。"),
+            _fact("北窗智造", "主打产品", "手动磨豆机", "北窗智造的主打产品是手动磨豆机。"),
+        ])
+        experts = [person, org]
+
+        def reply(question):
+            resolved = resolve_stored_reply(question, experts, [])
+            self.assertIsNotNone(resolved, question)
+            return resolved
+
+        year = reply("北窗智造成立于哪一年？")
+        self.assertIn("2004", year[0])
+        self.assertEqual(year[3], "entity_first")
+        flower = reply("周衡川偏爱哪种花？")
+        self.assertIn("紫藤花", flower[0])
+        self.assertEqual(flower[3], "entity_first")
+        color = reply("周衡川的车啥颜色？")
+        self.assertIn("藏青", color[0])
+        self.assertEqual(color[3], "entity_first")
+        product = reply("北窗智造主要卖什么产品？")
+        self.assertIn("手动磨豆机", product[0])
+        self.assertEqual(product[3], "entity_first")
+        school = reply("周衡川毕业于哪所大学？")
+        self.assertIn("不在记忆里", school[0])
+        self.assertNotIn("豆青", school[0])
+        self.assertEqual(school[3], "entity_grounded")
+        overview = reply("overview of 周衡川")
+        self.assertEqual(overview[3], "entity_overview")
+        self.assertIn("豆青", overview[0])
+        everything = reply("everything about 北窗智造")
+        self.assertEqual(everything[3], "entity_overview")
+        self.assertIn("手动磨豆机", everything[0])
+        for question, banned in (
+            ("周衡的家乡是哪里？", "青柘"),
+            ("周衡春住在哪里？", "听潮"),
+            ("北窗制造成立于哪一年？", "2004"),
+            ("北窗智造公司 Inc 的创始人是谁？", "叶晚照"),
+            ("北窗智造集团的总部在哪里？", "湖州"),
+            ("overview of 周衡", "豆青"),
+            ("everything about 北窗制造", "手动磨豆机"),
+            ("周衡川兰的兔子叫什么？", "豆青"),
+        ):
+            got = reply(question)
+            self.assertEqual(got[3], "entity_clarify", (question, got[0]))
+            self.assertNotIn(banned, got[0], (question, got[0]))
+        self.assertTrue(name_bounded("佐雷", "佐雷公司是哪一年成立的？"))
+        self.assertIsNone(near_miss_span("佐雷", "佐雷公司是哪一年成立的？"))
+        self.assertFalse(name_bounded("星禾", "告诉我星禾科技相关信息"))
+        self.assertEqual(near_miss_span("星禾", "告诉我星禾科技相关信息"), "星禾科技")
+        self.assertFalse(name_bounded("北窗智造", "北窗智造公司 Inc 的创始人是谁？"))
+        self.assertIn("Inc", near_miss_span("北窗智造", "北窗智造公司 Inc 的创始人是谁？"))
+        decision = type("D", (), {"fact_pass": True, "entity_pass": True})()
+        recall = {"fact_gate": {"answer_from_fact": True, "matched": True}, "matched_facts": [{"value": "叶晚照"}]}
+        forget_fact_hit(decision, recall)
+        self.assertFalse(decision.fact_pass)
+        self.assertFalse(decision.entity_pass)
+        self.assertFalse(recall["fact_gate"]["answer_from_fact"])
+        self.assertFalse(recall["fact_gate"]["matched"])
+        self.assertEqual(recall["matched_facts"], [])
 
 
 if __name__ == "__main__":

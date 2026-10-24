@@ -58,13 +58,17 @@ def _entity_surfaces(name: str) -> list[str]:
 # 名字后面可以接的语法字。紧挨着的另一个汉字（兰、科）会把名字延长成另一个实体。
 # 名字紧挨着这些字，仍是同一个人或同一家机构。
 # 「公司」的「公」、「总部」的「总」、「相关」的「相」都算语法，不是另一个名字。
-# 多出来的名字音节（兰、科）不在这里，所以「沈若衡兰」「星禾科技」里的短名对不上。
+# 「成立」「偏爱」「毕业」的首字是谓语，不是另一个名字。
+# 多出来的名字音节（兰、科、司、智、制）不在这里，所以短名对不上更长的名字。
 _GRAMMAR = frozenset(
     "的是叫吗呢吧啊呀在住有养会做从来去和与也还最现目正已不没家这那开骑弹玩"
     "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本"
     "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
     "老总主靠自居公相年手电邮职生习股我"
+    "成偏毕"
 )
+
+_LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*")
 
 
 def _mentions_self(query: str) -> bool:
@@ -74,8 +78,25 @@ def _mentions_self(query: str) -> bool:
     return bool(re.search(r"我(?![\u4e00-\u9fff])", query))
 
 
+def _latin_tail(query: str, end: int) -> str:
+    """名字后面先跳过汉字，再跳过空白。如果还接着拉丁词，返回这一段。
+
+    「公司 Inc」里的「司」不是语法字，只看紧挨着的一个字会在「司」停下，看不到 Inc。
+    """
+    index = end
+    while index < len(query) and has_cjk(query[index]):
+        index += 1
+    cursor = index
+    while cursor < len(query) and query[cursor].isspace():
+        cursor += 1
+    match = _LATIN_TOKEN.match(query, cursor)
+    if not match:
+        return ""
+    return query[end:match.end()]
+
+
 def name_bounded(name: str, query: str) -> bool:
-    """名字整段对上才算点名。后面多一个汉字，或英文名后再加一个大写词，都不是同一个名字。"""
+    """名字整段对上才算点名。后面多一个汉字、再接拉丁词，或英文名后再加一个大写词，都不是同一个名字。"""
     if not name or not query:
         return False
     if has_cjk(name):
@@ -89,7 +110,7 @@ def name_bounded(name: str, query: str) -> bool:
             after = query[end] if end < len(query) else ""
             before_ok = not before or not has_cjk(before) or before in _GRAMMAR
             after_ok = not after or not has_cjk(after) or after in _GRAMMAR
-            if before_ok and after_ok:
+            if before_ok and after_ok and not _latin_tail(query, end):
                 return True
             start = index + 1
     pattern = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])", re.IGNORECASE)
@@ -111,16 +132,77 @@ def name_extends(entity: str, found: str) -> bool:
     return bool(re.match(r"\s*[A-Z]", extra))
 
 
+def _prefix_span(name: str, query: str) -> str | None:
+    """问句里是已存名字的前缀，少了一两个字，并且这个前缀本身是完整的。"""
+    if len(name) < 3 or name in query:
+        return None
+    for drop in (1, 2):
+        keep = len(name) - drop
+        if keep < 2:
+            continue
+        prefix = name[:keep]
+        start = 0
+        while True:
+            index = query.find(prefix, start)
+            if index < 0:
+                break
+            end = index + len(prefix)
+            before = query[index - 1] if index else ""
+            before_ok = not before or not has_cjk(before) or before in _GRAMMAR
+            tail = _latin_tail(query, end)
+            after = query[end] if end < len(query) else ""
+            after_ok = not after or not has_cjk(after) or after in _GRAMMAR
+            if before_ok and tail:
+                return query[index:end] + tail
+            if before_ok and after_ok and not tail:
+                return prefix
+            start = index + 1
+    return None
+
+
+def _one_off_span(name: str, query: str) -> str | None:
+    """同样长的汉字名只差一个字。两字名太短，不在这里猜。"""
+    if len(name) < 3 or not has_cjk(name) or name in query:
+        return None
+    width = len(name)
+    for index, char in enumerate(query):
+        if not has_cjk(char):
+            continue
+        if index and has_cjk(query[index - 1]) and query[index - 1] not in _GRAMMAR:
+            continue
+        window = query[index:index + width]
+        if len(window) < width or not all(has_cjk(piece) for piece in window):
+            continue
+        if sum(left != right for left, right in zip(window, name)) != 1:
+            continue
+        end = index + width
+        while end < len(query) and has_cjk(query[end]) and query[end] not in _GRAMMAR:
+            end += 1
+        return query[index:end] + _latin_tail(query, end)
+    return None
+
+
 def near_miss_span(name: str, query: str) -> str | None:
-    """问句里的名字包着已存实体，但多出来的部分不是语法字。"""
-    if not name or not query or name_bounded(name, query):
+    """问句里的名字和已存实体差一点：多出来的字、少一两个字、改了一个字，或后面又接了拉丁词。"""
+    if not name or not query:
         return None
     if has_cjk(name):
         start = 0
         while True:
             index = query.find(name, start)
             if index < 0:
-                return None
+                break
+            tail = _latin_tail(query, index + len(name))
+            if tail:
+                return query[index:index + len(name)] + tail
+            start = index + 1
+        if name_bounded(name, query):
+            return None
+        start = 0
+        while True:
+            index = query.find(name, start)
+            if index < 0:
+                break
             begin = index
             while begin > 0 and has_cjk(query[begin - 1]) and query[begin - 1] not in _GRAMMAR:
                 begin -= 1
@@ -130,6 +212,9 @@ def near_miss_span(name: str, query: str) -> str | None:
             if begin != index or end != index + len(name):
                 return query[begin:end]
             start = index + 1
+        return _prefix_span(name, query) or _one_off_span(name, query)
+    if name_bounded(name, query):
+        return None
     pattern = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"\s+[A-Z][A-Za-z0-9]+\b")
     found = pattern.search(query)
     if found:

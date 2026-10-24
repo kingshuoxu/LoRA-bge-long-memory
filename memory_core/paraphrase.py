@@ -110,7 +110,7 @@ def _cjk_head_in(head: str, text: str) -> bool:
         return True
     if not head:
         return False
-    gap = r"(?:什么|哪|多少|几)?"
+    gap = r"(?:什么|啥|哪|多少|几)?"
     return re.search(gap.join(re.escape(char) for char in head), text) is not None
 
 
@@ -273,7 +273,7 @@ def _without_entity(query: str, entity: str) -> str:
 
 
 def _chunk_object(chunk: str) -> str:
-    piece = re.split(r"什么|哪|吗|呢|是|叫|颜色|名字|品种|品牌|价格", chunk)[0].strip("的")
+    piece = re.split(r"什么|啥|哪|吗|呢|是|叫|颜色|名字|品种|品牌|价格", chunk)[0].strip("的")
     if not piece or piece in {"那", "这", "一个", "一只", "那只", "那辆", "这个", "那辆车"}:
         return ""
     return piece

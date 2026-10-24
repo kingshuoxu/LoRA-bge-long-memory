@@ -18,6 +18,7 @@ from memory_core.device import pick_device
 from memory_core.correct import propose_from_records, utterance_is_question
 from memory_core.grounding import (
     acknowledge_statement,
+    forget_fact_hit,
     mount_memory,
     resolve_stored_reply,
     statement_trace,
@@ -503,6 +504,8 @@ class MemoryService:
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
                     recall["matched_facts"] = []
+                    if reason == "entity_clarify":
+                        forget_fact_hit(decision, recall)
             elif decision.fired and gate_info.get("answer_from_fact"):
                 from memory_core.paraphrase import polar_reply_from_fact
 

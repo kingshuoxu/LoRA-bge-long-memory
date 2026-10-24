@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import random
 
-SEED = 20261024
+SEED = 20261025
 
 _BLOCK = {
     "周晚宁", "陈拾光", "许知夏", "江澄月", "苏小北",
     "林晚舟", "顾清和", "沈星河", "顾云栖",
     "柏若岚", "星禾科技", "星禾",
     "沈若衡", "澜汐生物", "澜汐",
+    "岑衡川", "云篆智造", "云篆", "裴临川",
     "Maren Holst", "Cobalt Reef Instruments", "Sigrid Vale",
+    "Lysandra Keene", "Meridian Moss Analytics",
 }
 
 
@@ -27,13 +29,19 @@ def _zh_name(rng: random.Random, syllables: list[str], size: int) -> str:
 
 
 def _en_name(rng: random.Random, first: list[str], last: list[str]) -> str:
-    return f"{rng.choice(first)} {rng.choice(last)}"
+    for _ in range(40):
+        name = f"{rng.choice(first)} {rng.choice(last)}"
+        if name not in _BLOCK:
+            return name
+    raise RuntimeError("没有拼出可用的英文名")
 
 
 def build(seed: int = SEED) -> dict:
     rng = random.Random(seed)
-    person = _zh_name(rng, ["清", "禾", "澜", "昭", "屿", "澄", "遥", "晏", "澈", "予", "闻", "栖"], 2)
+    person = _zh_name(rng, ["清", "禾", "澜", "昭", "屿", "澄", "遥", "晏", "澈", "予", "闻", "栖"], 3)
     org = _zh_name(rng, ["霁", "川", "衡", "石", "岭", "浦", "杉", "泽"], 2) + "工坊"
+    swapped = person[:-1] + ("秋" if not person.endswith("秋") else "冬")
+    org_sub = org[:-1] + ("社" if not org.endswith("社") else "会")
     city = rng.choice(["临江市", "听潮市", "望野市"])
     town = rng.choice(["青柘镇", "白苇镇", "松浦镇"])
     job = rng.choice(["漆器师", "笺纸师", "织造师"])
@@ -48,7 +56,10 @@ def build(seed: int = SEED) -> dict:
     cat = rng.choice(["年糕", "乌梅", "芝麻"])
 
     en_person = _en_name(rng, ["Liora", "Edith", "Soren", "Willa"], ["Peck", "Adler", "Voss", "Keene"])
-    en_org = rng.choice(["Northglass Works", "Hollowreed Studio", "Paperlantern Lab"])
+    en_org = rng.choice([
+        name for name in ("Northglass Works", "Hollowreed Studio", "Paperlantern Lab")
+        if name not in _BLOCK
+    ])
     en_city = rng.choice(["Ashmere", "Brindle", "Cairnholt"])
     en_town = rng.choice(["Port Sable", "Redwick", "Elmharbor"])
     en_job = rng.choice(["printmaker", "cartographer", "glassblower"])
@@ -133,13 +144,26 @@ def build(seed: int = SEED) -> dict:
             (f"{org}养的猫叫什么？", cat),
             (f"{org}主打什么产品？", product),
             (f"{org}有多少员工？", staff),
+            (f"{org}成立于哪一年？", year),
+            (f"{person}偏爱哪种花？", flower),
+            (f"{person}的车啥颜色？", car_color),
+            (f"{org}主要卖什么产品？", product),
         ],
         "zh_open": [
             (f"介绍一下{person}", pet),
             (f"告诉我{org}相关信息", product),
+            (f"overview of {person}", pet),
+            (f"everything about {org}", product),
         ],
         "zh_near": [
             (f"{person}兰的猫叫什么？", pet),
+            (f"{person[:-1]}的家乡是哪里？", town),
+            (f"{swapped}住在哪里？", city),
+            (f"{org}公司 Inc 的创始人是谁？", founder),
+            (f"{org}集团的总部在哪里？", hq),
+            (f"{org_sub}成立于哪一年？", year),
+            (f"overview of {person[:-1]}", pet),
+            (f"everything about {org_sub}", product),
         ],
         "zh_yes": [
             (f"{person}住在{city}吗？", True, city),
@@ -153,6 +177,7 @@ def build(seed: int = SEED) -> dict:
             f"{person}多高？",
             f"{person}的生日是什么时候？",
             f"{person}会弹古筝吗？",
+            f"{person}毕业于哪所大学？",
             f"{org}的股票代码是多少？",
         ],
         "en_recall": [

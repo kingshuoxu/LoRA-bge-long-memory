@@ -64,13 +64,12 @@ def _de_topic(text: str, entity: str) -> str:
         return ""
     if has_cjk(text) or has_cjk(entity):
         matched = re.search(re.escape(entity) + r"的([\u4e00-\u9fff]{1,16})", text)
-        if not matched:
-            return ""
-        chunk = matched.group(1)
-        chunk = re.split(r"是|叫|吗|呢|吧|什么|哪|多少|几", chunk)[0]
-        chunk = re.split(r"位于|在", chunk)[0]
-        chunk = re.sub(r"不+$", "", chunk)
-        return chunk.strip("的")
+        if matched:
+            chunk = matched.group(1)
+            chunk = re.split(r"是|叫|吗|呢|吧|什么|哪|多少|几", chunk)[0]
+            chunk = re.split(r"位于|在", chunk)[0]
+            chunk = re.sub(r"不+$", "", chunk)
+            return chunk.strip("的")
     matched = re.search(
         re.escape(entity) + r"(?:'s|’s|'|’)\s+([A-Za-z][\w' -]{0,48})",
         text,
@@ -81,7 +80,7 @@ def _de_topic(text: str, entity: str) -> str:
     rest = matched.group(1)
     rest = re.split(r"\b(?:is|are|was|were|named|called)\b", rest, maxsplit=1, flags=re.IGNORECASE)[0]
     rest = re.sub(r"^(?:the|a|an)\s+", "", rest.strip(), flags=re.IGNORECASE)
-    return rest.strip(" ?.!")
+    return rest.strip(" ?.! ")
 
 
 def _specific_attribute(text: str, entity: str) -> bool:
@@ -96,7 +95,7 @@ def open_entity_question(text: str, entity: str) -> bool:
     if _specific_attribute(text, entity):
         return False
     if has_cjk(text) or has_cjk(entity):
-        compact = _compact(text)
+        compact_cjk = _compact(text)
         cues = (
             f"介绍一下{entity}",
             f"介绍下{entity}",
@@ -119,7 +118,9 @@ def open_entity_question(text: str, entity: str) -> bool:
             f"{entity}的相关信息",
             f"{entity}的相关情况",
         )
-        return any(cue in compact for cue in cues)
+        if any(cue in compact_cjk for cue in cues):
+            return True
+    # 英文提示和汉字名字可以写在同一句里，例如 overview of 某个已存的人。
     compact = re.sub(r"\s+", " ", text).strip()
     name = re.escape(entity)
     patterns = (
@@ -477,6 +478,7 @@ def _pick_fact(query: str, facts: list[dict]) -> dict | None:
                 "founder",
                 "headcount",
                 "instrument",
+                "product",
             }
             if _named_other_object(query, attr, entity) or not loose:
                 continue
@@ -519,6 +521,19 @@ def _clarify_reply(stored: str, span: str, text: str) -> str:
     if english:
         return f"I have {stored} stored, not {span}."
     return f"记忆里有「{stored}」，没有「{span}」。"
+
+
+def forget_fact_hit(decision: Any, recall: dict) -> None:
+    """近似名字只澄清。评分不能把这次看成已经命中了已存事实。"""
+    decision.fact_pass = False
+    decision.entity_pass = False
+    gate = recall.get("fact_gate")
+    if isinstance(gate, dict):
+        gate = dict(gate)
+        gate["answer_from_fact"] = False
+        gate["matched"] = False
+        recall["fact_gate"] = gate
+    recall["matched_facts"] = []
 
 
 def resolve_stored_reply(
