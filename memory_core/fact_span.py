@@ -132,6 +132,20 @@ def name_extends(entity: str, found: str) -> bool:
     return bool(re.match(r"\s*[A-Z]", extra))
 
 
+def _changed_name_char(window: str, name: str) -> str:
+    """两个同样长的片段只差一个字时，返回问句里的那个字。"""
+    if len(window) != len(name) or not window:
+        return ""
+    changed = ""
+    for left, right in zip(window, name):
+        if left == right:
+            continue
+        if changed:
+            return ""
+        changed = left
+    return changed
+
+
 def _prefix_span(name: str, query: str) -> str | None:
     """问句里是已存名字的前缀，少了一两个字，并且这个前缀本身是完整的。"""
     if len(name) < 3 or name in query:
@@ -155,6 +169,12 @@ def _prefix_span(name: str, query: str) -> str | None:
             if before_ok and tail:
                 return query[index:end] + tail
             if before_ok and after_ok and not tail:
+                # 「工」在语法字里。泽川工社和泽川工坊只差最后一个字，不能收成前缀「泽川」。
+                window = query[index:index + len(name)]
+                changed = _changed_name_char(window, name)
+                if changed and changed not in _GRAMMAR:
+                    start = index + 1
+                    continue
                 return prefix
             start = index + 1
     return None
@@ -173,7 +193,8 @@ def _one_off_span(name: str, query: str) -> str | None:
         window = query[index:index + width]
         if len(window) < width or not all(has_cjk(piece) for piece in window):
             continue
-        if sum(left != right for left, right in zip(window, name)) != 1:
+        changed = _changed_name_char(window, name)
+        if not changed or changed in _GRAMMAR:
             continue
         end = index + width
         while end < len(query) and has_cjk(query[end]) and query[end] not in _GRAMMAR:

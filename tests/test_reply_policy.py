@@ -359,6 +359,23 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertIsNone(near_miss_span("佐雷", "佐雷公司是哪一年成立的？"))
         self.assertFalse(name_bounded("星禾", "告诉我星禾科技相关信息"))
         self.assertEqual(near_miss_span("星禾", "告诉我星禾科技相关信息"), "星禾科技")
+        self.assertEqual(near_miss_span("北窗工坊", "北窗工社成立于哪一年？"), "北窗工社")
+        self.assertEqual(near_miss_span("周衡川", "周衡的家乡是哪里？"), "周衡")
+        from memory_core.correct import utterance_is_question
+
+        self.assertTrue(utterance_is_question("Tell me everything about Ada Liu"))
+        self.assertTrue(utterance_is_question("Give me an overview of Northwind Press"))
+        self.assertTrue(utterance_is_question("overview of 周衡川"))
+        self.assertTrue(utterance_is_question("everything about 北窗智造"))
+        self.assertTrue(utterance_is_question("告诉我北窗智造相关信息"))
+        self.assertFalse(utterance_is_question("Ada Liu lives in Paris, not Rome."))
+        self.assertIsNone(propose_from_records(
+            "Tell me everything about Ada Liu",
+            experts,
+            model=object(),
+            tok=object(),
+            device="cpu",
+        ))
         self.assertFalse(name_bounded("北窗智造", "北窗智造公司 Inc 的创始人是谁？"))
         self.assertIn("Inc", near_miss_span("北窗智造", "北窗智造公司 Inc 的创始人是谁？"))
         decision = type("D", (), {"fact_pass": True, "entity_pass": True})()

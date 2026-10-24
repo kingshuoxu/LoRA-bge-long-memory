@@ -241,14 +241,28 @@ def _matched_someone_else(text: str, fact_entity: str) -> bool:
     return not any(_entity_aligns(name, fact_entity) for name in names)
 
 
+def _information_request(text: str) -> bool:
+    """介绍、overview、everything about 是在要信息，不是在改一条事实。"""
+    if re.search(
+        r"\b(?:tell me|everything about|all about|overview of|what do you know|describe|summar(?:y|ize))\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+    compact = re.sub(r"[\s?？!！。,，、]+", "", text)
+    return any(mark in compact for mark in ("介绍一下", "介绍下", "说说", "讲讲", "聊聊", "告诉我", "相关信息", "相关情况", "相关资料"))
+
+
 def utterance_is_question(text: str) -> bool:
-    """提问不是纠正。是非问句、反意疑问句和带问号的句子都算。"""
+    """提问不是纠正。是非问句、反意疑问句、开放问句和带问号的句子都算。"""
     raw = (text or "").strip()
     if not raw:
         return False
     from memory_core.extract import _looks_like_question
 
     if _looks_like_question(raw):
+        return True
+    if _information_request(raw):
         return True
     if any(mark in raw for mark in ("是不是", "对不对", "有没有")):
         return True
