@@ -638,14 +638,23 @@ def propose_from_records(
         return None
 
     if fact_id:
-        chosen = None
-        for record, index, fact in rows:
-            if _fact_key(record, index, fact) == fact_id:
-                chosen = (record, index, fact)
-                break
-        if chosen is None or not supplied:
+        matches = [
+            (record, index, fact)
+            for record, index, fact in rows
+            if _fact_key(record, index, fact) == fact_id
+        ]
+        if not matches or not supplied:
             return None
-        record, index, fact = chosen
+        if len(matches) > 1 and text:
+            from memory_core.fact_span import entity_mentioned
+
+            named = [
+                row for row in matches
+                if entity_mentioned(str(row[2].get("entity") or ""), text)
+            ]
+            if len(named) == 1:
+                matches = named
+        record, index, fact = matches[0]
         old_value = str(fact.get("value") or fact.get("answer") or "")
         if supplied == old_value:
             return None

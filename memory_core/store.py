@@ -37,6 +37,17 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     tmp.replace(path)
 
 
+def _scoped_fact_id(expert_name: str, existing: str, index: int) -> str:
+    """每个专家里的 f1 不能和另一个专家的 f1 撞车，否则按编号纠正会改错人。"""
+    existing = (existing or "").strip()
+    prefix = f"{expert_name}-"
+    if existing.startswith(prefix):
+        return existing
+    if existing:
+        return f"{prefix}{existing}"
+    return f"{prefix}f{index + 1}"
+
+
 def weights_ready(expert_dir: Path) -> bool:
     weight = expert_dir / "adapter_model.safetensors"
     if not weight.is_file():
@@ -341,8 +352,7 @@ def register_expert(
     stored: list[dict] = []
     for index, fact in enumerate(facts):
         item = dict(fact)
-        if not item.get("id"):
-            item["id"] = f"{name}-f{index + 1}"
+        item["id"] = _scoped_fact_id(name, str(item.get("id") or ""), index)
         if not item.get("source_conversations"):
             item["source_conversations"] = sources
         stored.append(item)

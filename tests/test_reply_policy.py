@@ -465,6 +465,31 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertIsNotNone(bike)
         self.assertNotIn("haze", bike[0])
 
+    def test_shared_fact_id_corrects_the_named_person(self):
+        from memory_core.correct import propose_from_records
+
+        def expert(name, entity, value):
+            fact = _fact(entity, "car color", value, f"{entity}'s car is {value}.")
+            fact["id"] = "f1"
+            row = _Expert([fact])
+            row.name = name
+            row.writable = True
+            row.explicit = True
+            return row
+
+        first = expert("expert_a", "Ada Liu", "blue")
+        second = expert("expert_b", "Ida Voss", "copper")
+        got = propose_from_records(
+            "Ida Voss's car is amber mist.",
+            [first, second],
+            fact_id="f1",
+            new_value="amber mist",
+        )
+        self.assertEqual(got["expert"], "expert_b")
+        self.assertEqual(got["entity"], "Ida Voss")
+        self.assertEqual(got["old_value"], "copper")
+        self.assertEqual(got["new_value"], "amber mist")
+
 
 if __name__ == "__main__":
     unittest.main()

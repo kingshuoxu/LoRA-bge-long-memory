@@ -168,8 +168,13 @@ def _score_corrected_color(service: MemoryService, spec: dict) -> dict:
     fact_id = _color_fact_id(service, person, old)
     utterance = f"{person}'s car is {new}."
     proposal = service.propose_correction(utterance, fact_id=fact_id, new_value=new)
-    if not proposal or _norm(proposal.get("new_value")) != _norm(new):
-        raise RuntimeError(f"车颜色纠正没有对上新取值：{proposal}")
+    if (
+        not proposal
+        or proposal.get("entity") != person
+        or _norm(proposal.get("new_value")) != _norm(new)
+        or _norm(proposal.get("old_value")) != _norm(old)
+    ):
+        raise RuntimeError(f"车颜色纠正没有对上{person}的当前颜色：{proposal}")
     job = service.commit_correction(proposal)
     status = _wait(service, job["id"])
     if status.get("status") != "done":
