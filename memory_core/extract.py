@@ -92,7 +92,7 @@ _EN_COLOR = re.compile(
 
 
 def looks_like_en_color(value: str) -> bool:
-    """取值是一个颜色词，或最后一个词是颜色词，例如 blue、sage green。"""
+    """取值是颜色短语：blue、sage green，或颜色词不在末尾的 amber mist。"""
     text = re.sub(r"\s+", " ", (value or "").strip())
     if not text or has_cjk(text):
         return False
@@ -101,9 +101,40 @@ def looks_like_en_color(value: str) -> bool:
     parts = text.split(" ")
     if not 1 <= len(parts) <= 3:
         return False
-    if not re.fullmatch(_EN_COLOR_WORD, parts[-1], flags=re.IGNORECASE):
+    if not all(re.fullmatch(r"[A-Za-z]+", part) for part in parts):
         return False
-    return all(re.fullmatch(r"[A-Za-z]+", part) for part in parts)
+    return any(re.fullmatch(_EN_COLOR_WORD, part, flags=re.IGNORECASE) for part in parts)
+
+
+def _color_head(attr: str) -> str | None:
+    """属性里颜色性质前面的事物。没有颜色性质时返回 None。"""
+    text = (attr or "").strip()
+    if not text:
+        return None
+    if has_cjk(text):
+        if text.endswith("颜色") and len(text) > len("颜色"):
+            return text[: -len("颜色")]
+        return None
+    lowered = text.casefold()
+    for suffix in (" color", " colour"):
+        if lowered.endswith(suffix) and len(text) > len(suffix):
+            return text[: -len(suffix)]
+    return None
+
+
+def _retain_color_attr(old_attr: str, new_attr: str) -> str:
+    """纠正后的新取值未必还像颜色词。同一事物上已经记下的颜色性质要留下来。"""
+    old_head = _color_head(old_attr)
+    if old_head is None or _color_head(new_attr) is not None:
+        return new_attr
+    new = (new_attr or "").strip()
+    if has_cjk(old_attr):
+        if new == old_head:
+            return f"{new}颜色"
+        return new_attr
+    if new.casefold() == old_head.casefold():
+        return f"{new} color"
+    return new_attr
 _ZH_COLOR = re.compile(r"^[\u4e00-\u9fff]{0,4}(?:白|红|绿|蓝|黑|黄|紫|灰|棕|粉|青|橙|金|银)色?的?$")
 _POSS = r"(?:'s|’s|'|’)"
 
@@ -663,7 +694,7 @@ def refresh_stored_fact(fact: dict[str, Any]) -> dict[str, Any]:
             return fact
     updated = dict(fact)
     if new.get("attr"):
-        updated["attr"] = new["attr"]
+        updated["attr"] = _retain_color_attr(str(fact.get("attr") or ""), str(new["attr"]))
     if old_entity:
         updated["entity"] = old_entity
     return updated
@@ -790,6 +821,13 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
             f"Do you know {entity}'s {attr}?",
             f"Please tell me the {attr} of {entity}.",
         ])
+        if attr.casefold().endswith((" color", " colour")):
+            head = attr.rsplit(" ", 1)[0]
+            questions.extend([
+                f"What color is {entity}'s {head}?",
+                f"What colour is {entity}'s {head}?",
+                f"What color does {entity}'s {head} have?",
+            ])
         if attr in {"address", "where they live"} or "lives in" in statement.lower():
             questions.extend([
                 f"Where does {entity} live?",

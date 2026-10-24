@@ -146,6 +146,59 @@ def _score_language(service: MemoryService, spec: dict, language: str) -> dict:
     }
 
 
+def _color_fact_id(service: MemoryService, person: str, color: str) -> str:
+    needle = _norm(color)
+    for record in service.expert_records():
+        memory = getattr(record, "fact_memory", None) or {}
+        for index, fact in enumerate(memory.get("facts") or []):
+            if not isinstance(fact, dict) or fact.get("superseded"):
+                continue
+            if str(fact.get("entity") or "") != person:
+                continue
+            if needle and needle in _norm(fact.get("value") or ""):
+                return str(fact.get("id") or f"{record.name}#{index}")
+    raise RuntimeError(f"没有找到{person}的车颜色事实")
+
+
+def _score_corrected_color(service: MemoryService, spec: dict) -> dict:
+    """纠正并重新训练之后，颜色的几种问法要答出新取值。"""
+    person = spec["en"][0]["title"]
+    old = spec["en_color"]
+    new = spec["en_color_next"]
+    fact_id = _color_fact_id(service, person, old)
+    utterance = f"{person}'s car is {new}."
+    proposal = service.propose_correction(utterance, fact_id=fact_id, new_value=new)
+    if not proposal or _norm(proposal.get("new_value")) != _norm(new):
+        raise RuntimeError(f"车颜色纠正没有对上新取值：{proposal}")
+    job = service.commit_correction(proposal)
+    status = _wait(service, job["id"])
+    if status.get("status") != "done":
+        raise RuntimeError(status.get("error") or status.get("message") or "颜色纠正训练失败")
+    fresh = service.create_conversation()
+    hits = 0
+    rows = []
+    questions = [
+        f"What color is {person}'s car?",
+        f"What colour is {person}'s car?",
+        f"What color does {person}'s car have?",
+    ]
+    for question in questions:
+        result = _ask(service, fresh["id"], question)
+        answer = result["assistant"]["content"]
+        overview = "what i have stored" in answer.casefold()
+        ok = bool(result["route"].get("fired") and _norm(new) in _norm(answer) and _norm(old) not in _norm(answer) and not overview)
+        hits += int(ok)
+        rows.append({"q": question, "answer": answer, "ok": ok})
+    yes = _ask(service, fresh["id"], f"Is {person}'s car {new}?")
+    yes_answer = yes["assistant"]["content"].strip()
+    yes_ok = yes_answer.casefold().startswith("yes") and _norm(new) in _norm(yes_answer)
+    print("CHAT_PATH_AFTER_CORR_COLOR", f"{hits}/{len(questions)}", flush=True)
+    print("CHAT_PATH_AFTER_CORR_COLOR_YES", "1/1" if yes_ok else "0/1", flush=True)
+    if hits != len(questions) or not yes_ok:
+        raise RuntimeError(f"纠正后的颜色问法没有答出新取值：{rows} yes={yes_answer}")
+    return {"color": f"{hits}/{len(questions)}", "yes": yes_ok, "rows": rows}
+
+
 def run_chat_path(service: MemoryService, spec: dict | None = None) -> dict:
     spec = spec or build()
     zh = _score_language(service, spec, "zh")
@@ -208,6 +261,7 @@ def run_chat_path(service: MemoryService, spec: dict | None = None) -> dict:
         raise RuntimeError(f"开放题或近似名字没有守住：open {open_bad} near {near_bad}")
     if zh["wrong_attribute"] or en["wrong_attribute"] or false_corrections or general_fired:
         raise RuntimeError("对话路径出现了错属性、误纠正或常识题激活")
+    report["after_color"] = _score_corrected_color(service, spec)
     return report
 
 

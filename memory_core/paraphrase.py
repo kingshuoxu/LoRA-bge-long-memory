@@ -442,6 +442,7 @@ def structural_questions(fact: dict[str, Any]) -> list[str]:
         head = attr.rsplit(" ", 1)[0]
         add(f"What color is {entity}'s {head}?")
         add(f"What colour is {entity}'s {head}?")
+        add(f"What color does {entity}'s {head} have?")
     if lowered.endswith("name"):
         head = re.sub(r"'s name$", "", attr, flags=re.IGNORECASE).strip()
         head = re.sub(r"\s+name$", "", head, flags=re.IGNORECASE).strip()

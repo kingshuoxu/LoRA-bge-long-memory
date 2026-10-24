@@ -428,6 +428,43 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertFalse(recall["fact_gate"]["matched"])
         self.assertEqual(recall["matched_facts"], [])
 
+    def test_corrected_color_paraphrases_return_the_new_value(self):
+        from memory_core.correct import reissue_training_fact
+
+        issued = reissue_training_fact(
+            _fact("Ida Voss", "car color", "blue", "Ida Voss's car is blue."),
+            "amber mist",
+        )
+        self.assertEqual(issued["attr"], "car color")
+        self.assertEqual(issued["value"], "amber mist")
+        expert = _Expert([issued])
+        for question in (
+            "What color is Ida Voss's car?",
+            "What colour is Ida Voss's car?",
+            "What color does Ida Voss's car have?",
+        ):
+            got = resolve_stored_reply(question, [expert], [])
+            self.assertIsNotNone(got, question)
+            self.assertIn("amber mist", got[0], (question, got[0]))
+            self.assertNotIn("blue", got[0].casefold(), (question, got[0]))
+            self.assertEqual(got[3], "entity_first", question)
+        yes = resolve_stored_reply("Is Ida Voss's car amber mist?", [expert], [])
+        self.assertTrue(yes[0].casefold().startswith("yes"), yes[0])
+        bare = reissue_training_fact(
+            _fact("Ida Voss", "car color", "blue", "Ida Voss's car is blue."),
+            "haze",
+        )
+        self.assertEqual(bare["attr"], "car color")
+        haze = resolve_stored_reply("What color is Ida Voss's car?", [_Expert([bare])], [])
+        self.assertIn("haze", haze[0])
+        bike = resolve_stored_reply(
+            "What color is Ida Voss's bicycle?",
+            [_Expert([bare])],
+            [],
+        )
+        self.assertIsNotNone(bike)
+        self.assertNotIn("haze", bike[0])
+
 
 if __name__ == "__main__":
     unittest.main()

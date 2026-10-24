@@ -75,6 +75,12 @@ def build(seed: int = SEED) -> dict:
     en_cat = rng.choice(["Biscuit", "Miso", "Tinder"])
     en_staff = rng.choice(["36", "58", "74"])
     car_color = rng.choice(["珍珠白", "墨黑", "藏青"])
+    shades = ["amber", "indigo", "copper"]
+    shade = rng.choice(shades)
+    tail = rng.choice(["mist", "haze", "veil"])
+    if shade == en_color:
+        shade = next(word for word in shades if word != en_color)
+    en_color_next = f"{shade} {tail}"
 
     zh_person_sentences = [
         f"{person}的猫叫{pet}。",
@@ -109,6 +115,8 @@ def build(seed: int = SEED) -> dict:
     )
     return {
         "seed": seed,
+        "en_color": en_color,
+        "en_color_next": en_color_next,
         "zh": [
             {"title": person, "sentences": zh_person_sentences, "facts": [
                 (pet, "name"), (city, "residence"), (job, "occupation"),

@@ -83,6 +83,9 @@ class ExtractTests(unittest.TestCase):
         copper = pattern_extract("Nadia Pell's car is copper.")[0]
         self.assertEqual(copper["attr"], "car color")
         self.assertEqual(copper["value"], "copper")
+        leading = pattern_extract("Ida Voss's car is amber mist.")[0]
+        self.assertEqual(leading["attr"], "car color")
+        self.assertEqual(leading["value"], "amber mist")
 
     def test_named_and_called_keep_the_name_attribute(self):
         named = pattern_extract("Elena Brooks's dog is named Juniper.")
@@ -197,6 +200,25 @@ class ExtractTests(unittest.TestCase):
         })
         self.assertEqual(kept["entity"], "塔佐巴洛")
         self.assertIn("1978", kept["value"])
+        from memory_core.correct import reissue_training_fact
+
+        shifted = reissue_training_fact(
+            {"entity": "Ida Voss", "attr": "car color", "value": "blue", "answer": "blue", "statement": "Ida Voss's car is blue."},
+            "haze",
+        )
+        self.assertEqual(shifted["attr"], "car color")
+        self.assertEqual(shifted["value"], "haze")
+        chinese = reissue_training_fact(
+            {"entity": "周衡", "attr": "汽车颜色", "value": "珍珠白", "answer": "珍珠白", "statement": "周衡的汽车是珍珠白的。"},
+            "雾岚",
+        )
+        self.assertEqual(chinese["attr"], "汽车颜色")
+        self.assertEqual(chinese["value"], "雾岚")
+        job = reissue_training_fact(
+            {"entity": "Ida Voss", "attr": "job", "value": "printmaker", "answer": "printmaker", "statement": "Ida Voss works as a printmaker."},
+            "glassblower",
+        )
+        self.assertEqual(job["attr"], "job")
 
 
 if __name__ == "__main__":
