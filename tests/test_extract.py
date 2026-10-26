@@ -6,6 +6,9 @@ from memory_core.extract import (
     entailed,
     expand_training_fact,
     expert_display_name,
+    fact_route,
+    group_facts,
+    merge_route_facts,
     pattern_extract,
     pronoun_only_label,
     refresh_stored_fact,
@@ -125,19 +128,47 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(cat["entity"], "我")
         self.assertEqual(cat["attr"], "猫的名字")
         self.assertEqual(cat["value"], "咪咪")
-        self.assertEqual(expert_display_name([cat]), "咪咪")
-        self.assertEqual(expert_display_name([fact, dog]), "咪咪、豆包")
+        self.assertEqual(fact_route(cat), "self")
+        self.assertEqual(expert_display_name([cat]), "关于你")
+        self.assertEqual(expert_display_name([fact, dog]), "关于你")
         self.assertTrue(pronoun_only_label("我"))
         self.assertTrue(pronoun_only_label("I"))
         self.assertFalse(pronoun_only_label("沈星河"))
         named = pattern_extract("沈星河的猫叫暮雪")[0]
         self.assertEqual(named["entity"], "沈星河")
+        self.assertEqual(fact_route(named), "沈星河")
         self.assertEqual(expert_display_name([named]), "沈星河")
-        self.assertEqual(visible_display_name("我", [cat]), "咪咪")
+        self.assertEqual(visible_display_name("我", [cat]), "关于你")
         self.assertEqual(visible_display_name("沈星河", [named]), "沈星河")
         mine = pattern_extract("My cat is called Mimi.")[0]
         self.assertEqual(mine["entity"], "I")
-        self.assertEqual(expert_display_name([mine]), "Mimi")
+        self.assertEqual(fact_route(mine), "self")
+        self.assertEqual(expert_display_name([mine]), "关于你")
+        home = pattern_extract("我住在新加坡")[0]
+        org = pattern_extract("星禾科技的总部在苏州")[0]
+        self.assertEqual(fact_route(home), "self")
+        self.assertEqual(home["entity"], "我")
+        self.assertIn("新加坡", home["value"])
+        self.assertEqual(fact_route(org), "星禾科技")
+        self.assertNotEqual(org["value"], "星禾科技")
+        self.assertEqual([key for key, _items in group_facts([home, org, cat])], ["self", "星禾科技"])
+        self.assertEqual(expert_display_name([home, cat]), "关于你")
+        self.assertEqual(expert_display_name([home, org]), "关于你、星禾科技")
+        self.assertNotIn("咪咪", expert_display_name([cat, home]))
+        self.assertNotIn("新加坡", expert_display_name([home]))
+        self.assertNotEqual(expert_display_name([named]), named["value"])
+        self.assertEqual(fact_route({"entity": "", "attr": "事实", "value": "苏州"}), "")
+        self.assertEqual(group_facts([{"entity": "", "attr": "事实", "value": "苏州"}, home]), [("self", [home])])
+        merged = merge_route_facts(
+            [{"entity": "我", "attr": "住址", "value": "新加坡", "statement": "我住在新加坡。"}],
+            [cat],
+        )
+        self.assertEqual(len(merged), 2)
+        self.assertEqual({item["value"] for item in merged}, {"新加坡", "咪咪"})
+        self.assertEqual(len(merge_route_facts(merged, [dict(cat)])), 2)
+        later = pattern_extract("我住在新加坡")[0]
+        self.assertEqual(fact_route(later), fact_route(cat))
+        self.assertEqual(expert_display_name(merge_route_facts([cat], [later])), "关于你")
 
     def test_general_frames_cover_company_and_paragraph(self):
         zh = "\n".join([

@@ -42,6 +42,7 @@
       "nebula.count": "{n} 条事实",
       "nebula.new": "新",
       "nebula.source": "来源",
+      "nebula.self": "关于你",
       "title.detail": "细节",
       "title.source": "来源对话",
       "title.star": "一条记忆",
@@ -216,6 +217,7 @@
       "nebula.count": "{n} facts",
       "nebula.new": "New",
       "nebula.source": "Source",
+      "nebula.self": "About you",
       "title.detail": "Detail",
       "title.source": "Source conversation",
       "title.star": "One memory",
@@ -442,7 +444,10 @@
   };
 
   function foreignName(name) {
-    return String(name || "").replace(/、/g, ", ").replace(/等$/, "").trim();
+    const raw = String(name || "");
+    const more = raw.endsWith("等");
+    const body = more ? raw.slice(0, -1) : raw;
+    return body.split("、").map((part) => (part.trim() === "关于你" ? "About you" : part.trim())).join(", ").trim();
   }
 
   const PATTERNS = [

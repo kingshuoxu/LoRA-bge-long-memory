@@ -148,9 +148,13 @@ class ExpertRecord:
                         facts.append({"statement": text, "entity": "", "attr": "", "value": "", "question": "", "answer": ""})
                         if len(facts) >= 80:
                             break
+        from memory_core.extract import facts_are_self
+
+        stored = list((self.fact_memory or {}).get("facts") or [])
         return {
             "name": self.name,
             "display_name": self.display_name,
+            "self": bool((self.fact_memory or {}).get("self")) or facts_are_self(stored),
             "writable": self.writable,
             "n_facts": len([fact for fact in facts if not fact.get("superseded")]) if self.fact_memory else (self.n_facts or len(facts)),
             "entities": self.entities,
@@ -341,6 +345,7 @@ def register_expert(
     sources: list[dict[str, str]],
     display_name: str,
     adapter_src: Path,
+    self_expert: bool = False,
 ) -> Path:
     """把训练好的 adapter 登记进专家库。adapter_src 是 save_pretrained 的目录。"""
     experts_dir = Path(experts_dir)
@@ -390,6 +395,7 @@ def register_expert(
         "entities": entities,
         "source_conversations": sources,
         "facts": stored,
+        "self": bool(self_expert),
     }
     (expert_dir / "fact_memory.json").write_text(json.dumps(memory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     from memory_core.fact_span import build_fact_bank, save_fact_bank

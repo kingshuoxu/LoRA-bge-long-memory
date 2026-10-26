@@ -22,8 +22,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from memory_core.device import pick_device, train_dtype
 from memory_core.models_mgr import ensure_models, qwen_path
 from memory_core.routing import bind_bge
-from memory_core.extract import visible_display_name
-from memory_core.store import atomic_write_json, next_batch_id, read_json, register_expert
+from memory_core.extract import speaker_pronoun, visible_display_name
+from memory_core.store import atomic_write_json, delete_writable_expert, next_batch_id, read_json, register_expert
 
 from memory_core.prompts import has_cjk, system_for, with_brief
 
@@ -230,10 +230,88 @@ def _new_model(base_path: Path, rank: int, alpha: int, device, dtype):
     return model
 
 
-def run_job(home: Path, job_id: str) -> int:
+def _overlay_group(request: dict, group: dict) -> dict:
+    merged = dict(request)
+    merged.pop("groups", None)
+    merged["facts"] = group.get("facts") or []
+    merged["memory_facts"] = group.get("memory_facts") or group.get("facts") or []
+    merged["display_name"] = group.get("display_name") or ""
+    merged["replace_name"] = group.get("replace_name") or ""
+    merged["replace_batch"] = group.get("replace_batch")
+    merged["self_expert"] = bool(group.get("self"))
+    merged["sources"] = group.get("sources") or request.get("sources") or []
+    merged["retire"] = list(group.get("retire") or [])
+    return merged
+
+
+def _run_groups(home: Path, job_id: str, request: dict, groups: list[dict]) -> int:
+    """一个巩固里有多个主体时，每个主体单独训练，再合成一条状态。"""
+    job_dir = home / "jobs" / job_id
+    status = _read_status(job_dir)
+    done = [item for item in (status.get("registered_names") or []) if item]
+    displays = list(status.get("registered_displays") or [])
+    saved: list[dict] = list(status.get("saved_facts") or [])
+    for index, group in enumerate(groups):
+        if index < len(done):
+            continue
+        code = run_job(
+            home,
+            job_id,
+            request_override=_overlay_group(request, group),
+            work_dir=job_dir / f"group_{index}",
+            finish=False,
+        )
+        if code != 0:
+            return code
+        status = _read_status(job_dir)
+        if status.get("status") == "cancelled":
+            return 0
+        done.append(str(status.get("expert") or ""))
+        displays.append(str(status.get("_last_display") or group.get("display_name") or ""))
+        saved.extend(list(status.get("saved_facts") or []))
+        _update(
+            job_dir,
+            status="running",
+            phase="train",
+            registered_names=done,
+            registered_displays=displays,
+            saved_facts=saved,
+        )
+    shown = [item for item in displays if item]
+    label = "、".join(shown[:2]) + ("等" if len(shown) > 2 else "")
+    empty_sources = list(request.get("empty_sources") or [])
+    message = f"已写入记忆 · {label}" if label else "没有写入记忆"
+    if empty_sources and label:
+        missing = "、".join(str(item.get("title") or item.get("id") or "") for item in empty_sources)
+        message += f"。这些对话没有抽出事实：{missing}"
+    _set_stage(job_dir, "done", "done", detail=label or "完成")
+    _update(
+        job_dir,
+        status="done",
+        phase="done",
+        message=message,
+        expert=done[-1] if done else None,
+        error=None,
+        saved_facts=saved,
+        empty_sources=empty_sources,
+        registered_names=done,
+        registered_displays=displays,
+    )
+    return 0
+
+
+def run_job(home: Path, job_id: str, request_override: dict | None = None, work_dir: Path | None = None, finish: bool = True) -> int:
     home = Path(home)
     job_dir = home / "jobs" / job_id
-    request = json.loads((job_dir / "request.json").read_text(encoding="utf-8"))
+    if request_override is None:
+        request = json.loads((job_dir / "request.json").read_text(encoding="utf-8"))
+        groups = request.get("groups")
+        if isinstance(groups, list) and len(groups) > 1:
+            return _run_groups(home, job_id, request, groups)
+        if isinstance(groups, list) and len(groups) == 1:
+            request = _overlay_group(request, groups[0])
+    else:
+        request = request_override
     experts_dir = home / "experts"
     experts_dir.mkdir(parents=True, exist_ok=True)
     models_dir = Path(request["models_dir"])
@@ -298,7 +376,9 @@ def run_job(home: Path, job_id: str) -> int:
             shuffle=True,
             collate_fn=lambda rows: _collate(rows, tok.eos_token_id),
         )
-        ckpt_dir = job_dir / "checkpoint"
+        work = Path(work_dir) if work_dir is not None else job_dir
+        work.mkdir(parents=True, exist_ok=True)
+        ckpt_dir = work / "checkpoint"
         trainer_path = ckpt_dir / "trainer.pt"
         completed = 0
         best_loss = None
@@ -328,7 +408,7 @@ def run_job(home: Path, job_id: str) -> int:
                 trainer_path,
             )
             if last_loss is not None and (best_loss is None or abs(last_loss - best_loss) < 1e-12):
-                best_dir = job_dir / "best"
+                best_dir = work / "best"
                 if best_dir.exists():
                     shutil.rmtree(best_dir)
                 shutil.copytree(ckpt_dir / "adapter", best_dir)
@@ -345,7 +425,11 @@ def run_job(home: Path, job_id: str) -> int:
                 if extra:
                     fact["gate_questions"] = list(extra)
         stopped_reason = "max_epochs"
-        loss_curve = list(_read_status(job_dir).get("loss_curve") or [])
+        # 一次巩固里的第二个主体另开曲线，避免把上一个专家的轮次画进这一条。
+        if request_override is not None and completed == 0:
+            loss_curve = []
+        else:
+            loss_curve = list(_read_status(job_dir).get("loss_curve") or [])
         _set_stage(job_dir, "train", "active", detail=f"最多 {max_epochs} 轮，学习率 {lr:g}")
         for epoch in range(completed, max_epochs):
             if _cancelled(job_dir):
@@ -446,7 +530,7 @@ def run_job(home: Path, job_id: str) -> int:
 
         if best_loss is None or best_loss > 1.0:
             raise RuntimeError(f"训练没有收敛（best loss={best_loss}）")
-        best_dir = job_dir / "best"
+        best_dir = work / "best"
         if not best_dir.is_dir():
             raise RuntimeError("没有可用的检查点")
         _set_stage(job_dir, "train", "done", detail=f"最好 loss {best_loss:.3f}")
@@ -481,8 +565,9 @@ def run_job(home: Path, job_id: str) -> int:
         entities = []
         for fact in facts:
             entity = str(fact.get("entity") or "").strip()
-            if len(entity) >= 2 and entity not in entities:
-                entities.append(entity)
+            if speaker_pronoun(entity) or len(entity) < 2 or entity in entities:
+                continue
+            entities.append(entity)
         display = visible_display_name(str(request.get("display_name") or ""), facts) or "、".join(entities[:2]) or name
         memory_facts = request.get("memory_facts") or facts
         register_expert(
@@ -497,10 +582,16 @@ def run_job(home: Path, job_id: str) -> int:
             sources=request.get("sources") or [],
             display_name=display,
             adapter_src=best_dir,
+            self_expert=bool(request.get("self_expert")) or display == "关于你",
         )
+        for retired in request.get("retire") or []:
+            if retired and retired != name:
+                try:
+                    delete_writable_expert(experts_dir, retired)
+                except KeyError:
+                    pass
         _set_stage(job_dir, "register", "done", detail=f"已登记 {name}，路由键 {len(key_texts)} 条")
         _event(job_dir, {"stage": "register", "expert": name, "keys": len(key_texts)})
-        _set_stage(job_dir, "done", "done", detail=display)
         saved_facts = [
             {
                 "statement": fact.get("statement") or "",
@@ -511,6 +602,24 @@ def run_job(home: Path, job_id: str) -> int:
             for fact in facts
         ]
         empty_sources = list(request.get("empty_sources") or [])
+        if not finish:
+            _update(
+                job_dir,
+                status="running",
+                phase="train",
+                epoch=completed,
+                best_loss=round(best_loss, 4),
+                loss=round(best_loss, 4),
+                message=f"已写入「{display}」",
+                expert=name,
+                error=None,
+                stopped_reason=stopped_reason,
+                saved_facts=saved_facts,
+                _last_display=display,
+            )
+            print(f"registered {name} best_loss={best_loss:.4f} stop={stopped_reason}", flush=True)
+            return 0
+        _set_stage(job_dir, "done", "done", detail=display)
         if not saved_facts:
             message = "没有写入记忆"
         else:

@@ -733,7 +733,8 @@ export function createNebula(canvas, hooks) {
       return;
     }
     let name = expertCaption(item.expert, item.facts || []);
-    if (window.i18n && window.i18n.getLocale() === "en" && window.i18n.foreignName) name = window.i18n.foreignName(name);
+    if (name === "关于你" && window.i18n && window.i18n.t) name = window.i18n.t("nebula.self");
+    else if (window.i18n && window.i18n.getLocale() === "en" && window.i18n.foreignName) name = window.i18n.foreignName(name);
     const countText = window.i18n && window.i18n.t
       ? window.i18n.t("nebula.count", { n: item.count })
       : String(item.count);

@@ -25,13 +25,20 @@ from memory_core.grounding import (
 )
 from memory_core.mentions import load_mentions, remember_statement
 from memory_core.extract import (
+    SELF_DISPLAY,
+    SELF_ROUTE,
     company_pipeline_extract,
     entailed,
     expand_training_fact,
     expert_display_name,
-    uncovered_claims,
+    facts_are_self,
+    group_facts,
+    merge_route_facts,
     model_extract,
     pattern_extract,
+    sole_route,
+    speaker_pronoun,
+    uncovered_claims,
 )
 from memory_core.gate import apply_write_gate, keep_for_training
 from memory_core.models_mgr import ensure_models, models_ready, qwen_path, read_status
@@ -774,6 +781,77 @@ class MemoryService:
             status["error"] = str(exc)
             self._flush_preview(preview_id, status)
 
+    def _experts_for_route(self, route: str) -> list:
+        """同一主体已经有的可写专家。关于使用者的事实认 self 标记或全部是说话人的事实。"""
+        found = []
+        for record in self.expert_records():
+            if not record.writable or not record.explicit or not record.fact_memory:
+                continue
+            stored = list(record.fact_memory.get("facts") or [])
+            key = sole_route(stored)
+            if key == route:
+                found.append(record)
+            elif route == SELF_ROUTE and record.fact_memory.get("self") and key is None:
+                found.append(record)
+        return found
+
+    def _consolidation_groups(self, expanded: list[dict], sources: list[dict]) -> list[dict]:
+        """按主体拆开。说话人并进已有的「关于你」，别的实体各用自己的专家。"""
+        groups = []
+        for route, items in group_facts(expanded):
+            matches = self._experts_for_route(route)
+            matches.sort(key=lambda record: (
+                -sum(1 for fact in (record.fact_memory or {}).get("facts") or [] if isinstance(fact, dict) and not fact.get("superseded")),
+                record.name,
+            ))
+            primary = matches[0] if matches else None
+            extras = matches[1:]
+            prior: list[dict] = []
+            prior_sources: list[dict] = []
+            for record in matches:
+                prior.extend(list(record.fact_memory.get("facts") or []))
+                prior_sources.extend(list(record.sources or []))
+            merged = merge_route_facts(prior, items)
+            training = []
+            for fact in merged:
+                if fact.get("superseded"):
+                    continue
+                if fact.get("qa") and fact.get("statement") and (fact.get("value") or fact.get("answer")):
+                    item = dict(fact)
+                else:
+                    item = expand_training_fact(fact)
+                    item["id"] = fact.get("id") or ""
+                    item["source_conversations"] = fact.get("source_conversations") or []
+                    item["raw"] = fact.get("raw") or ""
+                item["selected"] = True
+                item["gate"] = item.get("gate") or "write"
+                training.append(item)
+            seen_sources: set[str] = set()
+            group_sources = []
+            for src in list(prior_sources) + list(sources):
+                if not isinstance(src, dict):
+                    continue
+                sid = str(src.get("id") or "")
+                if not sid or sid in seen_sources:
+                    continue
+                seen_sources.add(sid)
+                group_sources.append({"id": sid, "title": src.get("title") or sid})
+            batch = None
+            if primary is not None:
+                batch = int(primary.batch) if primary.batch is not None else next_batch_id(self.experts_dir)
+            groups.append({
+                "route": route,
+                "self": route == SELF_ROUTE,
+                "display_name": SELF_DISPLAY if route == SELF_ROUTE else route,
+                "facts": training,
+                "memory_facts": merged,
+                "replace_name": primary.name if primary is not None else "",
+                "replace_batch": batch,
+                "retire": [record.name for record in extras],
+                "sources": group_sources,
+            })
+        return groups
+
     def start_consolidation(self, conversation_ids: list[str], facts: list[dict], preview_id: str | None = None) -> dict[str, Any]:
         if self.job_running() or self._preview_running():
             raise ServiceError("已有训练在进行")
@@ -799,12 +877,14 @@ class MemoryService:
         for item in expanded:
             if not item.get("source_conversations"):
                 item["source_conversations"] = sources
+        groups = self._consolidation_groups(expanded, sources)
         display = expert_display_name(expanded)
         job_id = time.strftime("job_%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:4]
         job_dir = self.jobs_dir / job_id
         job_dir.mkdir(parents=True)
         request = {
             "facts": expanded,
+            "groups": groups,
             "sources": sources,
             "display_name": display or job_id,
             "models_dir": str(self.models_dir),
@@ -1098,6 +1178,7 @@ class MemoryService:
             "bsz": 4,
             "replace_name": record.name,
             "replace_batch": batch,
+            "self_expert": bool((record.fact_memory or {}).get("self")) or facts_are_self(facts),
         }
         atomic_write_json(job_dir / "request.json", request)
         atomic_write_json(
@@ -1176,12 +1257,14 @@ class MemoryService:
         centroids = {}
         canonical: dict[str, list[str]] = {}
         for record in records:
+            stored_facts = list((record.fact_memory or {}).get("facts") or [])
             experts.append({
                 "id": f"expert:{record.name}",
                 "name": record.name,
                 "display_name": record.display_name,
                 "writable": record.writable,
                 "explicit": record.explicit,
+                "self": bool((record.fact_memory or {}).get("self")) or facts_are_self(stored_facts),
             })
             raw_facts: list[dict] = []
             if record.fact_memory:
@@ -1234,7 +1317,7 @@ class MemoryService:
                     if source.get("id"):
                         links.append({"source": node_id, "target": f"conv:{source['id']}", "kind": "source"})
                 entity = str(fact.get("entity") or "").strip()
-                if entity and not fact.get("superseded") and entity not in names:
+                if entity and not speaker_pronoun(entity) and not fact.get("superseded") and entity not in names:
                     names.append(entity)
             if not names:
                 names = [entity for entity in record.entities if 2 <= len(entity) <= 12]

@@ -743,7 +743,7 @@ async function loadMemory() {
     const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.statement || fact.question || "")}</li>`).join("");
     const sources = (expert.sources || []).map((src) => String(src.title || src.id || "").replace(/[。．.!?！？]+$/u, "")).join(t("list.sep")) || t("fact.noSource");
     return `<article class="card">
-      <h3>${esc(expert.display_name || expert.name)}</h3>
+      <h3>${esc(expert.self || expert.display_name === "关于你" ? t("nebula.self") : (expert.display_name || expert.name))}</h3>
       <div class="muted">${esc(expert.name)} · ${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
       <p>${esc(t("fact.sources", { names: sources }))}</p>
       <ul>${facts || `<li>${esc(t("empty.factText"))}</li>`}</ul>

@@ -51,20 +51,15 @@ export function factCaption(fact) {
 
 export function expertCaption(expert, facts) {
   const raw = String((expert && (expert.display_name || expert.name)) || "").trim();
-  const parts = raw.replace(/等$/, "").split(/[、,]/).map((part) => part.trim()).filter(Boolean);
-  if (raw && parts.length && parts.some((part) => !speaker(part))) return raw;
+  if (expert && expert.self) return "关于你";
+  if (raw === "关于你") return raw;
   const owned = (facts || []).filter((fact) => {
+    if (fact && fact.superseded) return false;
     if (!expert) return true;
     return fact.expert === expert.name || fact.expert === expert.id;
   });
-  const values = [];
-  owned.forEach((fact) => {
-    const value = String(fact.value || "").trim();
-    const attr = String(fact.attr || "").trim();
-    const piece = value && !speaker(value) ? value : (attr && !speaker(attr) ? attr : "");
-    if (piece && !values.includes(piece)) values.push(piece);
-  });
-  if (!values.length) return raw;
-  const shown = values.slice(0, 2).join("、");
-  return values.length > 2 ? `${shown}等` : shown;
+  if (owned.length && owned.every((fact) => speaker(fact.entity))) return "关于你";
+  const parts = raw.replace(/等$/, "").split(/[、,]/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length && parts.every((part) => speaker(part))) return "关于你";
+  return raw;
 }

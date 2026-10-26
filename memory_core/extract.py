@@ -900,7 +900,10 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# 说话人代词不是这条记忆的名字。问句仍用「我 / I」，星云和状态条用事物或取值。
+# 关于使用者的事实并进同一个专家。问句仍用「我 / I」，显示名是「关于你」。
+# 别的主体各用自己的专家。取值留在事实节点上，不按句子另开专家。
+SELF_ROUTE = "self"
+SELF_DISPLAY = "关于你"
 _SPEAKER = frozenset({"我", "我们", "咱们", "咱", "i", "me", "my", "mine", "we", "our", "ours", "us"})
 
 
@@ -920,16 +923,73 @@ def pronoun_only_label(display: str) -> bool:
     return bool(parts) and all(speaker_pronoun(part) for part in parts)
 
 
-def _remembered_piece(fact: dict) -> str:
-    value = str(fact.get("value") or fact.get("answer") or "").strip()
-    attr = str(fact.get("attr") or "").strip()
-    if value and not speaker_pronoun(value) and len(value) <= 32:
-        return value
-    if attr and not speaker_pronoun(attr):
-        return attr
-    if value and not speaker_pronoun(value):
-        return value[:32]
-    return ""
+def fact_route(fact: dict) -> str:
+    """说话人归到稳定的 self。其他主体用实体名本身，同一实体永远同一路由。
+
+    没有实体名的旧事实不算使用者本人，避免把研究专家并进「关于你」。
+    """
+    entity = str((fact or {}).get("entity") or "").strip()
+    if speaker_pronoun(entity):
+        return SELF_ROUTE
+    return entity
+
+
+def group_facts(facts: list[dict]) -> list[tuple[str, list[dict]]]:
+    """self 在前，其余按第一次出现的实体。一组一个专家。"""
+    buckets: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for fact in facts or []:
+        if not isinstance(fact, dict):
+            continue
+        key = fact_route(fact)
+        if not key:
+            continue
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(fact)
+    keys = ([SELF_ROUTE] if SELF_ROUTE in buckets else []) + [key for key in order if key != SELF_ROUTE]
+    return [(key, buckets[key]) for key in keys]
+
+
+def sole_route(facts: list[dict] | None) -> str | None:
+    keys: list[str] = []
+    for fact in facts or []:
+        if not isinstance(fact, dict) or fact.get("superseded"):
+            continue
+        key = fact_route(fact)
+        if not key or key in keys:
+            continue
+        keys.append(key)
+    if len(keys) == 1:
+        return keys[0]
+    return None
+
+
+def facts_are_self(facts: list[dict] | None) -> bool:
+    return sole_route(facts) == SELF_ROUTE
+
+
+def merge_route_facts(existing: list[dict] | None, incoming: list[dict] | None) -> list[dict]:
+    """同一专家上的旧事实留下。新事实按实体、属性和取值并进去，不另开一条重复的。"""
+    merged: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for fact in list(existing or []) + list(incoming or []):
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("superseded"):
+            merged.append(dict(fact))
+            continue
+        key = (
+            str(fact.get("entity") or "").strip(),
+            str(fact.get("attr") or "").strip(),
+            str(fact.get("value") or fact.get("answer") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(dict(fact))
+    return merged
 
 
 def _join_labels(labels: list[str]) -> str:
@@ -940,24 +1000,23 @@ def _join_labels(labels: list[str]) -> str:
 
 
 def expert_display_name(facts: list[dict]) -> str:
-    """有名字的主体仍用主体。只有「我 / I」时，用记住的取值，不用代词当专家名。"""
-    entities: list[str] = []
-    pieces: list[str] = []
-    for fact in facts:
-        if not isinstance(fact, dict):
-            continue
-        entity = str(fact.get("entity") or "").strip()
-        if entity and not speaker_pronoun(entity) and entity not in entities:
-            entities.append(entity)
-        piece = _remembered_piece(fact)
-        if piece and piece not in pieces:
-            pieces.append(piece)
-    return _join_labels(entities or pieces)
+    """关于使用者的事实显示「关于你」。有名字的主体仍用主体，不把取值当成专家名。"""
+    labels: list[str] = []
+    for key, _items in group_facts(facts):
+        label = SELF_DISPLAY if key == SELF_ROUTE else key
+        if label not in labels:
+            labels.append(label)
+    return _join_labels(labels)
 
 
 def visible_display_name(display: str, facts: list[dict] | None) -> str:
-    """已存的名字若只是说话人代词，改显示成取值。不改事实里的实体，回忆仍认「我」。"""
+    """已存的「我」改显示成「关于你」。事实里的实体不动，回忆仍认「我」。"""
     text = str(display or "").strip()
+    rows = [fact for fact in (facts or []) if isinstance(fact, dict)]
+    if facts_are_self(rows):
+        return SELF_DISPLAY
+    if text == SELF_DISPLAY:
+        return text
     if text and not pronoun_only_label(text):
         return text
-    return expert_display_name(list(facts or [])) or text
+    return expert_display_name(rows) or text
