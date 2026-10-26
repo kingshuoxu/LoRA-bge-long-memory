@@ -246,37 +246,63 @@ def main():
         raise SystemExit(f"设置里没有「检查更新」。界面: {seen[:800]}")
     if "0.1.4" not in seen and "长期记忆 0.1.4" not in seen:
         (STAGE / "settings-text.txt").write_text(seen, encoding="utf-8")
-    tap(check)
     started = time.time()
     offer = None
     offer_text = ""
     closed_settings = False
-    deadline = time.time() + 150
-    while time.time() < deadline:
+    check_errors = (
+        "连不上",
+        "connection closed",
+        "connection abort",
+        "Software caused",
+        "检查失败",
+        "Unable to resolve",
+        "No address associated",
+        "UnknownHost",
+        "failed to connect",
+        "timed out",
+    )
+    # 已发布的 0.1.4 还会去问已经没有 DNS 的 mirror.ghproxy.com。直连偶发失败时，
+    # 界面停在这条错误上。再点一次「检查更新」，GitHub 通的那次就能查出 0.1.5。
+    for attempt in range(3):
+        tap(check)
+        attempt_started = time.time()
+        saw_checking = False
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            root = dump_root()
+            offer_text = visible_text(root)
+            offer = find_exact(root, "下载并安装")
+            if offer:
+                break
+            if "版本 0.1.5" in offer_text or "可以更新 0.1.5" in offer_text:
+                shot("03-version")
+                (STAGE / "offer-text.txt").write_text(offer_text, encoding="utf-8")
+                close_settings()
+                closed_settings = True
+                inner = time.time() + 20
+                while time.time() < inner:
+                    root = dump_root()
+                    offer_text = visible_text(root)
+                    offer = find_exact(root, "下载并安装")
+                    if offer:
+                        break
+                    time.sleep(1)
+                break
+            if "正在检查" in offer_text or "Checking" in offer_text:
+                saw_checking = True
+            failed = any(bad in offer_text for bad in check_errors)
+            if failed and (saw_checking or time.time() - attempt_started > 25):
+                shot(f"03-check-failed-{attempt}")
+                (STAGE / "offer-text.txt").write_text(offer_text, encoding="utf-8")
+                offer = None
+                break
+            time.sleep(2)
+        if offer is not None or closed_settings:
+            break
+        time.sleep(3)
         root = dump_root()
-        offer_text = visible_text(root)
-        offer = find_exact(root, "下载并安装")
-        if offer:
-            break
-        if "版本 0.1.5" in offer_text or "可以更新 0.1.5" in offer_text:
-            shot("03-version")
-            (STAGE / "offer-text.txt").write_text(offer_text, encoding="utf-8")
-            close_settings()
-            closed_settings = True
-            inner = time.time() + 20
-            while time.time() < inner:
-                root = dump_root()
-                offer_text = visible_text(root)
-                offer = find_exact(root, "下载并安装")
-                if offer:
-                    break
-                time.sleep(1)
-            break
-        if any(bad in offer_text for bad in ("连不上", "connection closed", "connection abort", "Software caused", "检查失败")):
-            shot("03-check-failed")
-            (STAGE / "offer-text.txt").write_text(offer_text, encoding="utf-8")
-            raise SystemExit(f"检查更新失败。界面: {offer_text[:800]}")
-        time.sleep(2)
+        check = find_exact(root, "检查更新") or check
     shot("03-offer")
     (STAGE / "offer-text.txt").write_text(offer_text, encoding="utf-8")
     if offer is None:

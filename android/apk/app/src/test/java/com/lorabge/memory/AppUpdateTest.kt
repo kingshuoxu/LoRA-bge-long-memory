@@ -123,7 +123,7 @@ class AppUpdateTest {
         val updateJson = """{"versionName":"0.1.5","versionCode":1005,"sha256":"$sha","size":51,"apk":"app-debug.apk"}"""
         var apiCalls = 0
         var jsonCalls = 0
-        val offer = lookupUpdate(1004) { urls ->
+        val offer = lookupUpdate(1004, { urls ->
             bytesOfText(urls, accept = ::acceptUpdateDocument, opener = { url ->
                 val direct = url.startsWith("https://api.github.com/") || url.startsWith("https://github.com/")
                 val api = url.contains("per_page=30")
@@ -137,7 +137,7 @@ class AppUpdateTest {
                 }
                 RemoteBody(200, body.length.toLong(), ByteArrayInputStream(body.toByteArray()))
             })
-        }
+        })
         assertEquals("0.1.5", offer!!.versionName)
         assertEquals(1005, offer.versionCode)
         assertTrue(offer.versionCode > 1004)
@@ -149,10 +149,10 @@ class AppUpdateTest {
     @Test
     fun lookupUpdateReadsUpdateJsonWhenTheReleaseListIsUnreachable() {
         val sha = "ef".repeat(32)
-        val offer = lookupUpdate(1004) { urls ->
+        val offer = lookupUpdate(1004, { urls ->
             if (urls.any { it.contains("per_page=30") }) throw IOException("Software caused connection abort")
             """{"versionName":"0.1.5","versionCode":1005,"sha256":"$sha","size":9,"apk":"app-debug.apk"}"""
-        }
+        })
         assertEquals(1005, offer!!.versionCode)
         assertEquals("0.1.5", offer.versionName)
     }
@@ -160,11 +160,11 @@ class AppUpdateTest {
     @Test
     fun unreachableUpdateExplainsInChinese() {
         val err = try {
-            lookupUpdate(1004) { urls ->
+            lookupUpdate(1004, { urls ->
                 bytesOfText(urls, accept = ::acceptUpdateDocument, opener = {
                     throw SocketException("Software caused connection abort")
                 })
-            }
+            })
             null
         } catch (err: IOException) {
             err
