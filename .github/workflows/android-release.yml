@@ -125,6 +125,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Nebula lattice classifier
+        run: node android/apk/app/src/main/assets/nebula/nebula-pixels.test.mjs
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

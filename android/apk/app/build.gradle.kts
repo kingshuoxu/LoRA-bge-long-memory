@@ -136,12 +136,3 @@ tasks.withType<Test> {
     // 单元测试跑在 JVM 上,android.jar 里的 org.json 是空壳。换成真正的实现。
     classpath = files(classpath.filter { file -> !file.name.contains("android.jar") })
 }
-
-tasks.register<Exec>("nebulaPixelTest") {
-    workingDir(project.projectDir)
-    commandLine("node", "src/main/assets/nebula/nebula-pixels.test.mjs")
-}
-
-tasks.named("testDebugUnitTest").configure {
-    dependsOn("nebulaPixelTest")
-}
