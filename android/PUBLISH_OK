@@ -1,0 +1,9 @@
+1520574 的 upgrade-e2e 已核对，可以发 android-v0.1.5。星云格子和巩固停在第一步都在这一包里。
+
+运行 https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/40324468296
+
+画布 canvas-before.png / canvas-after.png 是 160×220，不透明。捏合前平均亮度 237，方差 1150，红 255 绿 234 蓝 213，亮度范围 86–254，是一团暖色云，边缘更橙、中间更亮，不是整屏格子。捏合后平均亮度 251，方差 126，相机从原点挪到 x≈1.04、zoom 22。平均亮度差 16.6，亮度差大于 12 的像素有 9753 个。状态 canvasVariance=1023.32，canvasDiff=18.26，canvasMoved=14321，flip=0，rough=0.0013，lattice=false，probed=true，path=webgl2，SwiftShader，touches=4，事实卡是佐雷公司 1979。
+
+canvas-sky.png 是 200×280 的软件星空：平均亮度 31.7，方差 196，flip=0.006，rough=1.05，暗底上有暖色星云和散落的星，不是格子。skyRenderer=canvas2d。
+
+nebula-canvas.mp4 160×220，方差 24.84，帧差 6.45。控制台 webm 仍是黑的 1080×2400，窗口抓取仍是灰边，这两路不算。
