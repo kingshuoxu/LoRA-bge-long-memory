@@ -909,6 +909,7 @@ private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean, waitSe
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun TypingDots(live: Boolean) {
     var phase by remember { mutableIntStateOf(0) }
     LaunchedEffect(live) {
