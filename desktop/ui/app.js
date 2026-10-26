@@ -90,6 +90,7 @@ async function refreshHealth() {
       : `${t("boot.loading")}${detail}`;
   }
   const device = health.device === "cpu" ? "CPU" : health.device === "cuda" ? "CUDA" : health.device === "mps" ? "MPS" : health.device;
+  renderBoot(health.models);
   $("device-label").textContent = t("device.line", { device });
   if (health.job) {
     const previewing = state.preview && (state.preview.status === "running" || state.preview.status === "done");
@@ -128,7 +129,10 @@ function renderJobBar() {
   let action = "";
   if (job.status === "running") action = `<button id="job-cancel" type="button">${esc(t("action.cancel"))}</button>`;
   if (job.status === "cancelled" || job.status === "failed") action = `<button id="job-resume" type="button">${esc(t("action.resume"))}</button>`;
-  bar.innerHTML = `<div><strong>${esc(tx(job.message || job.status))}</strong><div class="muted">${esc(detail)}</div></div><div>${action}</div>`;
+  const html = `<div><strong>${esc(tx(job.message || job.status))}</strong><div class="muted">${esc(detail)}</div></div><div>${action}</div>`;
+  if (bar.dataset.drawn === html) return;
+  bar.dataset.drawn = html;
+  bar.innerHTML = html;
   const cancel = $("job-cancel");
   const resume = $("job-resume");
   if (cancel) cancel.onclick = () => api(`/api/jobs/${job.id}/cancel`, { method: "POST", body: "{}" }).then(refreshHealth).catch(showError);
@@ -144,10 +148,121 @@ function syncSky() {
 }
 
 function activeTrace() {
+  if (state.preview && state.preview.status === "running") return state.preview;
   if (state.job && (state.job.status === "running" || state.job.status === "done")) return state.job;
   if (state.preview) return state.preview;
   if (state.job && (state.job.stages || state.job.events)) return state.job;
   return null;
+}
+
+function formatBytes(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return "";
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
+  return `${Math.round(n)} B`;
+}
+
+function modelLabel(detail) {
+  const text = String(detail || "");
+  const slash = text.lastIndexOf("/");
+  return slash >= 0 ? text.slice(slash + 1) : text;
+}
+
+function renderBoot(models) {
+  const box = $("boot-progress");
+  if (!box) return;
+  const stateName = models && models.state;
+  const show = Boolean(stateName && stateName !== "ready" && stateName !== "error");
+  box.hidden = !show;
+  if (!show) return;
+  const percent = Number(models.percent);
+  const known = Number.isFinite(percent) && percent > 0;
+  const bar = $("boot-bar");
+  const fill = $("boot-bar-fill");
+  if (bar && fill) {
+    bar.classList.toggle("indeterminate", !known);
+    bar.setAttribute("aria-valuenow", known ? String(Math.round(percent)) : "0");
+    fill.style.width = known ? `${Math.max(0, Math.min(100, percent))}%` : "";
+  }
+  const model = modelLabel(models.detail) || t("boot.models");
+  const file = String(models.file || "");
+  const fileNode = $("boot-file");
+  if (fileNode) {
+    fileNode.textContent = file ? t("boot.file", { file, model }) : t("boot.connecting", { model });
+  }
+  const pct = $("boot-percent");
+  if (pct) pct.textContent = t("boot.percent", { percent: known ? Math.round(percent) : 0 });
+  const bytes = $("boot-bytes");
+  if (bytes) {
+    const done = formatBytes(models.downloaded);
+    const total = formatBytes(models.total);
+    bytes.textContent = done && total ? t("boot.bytes", { done, total }) : "";
+  }
+}
+
+const stageView = { rail: "", feed: "", loss: "", facts: "" };
+const stageClock = { key: "", since: 0 };
+
+function stageRailKey(stages) {
+  const locale = window.i18n && window.i18n.getLocale ? window.i18n.getLocale() : "";
+  return `${locale}|${stages.map((stage) => `${stage.id}:${stage.state || "pending"}`).join("|")}`;
+}
+
+function formatClock(ms) {
+  const whole = Math.max(0, Math.floor(ms / 1000));
+  const min = Math.floor(whole / 60);
+  const sec = whole % 60;
+  return `${min}:${String(sec).padStart(2, "0")}`;
+}
+
+function renderStageStatus(trace, stages) {
+  const host = $("stage-status");
+  if (!host) return;
+  const active = stages.find((stage) => stage.state === "active");
+  const jobRunning = Boolean(state.job && state.job.status === "running");
+  const previewRunning = Boolean(state.preview && state.preview.status === "running");
+  const running = Boolean(active && (previewRunning || jobRunning));
+  if (!running) {
+    host.hidden = true;
+    stageClock.key = "";
+    return;
+  }
+  host.hidden = false;
+  const runId = (trace && trace.id) || state.previewId || (state.job && state.job.id) || "";
+  const key = `${runId}:${active.id}`;
+  if (stageClock.key !== key) {
+    stageClock.key = key;
+    stageClock.since = Date.now();
+  }
+  const title = $("stage-kicker");
+  if (title) title.textContent = t("stage.live", { step: stageTitle(active) });
+  const elapsed = $("stage-elapsed");
+  if (elapsed) elapsed.textContent = t("stage.elapsed", { time: formatClock(Date.now() - stageClock.since) });
+  const job = jobRunning ? state.job : null;
+  const line = (job && active.id === "train" && job.message) || active.detail || (job && job.message) || "";
+  const detail = $("stage-detail");
+  if (detail) detail.textContent = tx(line);
+  const meter = $("stage-meter");
+  const fill = $("stage-meter-fill");
+  let fraction = null;
+  if (job && active.id === "train" && job.max_epochs) {
+    const max = Number(job.max_epochs) || 1;
+    const epoch = Number(job.epoch) || 0;
+    const step = Number(job.step) || 0;
+    const stepTotal = Number(job.step_total) || 0;
+    const into = stepTotal && step < stepTotal ? epoch + step / stepTotal : epoch;
+    fraction = Math.max(0, Math.min(1, into / max));
+  }
+  if (meter && fill) {
+    meter.hidden = fraction == null;
+    if (fraction != null) {
+      const pct = Math.round(fraction * 100);
+      fill.style.width = `${pct}%`;
+      meter.setAttribute("aria-valuenow", String(pct));
+    }
+  }
 }
 
 function renderStages() {
@@ -162,34 +277,40 @@ function renderStages() {
     { id: "register", state: "pending" },
     { id: "done", state: "pending" },
   ];
-  const width = 1080;
-  const height = 300;
-  const points = stages.map((stage, index) => {
-    const along = stages.length <= 1 ? 0.5 : index / (stages.length - 1);
-    return {
-      stage,
-      x: 78 + along * (width - 156),
-      y: 92 + Math.sin(along * Math.PI) * -28,
-    };
-  });
-  const lines = points.slice(1).map((point, index) => {
-    const prev = points[index];
-    const lit = point.stage.state === "done" || point.stage.state === "active" || prev.stage.state === "done";
-    return `<line x1="${prev.x.toFixed(1)}" y1="${prev.y.toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="${lit ? "rgba(242,210,145,0.85)" : "rgba(180,198,220,0.28)"}" stroke-width="${lit ? 1.6 : 1}" />`;
-  }).join("");
-  const stars = points.map((point) => {
-    const stateName = point.stage.state || "pending";
-    const on = stateName === "done" || stateName === "active";
-    const r = stateName === "active" ? 7 : on ? 5.2 : 3.6;
-    const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.45)";
-    const text = `<tspan x="${point.x.toFixed(1)}">${esc(stageTitle(point.stage))}</tspan>`;
-    return `<g>
-      <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 10}" fill="${fill}" opacity="${on ? 0.18 : 0.05}" />
-      <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
-      <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 28).toFixed(1)}" text-anchor="middle">${text}</text>
-    </g>`;
-  }).join("");
-  $("stage-list").innerHTML = `<svg class="constellation" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("stage.constellation"))}">${lines}${stars}</svg>`;
+  const railKey = stageRailKey(stages);
+  if (railKey !== stageView.rail) {
+    stageView.rail = railKey;
+    const width = 1080;
+    const height = 300;
+    const points = stages.map((stage, index) => {
+      const along = stages.length <= 1 ? 0.5 : index / (stages.length - 1);
+      return {
+        stage,
+        x: 78 + along * (width - 156),
+        y: 92 + Math.sin(along * Math.PI) * -28,
+      };
+    });
+    const lines = points.slice(1).map((point, index) => {
+      const prev = points[index];
+      const lit = point.stage.state === "done" || point.stage.state === "active" || prev.stage.state === "done";
+      return `<line x1="${prev.x.toFixed(1)}" y1="${prev.y.toFixed(1)}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="${lit ? "rgba(242,210,145,0.85)" : "rgba(180,198,220,0.28)"}" stroke-width="${lit ? 1.6 : 1}" />`;
+    }).join("");
+    const stars = points.map((point) => {
+      const stateName = point.stage.state || "pending";
+      const on = stateName === "done" || stateName === "active";
+      const r = stateName === "active" ? 7 : on ? 5.2 : 3.6;
+      const fill = stateName === "active" ? "#f2d291" : on ? "#d7e6ff" : "rgba(180,198,220,0.45)";
+      const halo = stateName === "active" ? "pulse" : "";
+      const text = `<tspan x="${point.x.toFixed(1)}">${esc(stageTitle(point.stage))}</tspan>`;
+      return `<g>
+        <circle class="${halo}" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r + 10}" fill="${fill}" opacity="${on ? 0.18 : 0.05}" />
+        <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${r}" fill="${fill}" />
+        <text class="${on ? "star-label on" : ""}" x="${point.x.toFixed(1)}" y="${(point.y + 28).toFixed(1)}" text-anchor="middle">${text}</text>
+      </g>`;
+    }).join("");
+    $("stage-list").innerHTML = `<svg class="constellation" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("stage.constellation"))}">${lines}${stars}</svg>`;
+  }
+  renderStageStatus(trace, stages);
   renderFeed(trace);
   renderLoss(trace);
   const reviewing = state.preview && state.preview.status === "done" && !(state.job && state.job.status === "running");
@@ -210,13 +331,21 @@ function renderFeed(trace) {
   const recall = (trace && trace.recall) || [];
   const shown = events.slice(-24);
   if (trace && trace.error) {
-    $("stage-feed").innerHTML = `<article class="event"><strong>${esc(t("feed.failed"))}</strong><div class="muted">${esc(tx(trace.error))}</div></article>`;
+    const failed = `<article class="event"><strong>${esc(t("feed.failed"))}</strong><div class="muted">${esc(tx(trace.error))}</div></article>`;
+    if (failed !== stageView.feed) {
+      stageView.feed = failed;
+      $("stage-feed").innerHTML = failed;
+    }
     return;
   }
   const uncovered = (state.preview && state.preview.uncovered) || [];
   const warnings = uncovered.map((item) => `<article class="event warn"><strong>${esc(t("fact.uncovered", { sentence: item.sentence }))}</strong><div><button type="button" data-add-manual="${esc(item.sentence)}">${esc(t("fact.addManual"))}</button></div></article>`);
   if (!shown.length && !recall.length && !warnings.length) {
-    $("stage-feed").innerHTML = `<div class="empty">${esc(t("empty.feed"))}</div>`;
+    const empty = `<div class="empty">${esc(t("empty.feed"))}</div>`;
+    if (empty !== stageView.feed) {
+      stageView.feed = empty;
+      $("stage-feed").innerHTML = empty;
+    }
     return;
   }
   const rows = shown.map((event) => {
@@ -247,7 +376,10 @@ function renderFeed(trace) {
   (trace.saved_facts || []).forEach((fact) => {
     rows.push(`<article class="event"><strong>${esc(fact.statement || "")}</strong><div class="muted">${esc([fact.entity, fact.attr, fact.value].filter(Boolean).join(" · "))}</div></article>`);
   });
-  $("stage-feed").innerHTML = warnings.join("") + rows.join("");
+  const html = warnings.join("") + rows.join("");
+  if (html === stageView.feed) return;
+  stageView.feed = html;
+  $("stage-feed").innerHTML = html;
   bindManualAdds($("stage-feed"));
 }
 
@@ -258,6 +390,7 @@ function renderLoss(trace) {
   const points = curve.length ? curve : ((train && train.items) || []).filter((item) => item && item.loss != null);
   if (!points.length) {
     card.hidden = true;
+    stageView.loss = "";
     return;
   }
   card.hidden = false;
@@ -296,6 +429,9 @@ function renderLoss(trace) {
   const caption = finished
     ? t("loss.best", { loss: fmtLoss(best) })
     : t("loss.line", { epoch: last.epoch, loss: fmtLoss(last.loss), seconds, eta });
+  const lossKey = `${poly}|${caption}`;
+  if (lossKey === stageView.loss && !card.hidden) return;
+  stageView.loss = lossKey;
   card.innerHTML = `<strong>${esc(t("loss.title"))}</strong><div class="muted">${esc(caption)}</div>
     <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("loss.curve"))}">
       <defs>
@@ -637,14 +773,19 @@ function renderFacts() {
     warning.push(`<div class="warn">${esc(t("fact.uncovered", { sentence: item.sentence }))} <button type="button" data-add-manual="${esc(item.sentence)}">${esc(t("fact.addManual"))}</button></div>`);
   });
   warning.push(`<div class="sheet-actions"><button type="button" id="fact-add-blank">${esc(t("fact.addManual"))}</button></div>`);
+  const focused = document.activeElement && root.contains(document.activeElement);
   if (!state.facts.length && !uncovered.length) {
-    root.innerHTML = `${warning.join("")}<div class="empty">${esc(t("empty.facts"))}</div>`;
+    const emptyHtml = `${warning.join("")}<div class="empty">${esc(t("empty.facts"))}</div>`;
     $("editor-commit").disabled = true;
-    bindManualAdds(root);
+    if (!focused && emptyHtml !== stageView.facts) {
+      stageView.facts = emptyHtml;
+      root.innerHTML = emptyHtml;
+      bindManualAdds(root);
+    }
     return;
   }
   $("editor-commit").disabled = !state.facts.some((fact) => fact.selected);
-  root.innerHTML = warning.join("") + state.facts.map((fact, index) => {
+  const factHtml = warning.join("") + state.facts.map((fact, index) => {
     const skipped = String(fact.gate || "").startsWith("skip_");
     if (skipped) fact.selected = false;
     const reason = advancedOn() ? fact.gate_reason : "";
@@ -664,6 +805,9 @@ function renderFacts() {
       <label>${esc(t("fact.question"))}<input data-field="question" data-i="${index}" value="${esc(fact.question)}" /></label>
     </div>`;
   }).join("");
+  if (focused || factHtml === stageView.facts) return;
+  stageView.facts = factHtml;
+  root.innerHTML = factHtml;
   root.querySelectorAll("[data-sel]").forEach((box) => {
     box.onchange = () => {
       const fact = state.facts[Number(box.dataset.sel)];

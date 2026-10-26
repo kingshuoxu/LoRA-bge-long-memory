@@ -684,6 +684,8 @@ class MemoryService:
                     fact["source_conversations"] = [{"id": conv["id"], "title": conv["title"]}]
                     _push(fact, "pattern")
             joined = "\n".join(item["text"] for item in conversations if item["text"].strip())
+            _mark_stage(status, "extract", "active", detail="正在从机构相关的句子抽取", items=[e for e in status["events"] if e["stage"] == "extract"])
+            self._flush_preview(preview_id, status)
             try:
                 for fact in company_pipeline_extract(joined):
                     _push(fact, "company")
@@ -691,6 +693,8 @@ class MemoryService:
                 pass
             with self._lock:
                 self.chat.ensure()
+                _mark_stage(status, "extract", "active", detail="正在用模型从整段原文抽取", items=[e for e in status["events"] if e["stage"] == "extract"])
+                self._flush_preview(preview_id, status)
                 try:
                     for fact in model_extract(joined, self.chat.model, self.chat.tok, self.chat.device):
                         _push(fact, "model")

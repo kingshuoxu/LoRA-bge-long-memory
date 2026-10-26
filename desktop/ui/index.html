@@ -14,6 +14,16 @@
       <div class="orb" aria-hidden="true"></div>
       <h1 data-i18n="app.name">LoRA 长记忆</h1>
       <p id="boot-text" data-i18n="boot.loading">正在准备本地模型…</p>
+      <div id="boot-progress" class="boot-progress" hidden>
+        <div class="boot-progress-meta">
+          <span id="boot-file"></span>
+          <span id="boot-percent"></span>
+        </div>
+        <div id="boot-bar" class="boot-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="boot-bar-fill"></div>
+        </div>
+        <p id="boot-bytes" class="muted"></p>
+      </div>
       <p class="muted" data-i18n="boot.download">首次运行会下载 Qwen2.5-0.5B-Instruct 和 bge-small-zh-v1.5，大约 1.1 GB，只下载一次。</p>
     </div>
   </div>
@@ -88,6 +98,16 @@
       </section>
       <section id="consolidate-view" hidden>
         <div class="stage-layout">
+          <div id="stage-status" class="stage-status" hidden>
+            <div class="stage-status-row">
+              <strong id="stage-kicker"></strong>
+              <span id="stage-elapsed" class="muted"></span>
+            </div>
+            <p id="stage-detail"></p>
+            <div id="stage-meter" class="boot-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+              <div id="stage-meter-fill"></div>
+            </div>
+          </div>
           <div id="stage-list" class="stage-list"></div>
           <div class="stage-panel">
             <div id="loss-card" class="loss-card" hidden></div>

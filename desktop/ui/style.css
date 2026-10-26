@@ -161,6 +161,60 @@ button:disabled { opacity: 0.45; cursor: default; }
   box-shadow: 0 0 40px rgba(183, 215, 255, 0.35);
 }
 .orb { display: none; }
+.boot-progress { margin: 16px auto 0; width: min(360px, 100%); text-align: left; }
+.boot-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+.boot-progress-meta span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.boot-bar {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(198, 214, 238, 0.16);
+  overflow: hidden;
+}
+.boot-bar > div {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8eafd8, #f2d291);
+  box-shadow: 0 0 12px rgba(242, 210, 145, 0.45);
+}
+.boot-bar.indeterminate > div {
+  width: 34%;
+  animation: boot-slide 1.8s ease-in-out infinite;
+}
+@keyframes boot-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(340%); }
+}
+.stage-status {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 2px 4px 0;
+}
+.stage-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+.stage-status strong {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+.stage-status p { margin: 4px 0 0; color: var(--muted); min-height: 1.4em; }
+.constellation .pulse { transform-box: fill-box; transform-origin: center; animation: star-breathe 2.8s ease-in-out infinite; }
+@keyframes star-breathe {
+  0%, 100% { opacity: 0.16; }
+  50% { opacity: 0.42; }
+}
 
 .app {
   display: grid;
@@ -440,6 +494,7 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 .constellation text { fill: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
 .constellation .star-label { fill: var(--ink); }
 .constellation .on { fill: var(--gold); }
+.constellation .pulse { fill: #f2d291; }
 .stage-panel {
   flex: 1;
   min-height: 0;
@@ -463,7 +518,6 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   border-left: 2px solid rgba(242, 210, 145, 0.55);
   background: rgba(8, 12, 22, 0.42);
   backdrop-filter: blur(14px);
-  animation: rise 0.4s ease;
 }
 .badge {
   display: inline-block;

@@ -363,6 +363,11 @@ def run_job(home: Path, job_id: str) -> int:
             total = 0.0
             steps = 0
             t0 = time.perf_counter()
+            last_step_report = t0
+            try:
+                step_total = len(loader)
+            except TypeError:
+                step_total = 0
             for input_ids, labels, attn in loader:
                 if _cancelled(job_dir):
                     _set_stage(job_dir, "train", "cancelled", detail="已取消，可以继续训练")
@@ -386,6 +391,19 @@ def run_job(home: Path, job_id: str) -> int:
                 opt.step()
                 total += float(loss.item())
                 steps += 1
+                now = time.perf_counter()
+                if step_total and (now - last_step_report >= 1.0 or steps == step_total):
+                    last_step_report = now
+                    _update(
+                        job_dir,
+                        status="running",
+                        phase="train",
+                        epoch=epoch,
+                        step=steps,
+                        step_total=step_total,
+                        message=f"正在训练第 {epoch + 1} / {max_epochs} 轮 · {steps}/{step_total}",
+                        best_loss=best_loss,
+                    )
             epoch_loss = total / max(1, steps)
             completed = epoch + 1
             if best_loss is None or epoch_loss < best_loss - 1e-4:
