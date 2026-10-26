@@ -8,6 +8,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+ADB_BIN = os.environ.get("ADB", "adb")
 SERIAL = os.environ["ANDROID_SERIAL"]
 STAGE = Path(os.environ["INAPP_STAGE"])
 SHOTS = STAGE / "shots"
@@ -19,7 +20,7 @@ INSTALL_LABELS = {"Install", "Update", "安装", "更新", "Install anyway", "Mo
 
 def adb(*args, timeout=90, check=True):
     proc = subprocess.run(
-        ["adb", "-s", SERIAL, *args],
+        [ADB_BIN, "-s", SERIAL, *args],
         capture_output=True,
         timeout=timeout,
     )
@@ -48,7 +49,7 @@ def version_info():
 
 def shot(name):
     raw = subprocess.run(
-        ["adb", "-s", SERIAL, "exec-out", "screencap", "-p"],
+        [ADB_BIN, "-s", SERIAL, "exec-out", "screencap", "-p"],
         capture_output=True,
         timeout=40,
     ).stdout

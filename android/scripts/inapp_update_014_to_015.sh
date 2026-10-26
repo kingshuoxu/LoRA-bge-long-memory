@@ -52,7 +52,7 @@ pathlib.Path(sys.argv[2]).write_text("\n".join(keep) + "\n", encoding="utf-8")
 print("\n".join(keep))
 PY
 
-export ANDROID_AVD_HOME="$STAGE/avd-home"
+export ANDROID_AVD_HOME="/tmp/lorabge-inapp-avd"
 rm -rf "$ANDROID_AVD_HOME"
 mkdir -p "$ANDROID_AVD_HOME"
 AVDMANAGER=$(find "$SDK/cmdline-tools" -path '*/bin/avdmanager' | head -1)
@@ -174,5 +174,7 @@ printf 'x\n' >"$STAGE/e2e-marker"
 
 export ANDROID_SERIAL="emulator-$PORT"
 export INAPP_STAGE="$STAGE"
+export ADB
+export PATH="$SDK/platform-tools:$PATH"
 python3 "$ROOT/android/scripts/inapp_update_drive.py"
 echo "in-app update 0.1.4 -> 0.1.5 finished"

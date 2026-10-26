@@ -201,7 +201,9 @@ jobs:
         with:
           name: inapp-update-014
           path: |
-            android/out/inapp-update
+            android/out/inapp-update/shots
+            android/out/inapp-update/*.txt
+            android/out/inapp-update/emulator.log
           if-no-files-found: ignore
 
   publish:
