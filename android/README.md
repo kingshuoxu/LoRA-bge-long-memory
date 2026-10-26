@@ -29,7 +29,7 @@ cd android/apk && ./gradlew assembleDebug
 
 手机浏览器打开预发布里的 `app-debug.apk` 直接安装。第一次打开会自己下载对话基座、bge、训练用的 safetensors 和五个专家,装好就可以用,中间不用电脑。下载页能看到每个文件的进度、速度和当前镜像,可以暂停再继续,也可以只在 Wi-Fi 下下载。清单地址可以改成自己的 URL。
 
-0.1.4 起发布包用同一把钥匙签名,钥匙在 `android/apk/keystore/debug-test-only.jks`,密码写在旁边的说明里,只给测试,不是上架密钥。打开应用,或在设置里点「检查更新」,会读最新的 `android-v*` 发布和同目录的 `update.json`。GitHub 连不上时改走 `ghproxy.net` 和 `mirror.ghproxy.com`。`versionCode` 按 `主版本 * 1000000 + 次版本 * 1000 + 修订` 递增,0.1.5 是 1005。有新版本就给出说明,下载 APK 可以续传,对上 SHA256 之后用系统安装器覆盖安装。第一次要在系统里允许本应用「安装未知来源应用」。
+0.1.4 起发布包用同一把钥匙签名,钥匙在 `android/apk/keystore/debug-test-only.jks`,密码写在旁边的说明里,只给测试,不是上架密钥。打开应用,或在设置里点「检查更新」,会读 `android-v*` 发布列表和同目录的 `update.json`,不读 `releases/latest`。GitHub 连不上时改走 `gh-proxy.com`、`gh-proxy.org`、`ghfast.top`、`gh.llkk.cc` 和 `gh.nxnow.top`;HTML 落地页会跳过。`ghproxy.net` 和 `mirror.ghproxy.com` 不再使用。连不上时用中文说明,并给出发布页。`versionCode` 按 `主版本 * 1000000 + 次版本 * 1000 + 修订` 递增,0.1.6 是 1006。有新版本就给出说明,下载 APK 可以续传,对上 SHA256 之后用系统安装器覆盖安装。第一次要在系统里允许本应用「安装未知来源应用」。
 
 已经装过 0.1.2、更早的包,或标签上那份旧的 0.1.3 的手机,签名对不上,要先卸一次。卸载会清掉应用内部目录和 `Android/data/com.lorabge.memory/` 里的模型、专家、对话和设置。模型下次打开会按 `android-v0.1.0` 的清单重新下载。卸完装上 0.1.4 之后,以后同一把钥匙的版本(包括 0.1.5)在应用里更新,这些数据都留着。清单里某个文件的 SHA256 变了才重新下那个文件。
 

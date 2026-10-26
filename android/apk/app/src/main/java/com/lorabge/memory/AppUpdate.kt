@@ -1,8 +1,10 @@
 package com.lorabge.memory
 
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 
 const val UPDATE_REPO = "kingshuoxu/LoRA-bge-long-memory"
 
@@ -31,13 +33,68 @@ data class UpdateOffer(
     val apkName: String,
 )
 
+// 这些前缀在 2026-10-26 的实测里返回了 JSON 或 APK 字节，不是 HTML 落地页。
+// ghproxy.net 读超时，mirror.ghproxy.com 已经没有 DNS，不再排进链里。
+val UPDATE_MIRROR_PREFIXES: List<String> = listOf(
+    "https://gh-proxy.com/",
+    "https://gh-proxy.org/",
+    "https://ghfast.top/",
+    "https://gh.llkk.cc/",
+    "https://gh.nxnow.top/",
+)
+
+const val BROWSER_APK_URL =
+    "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/android-v0.1.5/app-debug.apk"
+
+const val BROWSER_RELEASES_URL =
+    "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases"
+
 fun mirrorUrls(direct: String): List<String> {
     val clean = direct.trim()
-    return listOf(
-        clean,
-        "https://ghproxy.net/$clean",
-        "https://mirror.ghproxy.com/$clean",
-    )
+    return listOf(clean) + UPDATE_MIRROR_PREFIXES.map { prefix -> prefix + clean }
+}
+
+fun acceptUpdateDocument(text: String): Boolean {
+    val trimmed = text.trimStart()
+    if (trimmed.isEmpty() || trimmed.startsWith("<")) return false
+    if (trimmed.contains("<html", ignoreCase = true) || trimmed.contains("<!DOCTYPE", ignoreCase = true)) return false
+    return try {
+        when {
+            trimmed.startsWith("[") -> {
+                JSONArray(text)
+                true
+            }
+            trimmed.startsWith("{") -> {
+                JSONObject(text)
+                true
+            }
+            else -> false
+        }
+    } catch (_: JSONException) {
+        false
+    }
+}
+
+fun updateUnreachableMessage(): String =
+    "连不上 GitHub 和镜像。可以用手机浏览器打开安装包覆盖安装：$BROWSER_APK_URL 。更新的包在发布页：$BROWSER_RELEASES_URL"
+
+fun explainUpdateFailure(raw: String?): String {
+    val text = raw?.trim().orEmpty()
+    if (text.contains("连不上")) return text
+    if (text.contains("校验不符") || text.contains("空间不够") || text.contains("versionCode")) return text
+    return updateUnreachableMessage()
+}
+
+fun newerTagCandidates(currentVersionCode: Int): List<String> {
+    val major = currentVersionCode / 1_000_000
+    val minor = (currentVersionCode % 1_000_000) / 1_000
+    val patch = currentVersionCode % 1_000
+    val tags = ArrayList<String>()
+    for (next in (patch + 1)..(patch + 4)) {
+        if (next <= 999) tags.add("android-v$major.$minor.$next")
+    }
+    if (minor < 999) tags.add("android-v$major.${minor + 1}.0")
+    return tags
 }
 
 fun releaseListUrls(repo: String = UPDATE_REPO): List<String> =
@@ -99,13 +156,49 @@ fun parseUpdateJson(text: String, offer: UpdateOffer): UpdateOffer {
 fun newerRelease(currentVersionCode: Int, releases: List<UpdateOffer>): UpdateOffer? =
     releases.filter { it.versionCode > currentVersionCode }.maxByOrNull { it.versionCode }
 
+fun bytesOfUpdateText(urls: List<String>): String = bytesOfText(urls, accept = ::acceptUpdateDocument)
+
 fun lookupUpdate(
     currentVersionCode: Int,
     fetchText: (List<String>) -> String,
     repo: String = UPDATE_REPO,
 ): UpdateOffer? {
-    val offer = newerRelease(currentVersionCode, parseGithubReleases(fetchText(releaseListUrls(repo)))) ?: return null
-    return parseUpdateJson(fetchText(updateJsonUrls(repo, offer.tag)), offer)
+    return try {
+        val text = fetchText(releaseListUrls(repo))
+        val offer = newerRelease(currentVersionCode, parseGithubReleases(text)) ?: return null
+        parseUpdateJson(fetchText(updateJsonUrls(repo, offer.tag)), offer)
+    } catch (err: IOException) {
+        finishAfterListFailure(currentVersionCode, fetchText, repo)
+    } catch (err: JSONException) {
+        finishAfterListFailure(currentVersionCode, fetchText, repo)
+    }
+}
+
+private fun finishAfterListFailure(
+    currentVersionCode: Int,
+    fetchText: (List<String>) -> String,
+    repo: String,
+): UpdateOffer? {
+    var best: UpdateOffer? = null
+    var sawMissing = false
+    var sawOther = false
+    for (tag in newerTagCandidates(currentVersionCode)) {
+        val name = versionNameOfTag(tag) ?: continue
+        val code = versionCodeOf(name)
+        val stub = UpdateOffer(tag, name, code, "", "", 0, "app-debug.apk")
+        try {
+            val parsed = parseUpdateJson(fetchText(updateJsonUrls(repo, tag)), stub)
+            val currentBest = best
+            if (currentBest == null || parsed.versionCode > currentBest.versionCode) best = parsed
+        } catch (err: IOException) {
+            if (err.message?.contains("HTTP 404") == true) sawMissing = true else sawOther = true
+        } catch (_: Exception) {
+            sawOther = true
+        }
+    }
+    if (best != null) return best
+    if (sawMissing && !sawOther) return null
+    throw IOException(updateUnreachableMessage())
 }
 
 fun downloadUpdate(

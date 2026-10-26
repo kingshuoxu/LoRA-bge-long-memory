@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update check over the real network
+        run: python3 android/scripts/check_update_net.py
+
       - name: Nebula lattice classifier
         run: node android/apk/app/src/main/assets/nebula/nebula-pixels.test.mjs
 

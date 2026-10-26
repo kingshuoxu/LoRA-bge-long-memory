@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Update check over the real network
+        run: python3 android/scripts/check_update_net.py
+
       - name: Nebula lattice classifier
         run: node android/apk/app/src/main/assets/nebula/nebula-pixels.test.mjs
 
@@ -73,7 +76,7 @@ jobs:
       - name: Write the update manifest
         run: |
           set -eu
-          TAG=android-v0.1.5
+          TAG=android-v0.1.6
           STAGE=android/out/release
           mkdir -p "$STAGE"
           APK=android/apk/app/build/outputs/apk/debug/app-debug.apk
@@ -168,8 +171,41 @@ jobs:
             android/out/upgrade/emulator.log
           if-no-files-found: ignore
 
+  inapp-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install emulator pieces
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq unzip ffmpeg xvfb x11-utils libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
+          test -n "$CMDLINE"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' 24333f8a63b6825ea9c5514f83c2829b004d1fee d56f5187479451eabf01fb78af6dfcb131a6481e > "$SDK/licenses/android-sdk-license"
+          "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; else echo "没有 /dev/kvm" >&2; exit 1; fi
+
+      - name: Published 0.1.4 checks for updates and installs 0.1.5
+        run: sh android/scripts/inapp_update_014_to_015.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: inapp-update-014
+          path: |
+            android/out/inapp-update
+          if-no-files-found: ignore
+
   publish:
-    needs: [build, upgrade]
+    needs: [build, upgrade, inapp-update]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -187,7 +223,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG=android-v0.1.5
+          TAG=android-v0.1.6
           STAGE=android/out/release
           python3 - << 'PY'
           import hashlib, json, pathlib
@@ -195,8 +231,8 @@ jobs:
           meta = json.loads((stage / "update.json").read_text())
           apk = (stage / "app-debug.apk").read_bytes()
           digest = hashlib.sha256(apk).hexdigest()
-          assert meta["versionName"] == "0.1.5"
-          assert meta["versionCode"] == 1005
+          assert meta["versionName"] == "0.1.6"
+          assert meta["versionCode"] == 1006
           assert meta["sha256"] == digest
           assert meta["size"] == len(apk)
           sums = (stage / "SHA256SUMS").read_text().split()
@@ -204,6 +240,8 @@ jobs:
           PY
           NOTES=$(cat << EOF
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
+
+          0.1.6 修了设置里的「检查更新」。直连 GitHub 失败会继续试 gh-proxy.com、gh-proxy.org、ghfast.top、gh.llkk.cc 和 gh.nxnow.top。HTML 落地页会被跳过。ghproxy.net 超时、mirror.ghproxy.com 没有 DNS，不再使用。连不上时界面用中文说明，并给出发布页上的安装包。不读 releases/latest。
 
           0.1.5 修了真机上星云背景变成整屏棕色格子噪点的问题。银河着色器改用高精度和不会溢出的散列，粒子改成面向相机的四边形，直接画进 8 位帧缓冲，不再经过半精度离屏目标和点精灵。画面若仍被判成格子噪点，就在同一页改画 canvas 星云，专家标签和事实卡还在。
 
@@ -229,5 +267,5 @@ jobs:
           EOF
           )
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.5" --notes "$NOTES"
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.6" --notes "$NOTES"
           gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS" --clobber

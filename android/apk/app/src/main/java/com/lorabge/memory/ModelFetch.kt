@@ -82,11 +82,16 @@ fun sha256File(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-fun httpOpen(url: String, offset: Long): RemoteBody {
+fun httpOpen(
+    url: String,
+    offset: Long,
+    connectTimeoutMs: Int = 20_000,
+    readTimeoutMs: Int = 60_000,
+): RemoteBody {
     val conn = URL(url).openConnection() as HttpURLConnection
     conn.instanceFollowRedirects = true
-    conn.connectTimeout = 20_000
-    conn.readTimeout = 60_000
+    conn.connectTimeout = connectTimeoutMs
+    conn.readTimeout = readTimeoutMs
     conn.setRequestProperty("User-Agent", "lorabge-memory/0.1")
     if (offset > 0) conn.setRequestProperty("Range", "bytes=$offset-")
     val code = conn.responseCode
@@ -97,11 +102,22 @@ fun httpOpen(url: String, offset: Long): RemoteBody {
     return RemoteBody(code, total, stream)
 }
 
-fun bytesOfText(urls: List<String>, limit: Int = 8 * 1024 * 1024): String {
+fun bytesOfText(
+    urls: List<String>,
+    limit: Int = 8 * 1024 * 1024,
+    accept: (String) -> Boolean = { true },
+    opener: (String) -> RemoteBody = { url -> httpOpen(url, 0, 8_000, 20_000) },
+): String {
     var last = "没有地址"
-    for (url in urls) {
+    var directMissing = false
+    urls.forEachIndexed { index, url ->
         try {
-            httpOpen(url, 0).use { body ->
+            opener(url).use { body ->
+                if (body.code == 404) {
+                    if (index == 0) directMissing = true
+                    last = "HTTP 404"
+                    return@use
+                }
                 if (body.code !in 200..299) {
                     last = "HTTP ${body.code}"
                     return@use
@@ -114,12 +130,18 @@ fun bytesOfText(urls: List<String>, limit: Int = 8 * 1024 * 1024): String {
                     got += n
                 }
                 if (got > limit) throw java.io.IOException("清单太大")
-                return String(buf, 0, got, Charsets.UTF_8)
+                val text = String(buf, 0, got, Charsets.UTF_8)
+                if (!accept(text)) {
+                    last = "不是 JSON"
+                    return@use
+                }
+                return text
             }
         } catch (err: Exception) {
             last = err.message ?: "失败"
         }
     }
+    if (directMissing) throw java.io.IOException("HTTP 404")
     throw java.io.IOException(last)
 }
 

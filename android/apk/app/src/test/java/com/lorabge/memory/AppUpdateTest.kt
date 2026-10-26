@@ -7,6 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
+import java.net.SocketException
 import java.security.KeyStore
 import java.security.MessageDigest
 
@@ -23,13 +25,16 @@ class AppUpdateTest {
         assertTrue(versionCodeOf("0.1.4") > versionCodeOf("0.1.3"))
         assertEquals(1005, versionCodeOf("0.1.5"))
         assertTrue(versionCodeOf("0.1.5") > versionCodeOf("0.1.4"))
+        assertEquals(1006, versionCodeOf("0.1.6"))
+        assertTrue(versionCodeOf("0.1.6") > versionCodeOf("0.1.5"))
         assertEquals("0.1.3", versionNameOfTag("android-v0.1.3"))
         assertEquals("0.1.4", versionNameOfTag("android-v0.1.4"))
         assertEquals("0.1.5", versionNameOfTag("android-v0.1.5"))
+        assertEquals("0.1.6", versionNameOfTag("android-v0.1.6"))
         assertNull(versionNameOfTag("v0.1.3"))
         assertNull(versionNameOfTag("android-v0.1"))
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains(""""0.1.5""""))
+        assertTrue(gradle.contains(""""0.1.6""""))
         assertTrue(gradle.contains("releaseVersionCode(appVersion)"))
     }
 
@@ -71,17 +76,22 @@ class AppUpdateTest {
     }
 
     @Test
-    fun mirrorsTryGitHubThenChinaProxies() {
+    fun mirrorsTryGitHubThenWorkingProxies() {
         val urls = releaseListUrls()
         assertEquals("https://api.github.com/repos/kingshuoxu/LoRA-bge-long-memory/releases?per_page=30", urls[0])
-        assertTrue(urls[1].startsWith("https://ghproxy.net/https://api.github.com/"))
-        assertTrue(urls[2].startsWith("https://mirror.ghproxy.com/https://api.github.com/"))
-        val apk = apkUrls(UPDATE_REPO, "android-v0.1.3", "app-debug.apk")
+        assertTrue(urls.any { it.startsWith("https://gh-proxy.com/https://api.github.com/") })
+        assertTrue(urls.any { it.startsWith("https://gh-proxy.org/https://api.github.com/") })
+        assertTrue(urls.any { it.startsWith("https://ghfast.top/https://api.github.com/") })
+        assertFalse(urls.any { it.contains("releases/latest") })
+        assertFalse(urls.any { it.contains("ghproxy.net") || it.contains("mirror.ghproxy.com") })
+        val apk = apkUrls(UPDATE_REPO, "android-v0.1.5", "app-debug.apk")
         assertEquals(
-            "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/android-v0.1.3/app-debug.apk",
+            "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/android-v0.1.5/app-debug.apk",
             apk[0],
         )
-        assertTrue(apk[1].contains("ghproxy.net"))
+        assertTrue(apk.any { it.contains("https://gh-proxy.com/https://github.com/") })
+        assertFalse(apk.any { it.contains("releases/latest") })
+        assertEquals(listOf("android-v0.1.5", "android-v0.1.6", "android-v0.1.7", "android-v0.1.8", "android-v0.2.0"), newerTagCandidates(1004))
     }
 
     @Test
@@ -102,7 +112,74 @@ class AppUpdateTest {
         assertEquals("更新说明", offer.notes)
         assertTrue(seen[0][0].contains("api.github.com"))
         assertTrue(seen[1][0].contains("update.json"))
-        assertTrue(seen[0].any { it.contains("ghproxy.net") })
+        assertTrue(seen[0].any { it.contains("gh-proxy.com") })
+        assertFalse(seen[0].any { it.contains("releases/latest") })
+    }
+
+    @Test
+    fun lookupUpdateSkipsADeadFirstUrlAndHtml() {
+        val sha = "ab".repeat(32)
+        val listJson = """[{"tag_name":"android-v0.1.5","body":"notes","assets":[{"name":"app-debug.apk"}]}]"""
+        val updateJson = """{"versionName":"0.1.5","versionCode":1005,"sha256":"$sha","size":51,"apk":"app-debug.apk"}"""
+        var apiCalls = 0
+        var jsonCalls = 0
+        val offer = lookupUpdate(1004) { urls ->
+            bytesOfText(urls, accept = ::acceptUpdateDocument, opener = { url ->
+                val direct = url.startsWith("https://api.github.com/") || url.startsWith("https://github.com/")
+                val api = url.contains("per_page=30")
+                if (direct) throw SocketException(if (api) "Software caused connection abort" else "connection closed")
+                val body = if (api) {
+                    apiCalls += 1
+                    if (apiCalls == 1) "<html><body>landing</body></html>" else listJson
+                } else {
+                    jsonCalls += 1
+                    if (jsonCalls == 1) "<!DOCTYPE html><html></html>" else updateJson
+                }
+                RemoteBody(200, body.length.toLong(), ByteArrayInputStream(body.toByteArray()))
+            })
+        }
+        assertEquals("0.1.5", offer!!.versionName)
+        assertEquals(1005, offer.versionCode)
+        assertTrue(offer.versionCode > 1004)
+        assertEquals(sha, offer.sha256)
+        assertTrue(apiCalls >= 2)
+        assertTrue(jsonCalls >= 2)
+    }
+
+    @Test
+    fun lookupUpdateReadsUpdateJsonWhenTheReleaseListIsUnreachable() {
+        val sha = "ef".repeat(32)
+        val offer = lookupUpdate(1004) { urls ->
+            if (urls.any { it.contains("per_page=30") }) throw IOException("Software caused connection abort")
+            """{"versionName":"0.1.5","versionCode":1005,"sha256":"$sha","size":9,"apk":"app-debug.apk"}"""
+        }
+        assertEquals(1005, offer!!.versionCode)
+        assertEquals("0.1.5", offer.versionName)
+    }
+
+    @Test
+    fun unreachableUpdateExplainsInChinese() {
+        val err = try {
+            lookupUpdate(1004) { urls ->
+                bytesOfText(urls, accept = ::acceptUpdateDocument, opener = {
+                    throw SocketException("Software caused connection abort")
+                })
+            }
+            null
+        } catch (err: IOException) {
+            err
+        }
+        val message = err!!.message.orEmpty()
+        assertTrue(message.contains("连不上"))
+        assertTrue(message.contains("GitHub"))
+        assertTrue(message.contains("镜像"))
+        assertTrue(message.contains("android-v0.1.5/app-debug.apk"))
+        assertTrue(message.contains("https://github.com/kingshuoxu/LoRA-bge-long-memory/releases"))
+        assertFalse(message.contains("releases/latest"))
+        assertFalse(message.contains("Software caused connection abort"))
+        val explained = explainUpdateFailure("connection closed")
+        assertTrue(explained.contains("连不上"))
+        assertEquals("校验不符", explainUpdateFailure("校验不符"))
     }
 
     @Test

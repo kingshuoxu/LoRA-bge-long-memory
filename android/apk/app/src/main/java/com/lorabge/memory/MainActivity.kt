@@ -133,7 +133,7 @@ private fun PhoneApp(
         val langNow = lang
         Thread {
             val offer = try {
-                lookupUpdate(packageVersion, ::bytesOfText)
+                lookupUpdate(packageVersion, ::bytesOfUpdateText)
             } catch (_: Throwable) {
                 null
             }
@@ -234,7 +234,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.5"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.6"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -526,7 +526,7 @@ private fun PhoneApp(
                 updateMessage = if (langNow == "en") "Checking" else "正在检查"
                 Thread {
                     try {
-                        val offer = lookupUpdate(packageVersion, ::bytesOfText)
+                        val offer = lookupUpdate(packageVersion, ::bytesOfUpdateText)
                         if (offer == null) {
                             updateOffer = null
                             updatePhase = "latest"
@@ -542,7 +542,7 @@ private fun PhoneApp(
                         }
                     } catch (ex: Throwable) {
                         updatePhase = "error"
-                        updateMessage = ex.message ?: if (langNow == "en") "Couldn't check" else "检查失败"
+                        updateMessage = explainUpdateFailure(ex.message)
                     }
                 }.start()
             }
@@ -570,7 +570,7 @@ private fun PhoneApp(
                         updateMessage = ""
                     } catch (ex: Throwable) {
                         updatePhase = "error"
-                        updateMessage = ex.message ?: if (langNow == "en") "Update failed" else "更新失败"
+                        updateMessage = explainUpdateFailure(ex.message)
                     } finally {
                         updateBusy = false
                     }
