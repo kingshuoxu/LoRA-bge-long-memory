@@ -339,12 +339,17 @@ def main():
     sha = ""
     size = 0
     if apk_path:
-        adb("pull", apk_path, str(pulled), timeout=180)
-        if pulled.exists():
-            import hashlib
-            data = pulled.read_bytes()
-            size = len(data)
-            sha = hashlib.sha256(data).hexdigest()
+        # /data/app paths contain "==". adb pull treats that as a sync separator and dies mid-file.
+        safe = "/data/local/tmp/lorabge-installed.apk"
+        quoted = "'" + apk_path.replace("'", "'\\''") + "'"
+        adb("shell", f"cp {quoted} {safe} && chmod 644 {safe}", timeout=60)
+        digest = adb("shell", f"sha256sum {safe}; wc -c < {safe}", timeout=60).stdout.decode("utf-8", "replace")
+        lines = [line.strip() for line in digest.splitlines() if line.strip()]
+        if lines:
+            sha = lines[0].split()[0]
+        if len(lines) > 1 and lines[1].isdigit():
+            size = int(lines[1])
+        adb("pull", safe, str(pulled), timeout=180, check=False)
     code, name = version_info()
     report = "\n".join([
         "result=PASS",
