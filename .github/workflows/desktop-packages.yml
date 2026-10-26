@@ -7,8 +7,9 @@ on:
     tags:
       - "desktop-v*"
 
+# 按这次提交分组。否则把 0.2.7 推上去会取消还在打包的 0.2.6。
 concurrency:
-  group: desktop-packages-${{ github.ref }}
+  group: desktop-packages-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
