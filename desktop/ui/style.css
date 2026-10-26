@@ -640,6 +640,16 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   color: rgba(255, 228, 176, 0.98);
   animation: nebula-shimmer 3.4s ease-in-out infinite;
 }
+.nebula-label.fact .name {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 236, 210, 0.96);
+}
+.nebula-label.source .name {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: rgba(186, 214, 232, 0.94);
+}
 .nebula-label.lit .name,
 .nebula-label.lit .meta { color: rgba(255, 246, 226, 0.98); }
 @keyframes nebula-shimmer {

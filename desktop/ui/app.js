@@ -905,7 +905,14 @@ async function loadNebula() {
         tip.style.left = `${x + 14}px`;
         tip.style.top = `${y + 14}px`;
         if (payload.kind === "fact") {
-          tip.innerHTML = `<strong>${esc(payload.fact.statement || payload.fact.value)}</strong><div class="muted">${payload.fact.superseded ? t("fact.dim") : t("fact.live")} · ${esc(tx(payload.fact.expert_label || ""))}</div>${factScoreLine(payload.fact)}`;
+          const fact = payload.fact;
+          const title = fact.statement || fact.value || fact.attr || "";
+          const bits = [];
+          [fact.attr, fact.value].forEach((bit) => {
+            if (bit && !bits.includes(bit) && bit !== title) bits.push(bit);
+          });
+          const detail = bits.join(" · ");
+          tip.innerHTML = `<strong>${esc(title)}</strong><div class="muted">${fact.superseded ? t("fact.dim") : t("fact.live")}${detail ? ` · ${esc(detail)}` : ""}</div>${factScoreLine(fact)}`;
         } else if (payload.kind === "conversation") {
           tip.innerHTML = `<strong>${esc(payload.conversation.title)}</strong><div class="muted">${esc(payload.conversation.snippet || "")}</div>`;
         } else if (payload.kind === "expert") {

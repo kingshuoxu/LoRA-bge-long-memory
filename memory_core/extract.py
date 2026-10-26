@@ -898,3 +898,66 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
         "statement": statement,
         "qa": qa,
     }
+
+
+# 说话人代词不是这条记忆的名字。问句仍用「我 / I」，星云和状态条用事物或取值。
+_SPEAKER = frozenset({"我", "我们", "咱们", "咱", "i", "me", "my", "mine", "we", "our", "ours", "us"})
+
+
+def speaker_pronoun(entity: str) -> bool:
+    return str(entity or "").strip().casefold() in _SPEAKER
+
+
+def _label_parts(display: str) -> list[str]:
+    text = str(display or "").strip()
+    if text.endswith("等"):
+        text = text[:-1]
+    return [part.strip() for part in re.split(r"[、,]", text) if part.strip()]
+
+
+def pronoun_only_label(display: str) -> bool:
+    parts = _label_parts(display)
+    return bool(parts) and all(speaker_pronoun(part) for part in parts)
+
+
+def _remembered_piece(fact: dict) -> str:
+    value = str(fact.get("value") or fact.get("answer") or "").strip()
+    attr = str(fact.get("attr") or "").strip()
+    if value and not speaker_pronoun(value) and len(value) <= 32:
+        return value
+    if attr and not speaker_pronoun(attr):
+        return attr
+    if value and not speaker_pronoun(value):
+        return value[:32]
+    return ""
+
+
+def _join_labels(labels: list[str]) -> str:
+    shown = "、".join(labels[:2])
+    if len(labels) > 2:
+        shown += "等"
+    return shown
+
+
+def expert_display_name(facts: list[dict]) -> str:
+    """有名字的主体仍用主体。只有「我 / I」时，用记住的取值，不用代词当专家名。"""
+    entities: list[str] = []
+    pieces: list[str] = []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        entity = str(fact.get("entity") or "").strip()
+        if entity and not speaker_pronoun(entity) and entity not in entities:
+            entities.append(entity)
+        piece = _remembered_piece(fact)
+        if piece and piece not in pieces:
+            pieces.append(piece)
+    return _join_labels(entities or pieces)
+
+
+def visible_display_name(display: str, facts: list[dict] | None) -> str:
+    """已存的名字若只是说话人代词，改显示成取值。不改事实里的实体，回忆仍认「我」。"""
+    text = str(display or "").strip()
+    if text and not pronoun_only_label(text):
+        return text
+    return expert_display_name(list(facts or [])) or text

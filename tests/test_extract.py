@@ -2,7 +2,16 @@ import json
 import unittest
 from pathlib import Path
 
-from memory_core.extract import entailed, expand_training_fact, pattern_extract, refresh_stored_fact, uncovered_claims
+from memory_core.extract import (
+    entailed,
+    expand_training_fact,
+    expert_display_name,
+    pattern_extract,
+    pronoun_only_label,
+    refresh_stored_fact,
+    uncovered_claims,
+    visible_display_name,
+)
 from memory_core.prompts import with_brief
 
 TURNS = [
@@ -112,6 +121,23 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(mother["entity"], "我")
         self.assertEqual(mother["attr"], "妈妈的名字")
         self.assertEqual(mother["value"], "兰兰")
+        cat = pattern_extract("我的猫叫咪咪")[0]
+        self.assertEqual(cat["entity"], "我")
+        self.assertEqual(cat["attr"], "猫的名字")
+        self.assertEqual(cat["value"], "咪咪")
+        self.assertEqual(expert_display_name([cat]), "咪咪")
+        self.assertEqual(expert_display_name([fact, dog]), "咪咪、豆包")
+        self.assertTrue(pronoun_only_label("我"))
+        self.assertTrue(pronoun_only_label("I"))
+        self.assertFalse(pronoun_only_label("沈星河"))
+        named = pattern_extract("沈星河的猫叫暮雪")[0]
+        self.assertEqual(named["entity"], "沈星河")
+        self.assertEqual(expert_display_name([named]), "沈星河")
+        self.assertEqual(visible_display_name("我", [cat]), "咪咪")
+        self.assertEqual(visible_display_name("沈星河", [named]), "沈星河")
+        mine = pattern_extract("My cat is called Mimi.")[0]
+        self.assertEqual(mine["entity"], "I")
+        self.assertEqual(expert_display_name([mine]), "Mimi")
 
     def test_general_frames_cover_company_and_paragraph(self):
         zh = "\n".join([

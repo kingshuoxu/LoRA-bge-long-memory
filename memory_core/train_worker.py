@@ -22,6 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from memory_core.device import pick_device, train_dtype
 from memory_core.models_mgr import ensure_models, qwen_path
 from memory_core.routing import bind_bge
+from memory_core.extract import visible_display_name
 from memory_core.store import atomic_write_json, next_batch_id, read_json, register_expert
 
 from memory_core.prompts import has_cjk, system_for, with_brief
@@ -482,7 +483,7 @@ def run_job(home: Path, job_id: str) -> int:
             entity = str(fact.get("entity") or "").strip()
             if len(entity) >= 2 and entity not in entities:
                 entities.append(entity)
-        display = request.get("display_name") or "、".join(entities[:2]) or name
+        display = visible_display_name(str(request.get("display_name") or ""), facts) or "、".join(entities[:2]) or name
         memory_facts = request.get("memory_facts") or facts
         register_expert(
             experts_dir,

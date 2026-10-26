@@ -240,6 +240,10 @@ def load_record(experts_dir: Path, entry: dict, writable: bool) -> ExpertRecord 
         texts = json.loads(texts_path.read_text(encoding="utf-8")) if texts_path.is_file() else []
         entities = extract_entities_from_key_texts(texts)
         display = _display_name(entities, name)
+    from memory_core.extract import visible_display_name
+
+    rows = list(fact_memory.get("facts") or []) if isinstance(fact_memory, dict) else []
+    display = visible_display_name(display, rows)
     return ExpertRecord(
         name=name,
         directory=directory,

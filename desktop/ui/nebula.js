@@ -1,4 +1,5 @@
 import * as THREE from "./vendor/three.module.js";
+import { expertCaption, factCaption, satelliteOffset, sourceOffset } from "./nebula-layout.js";
 
 const PALETTES = [
   { core: [1.15, 0.28, 0.16], mid: [0.72, 0.14, 0.12], edge: [0.38, 0.07, 0.09], wisp: [0.98, 0.62, 0.18] },
@@ -707,14 +708,35 @@ export function createNebula(canvas, hooks) {
   }
 
   function fillLabel(item) {
-    let name = (item.expert && (item.expert.display_name || item.expert.name)) || "";
+    const nameEl = item.el.querySelector(".name");
+    const metaEl = item.el.querySelector(".meta");
+    const tagEl = item.el.querySelector(".tag");
+    if (item.kind === "fact") {
+      const caption = factCaption(item.fact || {});
+      if (nameEl) nameEl.textContent = caption.name;
+      if (metaEl) metaEl.textContent = caption.meta ? ` · ${caption.meta}` : "";
+      if (tagEl) {
+        tagEl.hidden = true;
+        tagEl.textContent = "";
+      }
+      return;
+    }
+    if (item.kind === "conversation") {
+      const conv = item.conversation || {};
+      if (nameEl) nameEl.textContent = conv.title || "";
+      const word = window.i18n && window.i18n.t ? window.i18n.t("nebula.source") : "Source";
+      if (metaEl) metaEl.textContent = ` · ${word}`;
+      if (tagEl) {
+        tagEl.hidden = true;
+        tagEl.textContent = "";
+      }
+      return;
+    }
+    let name = expertCaption(item.expert, item.facts || []);
     if (window.i18n && window.i18n.getLocale() === "en" && window.i18n.foreignName) name = window.i18n.foreignName(name);
     const countText = window.i18n && window.i18n.t
       ? window.i18n.t("nebula.count", { n: item.count })
       : String(item.count);
-    const nameEl = item.el.querySelector(".name");
-    const metaEl = item.el.querySelector(".meta");
-    const tagEl = item.el.querySelector(".tag");
     if (nameEl) nameEl.textContent = name;
     if (metaEl) metaEl.textContent = ` · ${countText}`;
     if (!tagEl) return;
@@ -883,7 +905,10 @@ export function createNebula(canvas, hooks) {
       item.el.style.left = `${best.x}px`;
       item.el.style.top = `${best.y}px`;
       item.el.dataset.cloud = `${item.cx.toFixed(1)},${item.cy.toFixed(1)},${item.screenR.toFixed(1)}`;
-      item.el.classList.toggle("lit", Boolean(recall && recall.expertName === item.group.userData.expertName));
+      const litExpert = item.kind !== "fact" && item.kind !== "conversation"
+        && recall && recall.expertName === item.group.userData.expertName;
+      const litFact = item.kind === "fact" && recall && recall.nodeIds && recall.nodeIds.has(item.fact && item.fact.id);
+      item.el.classList.toggle("lit", Boolean(litExpert || litFact));
       if (svg) appendLeader(svg, item, best);
     });
   }
@@ -925,7 +950,8 @@ export function createNebula(canvas, hooks) {
       counts.set(fact.expert, (counts.get(fact.expert) || 0) + 1);
     });
     const maxCount = Math.max(1, ...counts.values());
-    const orbit = Math.max(14, experts.length * 2.15);
+    // 只有一团时放在画面中央，事实和来源才能在旁边展开，而不是挤在轨道底端。
+    const orbit = experts.length <= 1 ? 0 : Math.max(14, experts.length * 2.15);
     experts.forEach((expert, index) => {
       const active = counts.get(expert.name) || 0;
       const fresh = Boolean(expert.writable && expert.explicit);
@@ -954,22 +980,17 @@ export function createNebula(canvas, hooks) {
     grouped.forEach((group, name) => {
       const origin = nodePos.get(`expert:${name}`) || new THREE.Vector3();
       const cloud = expertClouds.get(name);
-      const weight = cloud ? cloud.userData.weight : 1;
       const tint = cloud && cloud.userData.fresh ? [1.0, 0.9, 0.62] : [1.0, 0.9, 0.74];
       group.forEach((fact, index) => {
-        const golden = index * 2.399963;
-        const ring = (0.55 + Math.sqrt((index + 0.5) / group.length) * 1.55) * weight;
-        const pos = origin.clone().add(new THREE.Vector3(
-          Math.cos(golden) * ring,
-          Math.sin(golden * 1.17) * ring * 0.62,
-          ((index % 5) - 2) * 0.16,
-        ));
+        const reach = cloud ? (cloud.userData.radius || 8) : 8;
+        const off = satelliteOffset(index, group.length, reach);
+        const pos = origin.clone().add(new THREE.Vector3(off.x, off.y, off.z));
         nodePos.set(fact.id, pos.clone());
         const hits = Number(fact.recall_hits) || 0;
         const recency = (index + 1) / group.length;
         const bright = fact.superseded ? 0.22 : Math.min(1, 0.42 + Math.min(0.38, hits * 0.2) + recency * 0.28);
         starPositions.push(pos.x, pos.y, pos.z);
-        starSizes.push(fact.superseded ? 16 : 26 + bright * 22);
+        starSizes.push(fact.superseded ? 16 : 36 + bright * 18);
         starBrights.push(fact.superseded ? 0.28 : 0.48 + bright * 0.52);
         starFlares.push(1);
         starTints.push(tint[0], tint[1], tint[2]);
@@ -981,9 +1002,9 @@ export function createNebula(canvas, hooks) {
           depthTest: false,
           color: 0xffffff,
         }));
-        pick.scale.setScalar(1.4);
+        pick.scale.setScalar(2.2);
         pick.position.copy(pos);
-        pick.userData = { kind: "fact", fact, baseScale: 1.4 };
+        pick.userData = { kind: "fact", fact, baseScale: 2.2 };
         world.add(pick);
         pickables.push(pick);
         factMeshes.set(fact.id, pick);
@@ -1015,7 +1036,22 @@ export function createNebula(canvas, hooks) {
       });
       if (!count) return;
       anchor.multiplyScalar(1 / count);
-      const pos = anchor.clone().add(new THREE.Vector3(-2.4 - (index % 2) * 0.45, (index % 3) * 0.35 - 0.4, 0.15));
+      const expertAt = new THREE.Vector3();
+      let expertsFound = 0;
+      related.forEach((link) => {
+        const other = link.source === conv.id ? link.target : link.source;
+        const factPos = nodePos.get(other);
+        if (!factPos) return;
+        const fact = facts.find((item) => item.id === other);
+        const home = fact ? nodePos.get(`expert:${fact.expert}`) : null;
+        if (home) {
+          expertAt.add(home);
+          expertsFound += 1;
+        }
+      });
+      if (expertsFound) expertAt.multiplyScalar(1 / expertsFound);
+      const off = sourceOffset(anchor, expertsFound ? expertAt : anchor);
+      const pos = new THREE.Vector3(off.x, off.y, off.z);
       nodePos.set(conv.id, pos.clone());
       convDots.push(pos);
       const pick = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -1025,7 +1061,7 @@ export function createNebula(canvas, hooks) {
         depthTest: false,
         color: 0xffffff,
       }));
-      pick.scale.setScalar(0.9);
+      pick.scale.setScalar(1.8);
       pick.position.copy(pos);
       pick.userData = { kind: "conversation", conversation: conv };
       world.add(pick);
@@ -1040,7 +1076,7 @@ export function createNebula(canvas, hooks) {
       const tints = new Float32Array(n * 3);
       convDots.forEach((pos, index) => {
         positions.set([pos.x, pos.y, pos.z], index * 3);
-        sizes[index] = 15;
+        sizes[index] = 22;
         brights[index] = 0.92;
         flares[index] = 1;
         tints.set([0.62, 0.84, 1.0], index * 3);
@@ -1050,6 +1086,16 @@ export function createNebula(canvas, hooks) {
     }
 
     links.forEach((link) => {
+      if (link.kind === "member") {
+        const fact = nodePos.get(link.source);
+        const expert = nodePos.get(link.target);
+        if (!fact || !expert) return;
+        const filament = addFilament(expert, fact, 0xe7c98a, 0.5);
+        filament.source = link.target;
+        filament.target = link.source;
+        filament.role = "member";
+        return;
+      }
       if (link.kind === "source") {
         const fact = nodePos.get(link.source);
         const conv = nodePos.get(link.target);
@@ -1088,13 +1134,46 @@ export function createNebula(canvas, hooks) {
       const item = {
         el,
         group,
+        kind: "expert",
         expert,
+        facts: facts.filter((fact) => fact.expert === expert.name),
         count: counts.get(expert.name) || 0,
         fresh: Boolean(group.userData.fresh),
       };
       fillLabel(item);
       layer.appendChild(el);
       labels.push(item);
+    });
+    const addSatelliteLabel = (pos, kind, extra) => {
+      if (!layer) return;
+      const group = new THREE.Group();
+      group.position.copy(pos);
+      group.userData.radius = 1.5;
+      world.add(group);
+      const el = document.createElement("div");
+      el.className = `nebula-label ${kind}`;
+      const name = document.createElement("span");
+      name.className = "name";
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.hidden = true;
+      el.append(name, meta, tag);
+      const item = { el, group, kind, ...extra };
+      fillLabel(item);
+      layer.appendChild(el);
+      labels.push(item);
+    };
+    facts.forEach((fact) => {
+      const pos = nodePos.get(fact.id);
+      if (!pos) return;
+      addSatelliteLabel(pos, "fact", { fact });
+    });
+    conversations.forEach((conv) => {
+      const pos = nodePos.get(conv.id);
+      if (!pos) return;
+      addSatelliteLabel(pos, "conversation", { conversation: conv });
     });
 
     const freshGroups = [...expertClouds.values()].filter((group) => group.userData.fresh);
@@ -1121,11 +1200,17 @@ export function createNebula(canvas, hooks) {
       box.expandByPoint(group.position.clone().add(new THREE.Vector3(reach, reach * 0.7, 1.2)));
       box.expandByPoint(group.position.clone().add(new THREE.Vector3(-reach, -reach * 0.7, -1.2)));
     });
+    nodePos.forEach((pos, id) => {
+      if (String(id).startsWith("expert:")) return;
+      box.expandByPoint(pos.clone().add(new THREE.Vector3(2.4, 1.8, 0.4)));
+      box.expandByPoint(pos.clone().add(new THREE.Vector3(-2.4, -1.8, -0.4)));
+    });
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 6, 8));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     framed = {
       center: sphere.center.clone(),
       radius: Math.max(12, sphere.radius * 0.9),
+      zoom: facts.length || conversations.length ? 1.28 : 0.53,
     };
     applyFrame(true);
     placeLabels();
@@ -1141,7 +1226,9 @@ export function createNebula(canvas, hooks) {
     const distX = radius / (Math.tan(fov / 2) * aspect);
     // 全页星云保持原来的取景。对话侧栏改远一点，云团连同边距都落在视口里。
     const page = Boolean(canvas.closest("#nebula-host"));
-    const dist = Math.max(distY, distX) * (page ? 0.53 : 1.4);
+    // 有事实和来源时留出标签空档。只有云团时仍用原来的近景。
+    const pageZoom = framed.zoom || 0.53;
+    const dist = Math.max(distY, distX) * (page ? pageZoom : 1.4);
     camTarget.set(center.x, center.y, center.z + dist);
     if (immediate) {
       look.copy(lookTarget);

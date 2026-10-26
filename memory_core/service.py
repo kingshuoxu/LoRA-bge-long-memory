@@ -28,6 +28,7 @@ from memory_core.extract import (
     company_pipeline_extract,
     entailed,
     expand_training_fact,
+    expert_display_name,
     uncovered_claims,
     model_extract,
     pattern_extract,
@@ -795,14 +796,10 @@ class MemoryService:
             conv = self.convos.get(conv_id)
             if conv is not None:
                 sources.append({"id": conv_id, "title": conv["title"]})
-        entities = []
         for item in expanded:
             if not item.get("source_conversations"):
                 item["source_conversations"] = sources
-        for fact in expanded:
-            if fact["entity"] not in entities:
-                entities.append(fact["entity"])
-        display = "、".join(entities[:2]) + ("等" if len(entities) > 2 else "")
+        display = expert_display_name(expanded)
         job_id = time.strftime("job_%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:4]
         job_dir = self.jobs_dir / job_id
         job_dir.mkdir(parents=True)
