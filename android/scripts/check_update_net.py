@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Walk the same mirror list as AppUpdate.kt over the real network.
 
-Direct GitHub is recorded, then skipped. A later mirror must return a real
-release list and update.json with versionCode > 1004, plus an APK that starts
-with the zip magic. HTML landing pages do not count.
+Direct GitHub is recorded, then skipped. A later mirror must return update.json
+with versionCode 1005 and an APK that starts with the zip magic. HTML landing
+pages do not count. The release list is preferred, but these proxies answer
+api.github.com with 403; the app then probes update.json by tag, and that
+path is enough.
 """
 
 import json
@@ -112,17 +114,13 @@ def main():
     print("--- skipped direct ---")
     if api_hit:
         print(f"release list {api_hit['versionCode']} via {api_hit['url']}")
+    else:
+        print("release list: no mirror returned JSON; app probes update.json by tag")
     if json_hit:
         print(f"update.json {json_hit['versionCode']} via {json_hit['url']}")
     if apk_hit:
         print(f"apk via {apk_hit['url']}")
-    ok = (
-        api_hit is not None
-        and api_hit["versionCode"] >= 1005
-        and json_hit is not None
-        and json_hit["versionCode"] == 1005
-        and apk_hit is not None
-    )
+    ok = json_hit is not None and json_hit["versionCode"] == 1005 and apk_hit is not None
     print("PASS" if ok else "FAIL")
     print("from", CURRENT, "to", json_hit["versionCode"] if json_hit else "none")
     if not ok:
