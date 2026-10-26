@@ -1143,7 +1143,15 @@ private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     )
                 }
                 Row {
-                    Text(skyText(state.lang, "train"), color = Accent2, fontSize = 15.sp, modifier = Modifier.clickable { onEvent(SkyEvent.Train) }.padding(vertical = 8.dp, horizontal = 4.dp))
+                    Text(
+                        skyText(state.lang, "train"),
+                        color = Accent2,
+                        fontSize = 15.sp,
+                        modifier = Modifier
+                            .clickable { onEvent(SkyEvent.Train) }
+                            .semantics { contentDescription = "confirmTrain" }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                    )
                     Text(skyText(state.lang, "cancel"), color = Muted, fontSize = 15.sp, modifier = Modifier.clickable { onEvent(SkyEvent.CancelTrain) }.padding(8.dp))
                 }
             }

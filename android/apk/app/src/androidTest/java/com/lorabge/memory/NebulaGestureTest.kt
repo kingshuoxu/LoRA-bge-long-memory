@@ -181,7 +181,8 @@ class NebulaGestureTest {
             abs(moved.optDouble("cameraZ") - beforeZ) > 0.15 || abs(moved.optDouble("cameraX") - beforeX) > 0.05,
         )
         assertTrue("fact card did not open\n${opened ?: hit}", opened != null)
-        Thread.sleep(1200)
+        // 主机每秒才拉一次私有目录。文件多留一会儿，Gradle 卸包之前才能拷走。
+        Thread.sleep(2500)
         } finally {
             stop.set(true)
             grabber.join(4_000)

@@ -37,6 +37,13 @@ class TrainProgressTest {
     }
 
     @Test
+    fun waitingDoesNotSayZeroSteps() {
+        val text = formatTrainProgress("zh", TrainSnapshot(state = "waiting", detail = "要等充电并且屏幕关闭"))
+        assertFalse(text.contains("0 步"))
+        assertTrue(text.contains("要等充电"))
+    }
+
+    @Test
     fun errorKeepsTheLogTail() {
         val text = formatTrainProgress("zh", TrainSnapshot(state = "error", logTail = "signal 11"))
         assertTrue(text.contains("失败"))

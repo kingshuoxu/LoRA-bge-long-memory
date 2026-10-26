@@ -224,26 +224,59 @@ export ANDROID_SERIAL="emulator-$PORT"
 # 仪器测试结束时 Gradle 会卸掉应用，应用私有目录里的截图一起没了。测试还在跑的时候就往外拷。
 pull_e2e() {
   mkdir -p "$STAGE/shots" "$STAGE/shots/frames"
-  if ! "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e >"$STAGE/e2e-ls.txt" 2>/dev/null; then
+  if ! "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls -1 files/e2e >"$STAGE/e2e-ls.txt" 2>/dev/null; then
     return 0
   fi
   while IFS= read -r name; do
     name=$(printf '%s' "$name" | tr -d '\r')
     [ -n "$name" ] || continue
+    case "$name" in
+      *" "*|*"run-as"*) continue ;;
+    esac
     if [ "$name" = "frames" ]; then
-      "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e/frames >"$STAGE/frames-ls.txt" 2>/dev/null || true
+      "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls -1 files/e2e/frames >"$STAGE/frames-ls.txt" 2>/dev/null || true
       while IFS= read -r frame; do
         frame=$(printf '%s' "$frame" | tr -d '\r')
         [ -n "$frame" ] || continue
-        "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$STAGE/shots/frames/$frame" || true
+        tmp="$STAGE/shots/frames/.incoming"
+        "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$tmp" || true
+        if [ -s "$tmp" ] && ! head -c 16 "$tmp" | grep -q 'run-as:' && head -c 8 "$tmp" | grep -q $'\x89PNG'; then
+          mv "$tmp" "$STAGE/shots/frames/$frame"
+        else
+          rm -f "$tmp"
+        fi
       done <"$STAGE/frames-ls.txt"
     else
-      "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/$name" >"$STAGE/shots/$name" || true
+      tmp="$STAGE/shots/.incoming"
+      "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/$name" >"$tmp" || true
+      good=0
+      if [ -s "$tmp" ] && ! head -c 64 "$tmp" | grep -q 'run-as:'; then
+        case "$name" in
+          *.png)
+            if head -c 8 "$tmp" | grep -q $'\x89PNG'; then
+              good=1
+            fi
+            ;;
+          *)
+            good=1
+            ;;
+        esac
+      fi
+      if [ "$good" = 1 ]; then
+        mv "$tmp" "$STAGE/shots/$name"
+        if [ "$name" = "nebula-renderer.txt" ] && grep -q '^path=' "$STAGE/shots/$name"; then
+          cp "$STAGE/shots/$name" "$STAGE/nebula-renderer.keep"
+        fi
+      else
+        rm -f "$tmp"
+      fi
       case "$name" in
         *.png)
-          if [ -n "${GRAB_SIZE:-}" ] && [ ! -s "$STAGE/shots/$name.host.png" ]; then
+          if [ "$good" = 1 ] && [ -n "${GRAB_SIZE:-}" ] && [ ! -s "$STAGE/shots/$name.host.png" ]; then
             ffmpeg -y -v error -f x11grab -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" -frames:v 1 "$STAGE/shots/$name.host.png" \
               && cp "$STAGE/shots/$name.host.png" "$STAGE/shots/$name" || true
+          elif [ -s "$STAGE/shots/$name.host.png" ] && ! head -c 8 "$STAGE/shots/$name" | grep -q $'\x89PNG'; then
+            cp "$STAGE/shots/$name.host.png" "$STAGE/shots/$name"
           fi
           ;;
       esac
@@ -423,6 +456,9 @@ if [ "$gradle_status" -ne 0 ]; then
   echo "仪器测试失败，已尽量保存截图和录像" >&2
   find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true
   exit "$gradle_status"
+fi
+if [ -s "$STAGE/nebula-renderer.keep" ] && ! grep -q '^path=' "$STAGE/shots/nebula-renderer.txt" 2>/dev/null; then
+  cp "$STAGE/nebula-renderer.keep" "$STAGE/shots/nebula-renderer.txt"
 fi
 for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png 09-nebula-before.png 10-nebula-after.png nebula-gesture.mp4 nebula-renderer.txt; do
   test -s "$STAGE/shots/$name"

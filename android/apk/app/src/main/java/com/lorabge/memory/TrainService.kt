@@ -63,7 +63,9 @@ class TrainService : Service() {
         try {
             val charging = (getSystemService(BATTERY_SERVICE) as BatteryManager).isCharging
             val screenOn = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
-            val force = File(store.trainDir, "force").exists()
+            // 仪器测试放了 train/simulate：模拟器屏幕亮着，也要跑完四步。真机没有这个文件。
+            val simulate = File(store.trainDir, "simulate").exists()
+            val force = File(store.trainDir, "force").exists() || simulate
             if ((!charging || screenOn) && !force) {
                 writeStatus(status, "waiting", "要等充电并且屏幕关闭。想现在训,在整理页勾选立即训练。")
                 stopForeground(STOP_FOREGROUND_REMOVE)

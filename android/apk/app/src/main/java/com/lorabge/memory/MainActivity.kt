@@ -213,10 +213,18 @@ private fun PhoneApp(
             waitSeconds = waited
         }
     }
-    LaunchedEffect(training, tick) {
-        if (!training) return@LaunchedEffect
-        delay(1000)
-        tick++
+    // 训练在 :train 进程里写 status.json。点「确认并训练」时文件通常还没落盘，
+    // 只在已经是 running 时再 tick 会永远看不到步数。
+    LaunchedEffect(statusFile.absolutePath) {
+        var seen = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+        while (true) {
+            delay(350)
+            val raw = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault(seen)
+            if (raw != seen) {
+                seen = raw
+                tick++
+            }
+        }
     }
     val conversations = remember(tick) { store.listConversations() }
     val current = currentId?.let { store.loadConversation(it) }

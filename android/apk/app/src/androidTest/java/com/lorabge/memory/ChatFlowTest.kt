@@ -135,17 +135,36 @@ class ChatFlowTest {
 
         clickTab("tab-consolidate")
         scrollToText("立即训练").click()
-        val train = waitText("确认并训练", 8_000)
-        if (!train.visibleBounds.isEmpty) train.click() else {
+        val train = device.wait(Until.findObject(By.desc("confirmTrain")), 8_000)
+            ?: device.wait(Until.findObject(By.text("确认并训练")), 4_000)
+            ?: error("missing 确认并训练\n" + visibleNodes())
+        if (train.visibleBounds.isEmpty) {
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 12)
-            waitText("确认并训练", 5_000).click()
         }
-        val progress = waitUntil(20_000) {
-            val node = device.findObject(By.desc("trainProgress")) ?: return@waitUntil false
-            val text = node.text.orEmpty()
-            text.contains("第 ") && text.contains("步") && !text.contains("0 步")
+        (device.findObject(By.desc("confirmTrain")) ?: device.findObject(By.text("确认并训练")) ?: train).click()
+        var polls = 0
+        val progress = waitUntil(25_000) {
+            val node = device.findObject(By.desc("trainProgress"))
+            val text = node?.text.orEmpty()
+            if (text.contains("第 ") && text.contains("步") && !text.contains("0 步")) {
+                true
+            } else {
+                polls += 1
+                if (polls % 8 == 0) {
+                    device.swipe(
+                        device.displayWidth / 2,
+                        device.displayHeight * 3 / 4,
+                        device.displayWidth / 2,
+                        device.displayHeight / 3,
+                        12,
+                    )
+                }
+                false
+            }
         }
-        assertTrue("training never left 0 steps", progress)
+        val statusFile = File(context.filesDir, "memory/train/status.json")
+        val status = if (statusFile.exists()) statusFile.readText() else "(no status)"
+        assertTrue("training never left 0 steps\n$status\n" + visibleNodes(), progress)
         val shown = device.findObject(By.desc("trainProgress"))?.text.orEmpty()
         assertFalse(shown.contains("0 步"))
         assertTrue(shown, Regex("第 \\d+/\\d+ 步").containsMatchIn(shown))

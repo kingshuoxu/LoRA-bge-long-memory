@@ -88,11 +88,12 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
         val tail = snap.logTail.ifBlank { snap.detail }
         return if (tail.isBlank()) head else "$head\n$tail"
     }
-    if (snap.state == "running" && snap.step <= 0) {
-        val waited = if (lang == "en") "Still computing this step · ${snap.elapsedSec}s" else "这一步还在计算 · 已过 ${snap.elapsedSec} 秒"
-        return waited
+    if (snap.step <= 0) {
+        if (snap.state == "running") {
+            return if (lang == "en") "Still computing this step · ${snap.elapsedSec}s" else "这一步还在计算 · 已过 ${snap.elapsedSec} 秒"
+        }
+        return snap.detail
     }
-    if (snap.step <= 0 && snap.detail.isBlank()) return ""
     val loss = snap.loss?.let { " · loss ${"%.2f".format(it)}" }.orEmpty()
     val eta = when {
         snap.etaSec <= 0 -> ""
