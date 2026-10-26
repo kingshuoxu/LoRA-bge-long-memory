@@ -58,6 +58,8 @@ class NebulaGestureTest {
         )
         shots.mkdirs()
         File(shots, "nebula-ready").delete()
+        File(shots, "canvas-before.png").delete()
+        File(shots, "canvas-after.png").delete()
     }
 
     @Test(timeout = 180_000)
@@ -179,6 +181,13 @@ class NebulaGestureTest {
         assertTrue(
             "pan did not move the camera from z=$beforeZ x=$beforeX\n$moved",
             abs(moved.optDouble("cameraZ") - beforeZ) > 0.15 || abs(moved.optDouble("cameraX") - beforeX) > 0.05,
+        )
+        val canvasShot = waitStatus(15_000) { status ->
+            status.optDouble("canvasVariance") > 6.0 && status.optDouble("canvasDiff") > 2.0
+        }
+        assertTrue(
+            "nebula canvas pixels did not show a gesture variance=${canvasShot.optDouble("canvasVariance")} diff=${canvasShot.optDouble("canvasDiff")}",
+            canvasShot.optDouble("canvasVariance") > 6.0 && canvasShot.optDouble("canvasDiff") > 2.0,
         )
         assertTrue("fact card did not open\n${opened ?: hit}", opened != null)
         // 主机每秒才拉一次私有目录。文件多留一会儿，Gradle 卸包之前才能拷走。

@@ -89,7 +89,10 @@ internal fun NebulaHost(
                     appendNebulaConsole(context.applicationContext, line)
                 }
             }
-            web.loadUrl("https://appassets.androidplatform.net/assets/nebula/index.html")
+            val e2e = File(context.filesDir, "setup/e2e").exists()
+            web.loadUrl(
+                "https://appassets.androidplatform.net/assets/nebula/index.html" + if (e2e) "?e2e=1" else "",
+            )
             web
         },
         update = { web ->
@@ -174,6 +177,24 @@ private class NebulaBridge(
     fun onLog(line: String) {
         Log.i("Nebula", line)
         appendNebulaConsole(appContext, line)
+    }
+
+    @JavascriptInterface
+    fun onFrame(name: String, dataUrl: String, variance: String) {
+        if (name != "canvas-before" && name != "canvas-after") return
+        if (!File(appContext.filesDir, "setup/e2e").exists()) return
+        val comma = dataUrl.indexOf(',')
+        if (comma < 0 || comma > 80) return
+        val bytes = try {
+            android.util.Base64.decode(dataUrl.substring(comma + 1), android.util.Base64.DEFAULT)
+        } catch (_: Throwable) {
+            return
+        }
+        if (bytes.size < 32 || bytes.size > 2_000_000) return
+        val dir = File(appContext.filesDir, "e2e")
+        dir.mkdirs()
+        File(dir, "$name.png").writeBytes(bytes)
+        File(dir, "$name.txt").writeText("variance=$variance\n")
     }
 
     @JavascriptInterface

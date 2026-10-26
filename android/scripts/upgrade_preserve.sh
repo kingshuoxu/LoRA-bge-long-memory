@@ -171,16 +171,20 @@ DISPLAY=:99 xwininfo -root -tree >"$STAGE/xwin.txt" 2>/dev/null || true
 python3 - "$STAGE/xwin.txt" "$STAGE/grab.env" << 'PY'
 import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace") if pathlib.Path(sys.argv[1]).exists() else ""
-best = None
-for match in re.finditer(r"(\d+)x(\d+)\+(\d+)\+(\d+)", text):
-    w, h, x, y = (int(part) for part in match.groups())
-    if w < 200 or h < 400 or w > 1280 or h > 2800:
-        continue
-    if best is None or w * h > best[0] * best[1]:
-        best = (w, h, x, y)
-if best is None:
-    best = (1080, 2400, 0, 0)
-w, h, x, y = best
+root = re.search(r"Width:\s*(\d+)\s+Height:\s*(\d+)", text)
+if root:
+    w, h, x, y = int(root.group(1)), int(root.group(2)), 0, 0
+else:
+    best = None
+    for match in re.finditer(r"(\d+)x(\d+)\+(\d+)\+(\d+)", text):
+        w, h, x, y = (int(part) for part in match.groups())
+        if w < 200 or h < 400 or w > 1280 or h > 2800:
+            continue
+        if best is None or w * h > best[0] * best[1]:
+            best = (w, h, x, y)
+    if best is None:
+        best = (1280, 2800, 0, 0)
+    w, h, x, y = best
 w -= w % 2
 h -= h % 2
 pathlib.Path(sys.argv[2]).write_text(
@@ -221,6 +225,11 @@ echo "upgrade preserved memory, models, settings; versionCode 1004"
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
+# POSIX sh 没有 $'\x89PNG'。签名用 od 认，避免把真 PNG 丢掉。
+png_file() {
+  sig=$(od -An -t x1 -N 4 "$1" 2>/dev/null | tr -d ' \n')
+  [ "$sig" = "89504e47" ]
+}
 # 仪器测试结束时 Gradle 会卸掉应用，应用私有目录里的截图一起没了。测试还在跑的时候就往外拷。
 pull_e2e() {
   mkdir -p "$STAGE/shots" "$STAGE/shots/frames"
@@ -240,7 +249,7 @@ pull_e2e() {
         [ -n "$frame" ] || continue
         tmp="$STAGE/shots/frames/.incoming"
         "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$tmp" || true
-        if [ -s "$tmp" ] && ! head -c 16 "$tmp" | grep -q 'run-as:' && head -c 8 "$tmp" | grep -q $'\x89PNG'; then
+        if [ -s "$tmp" ] && ! head -c 16 "$tmp" | grep -q 'run-as:' && png_file "$tmp"; then
           mv "$tmp" "$STAGE/shots/frames/$frame"
         else
           rm -f "$tmp"
@@ -253,7 +262,7 @@ pull_e2e() {
       if [ -s "$tmp" ] && ! head -c 64 "$tmp" | grep -q 'run-as:'; then
         case "$name" in
           *.png)
-            if head -c 8 "$tmp" | grep -q $'\x89PNG'; then
+            if png_file "$tmp"; then
               good=1
             fi
             ;;
@@ -271,11 +280,12 @@ pull_e2e() {
         rm -f "$tmp"
       fi
       case "$name" in
+        canvas-*.png) ;;
         *.png)
           if [ "$good" = 1 ] && [ -n "${GRAB_SIZE:-}" ] && [ ! -s "$STAGE/shots/$name.host.png" ]; then
             ffmpeg -y -v error -f x11grab -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" -frames:v 1 "$STAGE/shots/$name.host.png" \
               && cp "$STAGE/shots/$name.host.png" "$STAGE/shots/$name" || true
-          elif [ -s "$STAGE/shots/$name.host.png" ] && ! head -c 8 "$STAGE/shots/$name" | grep -q $'\x89PNG'; then
+          elif [ -s "$STAGE/shots/$name.host.png" ] && ! png_file "$STAGE/shots/$name"; then
             cp "$STAGE/shots/$name.host.png" "$STAGE/shots/$name"
           fi
           ;;
@@ -284,7 +294,7 @@ pull_e2e() {
   done <"$STAGE/e2e-ls.txt"
 }
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
 chat_pid=$!
 set -e
 while kill -0 "$chat_pid" 2>/dev/null; do
@@ -305,7 +315,7 @@ fi
 RECORD="$STAGE/nebula-gesture.webm"
 RECORD_NAME="$RECORD"
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
 nebula_pid=$!
 recorded=0
 for _ in $(seq 1 180); do
@@ -365,8 +375,17 @@ fi
 if [ -s "$STAGE/nebula-host.mp4" ]; then
   cp "$STAGE/nebula-host.mp4" "$STAGE/shots/nebula-host.mp4"
 fi
-# 控制台录像在 -no-window 下是黑的。有窗口时优先用它；否则用虚拟屏上模拟器窗口的 x11grab。
-python3 - "$STAGE/shots/nebula-pixels.txt" "$STAGE/shots/nebula-gesture.mp4" "$WEBM" "$STAGE/nebula-host.mp4" << 'PY'
+# 星云像素以画布 readPixels 为准。模拟器窗口大多是灰边，不能拿来当手势证据。
+CANVAS="$STAGE/shots/nebula-canvas.mp4"
+if [ -s "$STAGE/shots/canvas-before.png" ] && [ -s "$STAGE/shots/canvas-after.png" ]; then
+  ffmpeg -y -v error -loop 1 -t 1 -i "$STAGE/shots/canvas-before.png" -loop 1 -t 1 -i "$STAGE/shots/canvas-after.png" \
+    -filter_complex "[0:v]scale=160:220:flags=neighbor,setsar=1[a];[1:v]scale=160:220:flags=neighbor,setsar=1[b];[a][b]concat=n=2:v=1:a=0" \
+    -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$CANVAS" || true
+fi
+if [ -s "$STAGE/xwin.txt" ]; then
+  cp "$STAGE/xwin.txt" "$STAGE/shots/xwin.txt" || true
+fi
+python3 - "$STAGE/shots/nebula-pixels.txt" "$STAGE/shots/nebula-gesture.mp4" "$CANVAS" "$WEBM" "$STAGE/nebula-host.mp4" << 'PY'
 import pathlib, subprocess, sys
 report_path, mp4_path, *videos = sys.argv[1:]
 
@@ -423,9 +442,9 @@ def score(path):
 
 chosen = ""
 chunks = []
-for video in videos:
+for index, video in enumerate(videos):
     path = pathlib.Path(video)
-    if not path.is_file() or path.stat().st_size < 1000:
+    if not path.is_file() or path.stat().st_size < 400:
         chunks.append(f"source={video}\nmissing=1\n")
         continue
     try:
@@ -434,7 +453,7 @@ for video in videos:
         chunks.append(f"source={video}\nerror={ex}\n")
         continue
     chunks.append(text + f"ok={int(ok)}\n")
-    if ok and not chosen:
+    if ok and index == 0 and not chosen:
         chosen = str(path)
 report = "".join(chunks)
 if chosen:
@@ -460,8 +479,12 @@ fi
 if [ -s "$STAGE/nebula-renderer.keep" ] && ! grep -q '^path=' "$STAGE/shots/nebula-renderer.txt" 2>/dev/null; then
   cp "$STAGE/nebula-renderer.keep" "$STAGE/shots/nebula-renderer.txt"
 fi
-for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png 09-nebula-before.png 10-nebula-after.png nebula-gesture.mp4 nebula-renderer.txt; do
-  test -s "$STAGE/shots/$name"
+for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png 09-nebula-before.png 10-nebula-after.png canvas-before.png canvas-after.png nebula-gesture.mp4 nebula-renderer.txt; do
+  if [ ! -s "$STAGE/shots/$name" ]; then
+    echo "缺少 $STAGE/shots/$name" >&2
+    find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true
+    exit 1
+  fi
 done
 grep -q '^path=' "$STAGE/shots/nebula-renderer.txt"
 grep -q '^variance=' "$STAGE/shots/nebula-renderer.txt"
@@ -475,7 +498,7 @@ if ! unzip -p app/build/outputs/apk/debug/app-debug.apk 'classes*.dex' | grep -a
   exit 1
 fi
 mp4_bytes=$(wc -c <"$STAGE/shots/nebula-gesture.mp4" | tr -d '[:space:]')
-test "$mp4_bytes" -gt 8000
+test "$mp4_bytes" -gt 1200
 echo "nebula renderer:"
 cat "$STAGE/shots/nebula-renderer.txt"
 echo "emulator chat flow and nebula gestures saved"

@@ -406,6 +406,7 @@ function sampleCloud(index, weight, fresh) {
 
 export function createNebula(canvas, hooks) {
   const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const e2eShot = /(?:\?|&)e2e=1(?:&|$)/.test(String(location.search || ""));
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({
@@ -414,6 +415,8 @@ export function createNebula(canvas, hooks) {
       alpha: true,
       premultipliedAlpha: true,
       powerPreference: "high-performance",
+      // 只在仪器测试里留下绘制缓冲，方便同一帧 readPixels。发布页不带 ?e2e=1。
+      preserveDrawingBuffer: e2eShot,
     });
   } catch (error) {
     return fallbackNebula(canvas);
@@ -1380,6 +1383,86 @@ export function createNebula(canvas, hooks) {
 
   const clock = new THREE.Clock();
   let frozenAt = 0;
+  let canvasVariance = 0;
+  let canvasDiff = 0;
+  let capturedBefore = false;
+  let capturedAfter = false;
+  let beforeLumas = null;
+  let beforeFrame = 0;
+
+  function sampleGl() {
+    const bw = gl.drawingBufferWidth || canvas.width || 0;
+    const bh = gl.drawingBufferHeight || canvas.height || 0;
+    const tw = Math.min(160, bw);
+    const th = Math.min(220, bh);
+    if (tw < 8 || th < 8) return null;
+    const x = Math.floor((bw - tw) / 2);
+    const y = Math.floor((bh - th) / 2);
+    const pixels = new Uint8Array(tw * th * 4);
+    gl.readPixels(x, y, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const lumas = new Float32Array(tw * th);
+    let sum = 0;
+    let sum2 = 0;
+    for (let i = 0; i < tw * th; i += 1) {
+      const o = i * 4;
+      const luma = (pixels[o] + pixels[o + 1] + pixels[o + 2]) / 3;
+      lumas[i] = luma;
+      sum += luma;
+      sum2 += luma * luma;
+    }
+    const n = tw * th;
+    const mean = sum / n;
+    const variance = sum2 / n - mean * mean;
+    const out = document.createElement("canvas");
+    out.width = tw;
+    out.height = th;
+    const ctx = out.getContext("2d");
+    const img = ctx.createImageData(tw, th);
+    for (let row = 0; row < th; row += 1) {
+      const src = (th - 1 - row) * tw * 4;
+      img.data.set(pixels.subarray(src, src + tw * 4), row * tw * 4);
+    }
+    ctx.putImageData(img, 0, 0);
+    return { variance, lumas, png: out.toDataURL("image/png") };
+  }
+
+  function postFrame(name, shot) {
+    if (!window.Android || !Android.onFrame) return;
+    Android.onFrame(name, shot.png, String(shot.variance));
+  }
+
+  // 模拟器的截图和 screenrecord 不含 WebGL。仪器测试直接读绘制缓冲。
+  function captureE2eFrame() {
+    if (!e2eShot) return;
+    try {
+      const wantBefore = !capturedBefore && frameCount >= 5;
+      const wantAfter = capturedBefore && !capturedAfter && touches > 0 && frameCount >= beforeFrame + 4;
+      if (!wantBefore && !wantAfter) return;
+      const shot = sampleGl();
+      if (!shot) return;
+      if (wantBefore) {
+        if (shot.variance <= 6) return;
+        capturedBefore = true;
+        beforeFrame = frameCount;
+        beforeLumas = shot.lumas;
+        canvasVariance = shot.variance;
+        postFrame("canvas-before", shot);
+        if (window.nebulaHost && window.nebulaHost.probe) window.nebulaHost.probe();
+        return;
+      }
+      let diff = 0;
+      const n = Math.min(beforeLumas.length, shot.lumas.length);
+      for (let i = 0; i < n; i += 1) diff += Math.abs(beforeLumas[i] - shot.lumas[i]);
+      canvasDiff = n ? diff / n : 0;
+      canvasVariance = Math.max(canvasVariance, shot.variance);
+      capturedAfter = true;
+      postFrame("canvas-after", shot);
+      if (window.nebulaHost && window.nebulaHost.probe) window.nebulaHost.probe();
+    } catch (error) {
+      console.error("nebula capture", error && error.message ? error.message : error);
+    }
+  }
+
   function frame(now) {
     if (!running || broken) return;
     if (mode === "dim") {
@@ -1482,6 +1565,7 @@ export function createNebula(canvas, hooks) {
       renderer.autoClear = false;
       renderer.render(overlay, camera);
       renderer.autoClear = true;
+      captureE2eFrame();
     } catch (error) {
       broken = true;
       running = false;
@@ -1519,6 +1603,8 @@ export function createNebula(canvas, hooks) {
       hitY,
       freshLabels: labels.filter((item) => item.fresh).length,
       kind: "three",
+      canvasVariance,
+      canvasDiff,
     };
   }
 
