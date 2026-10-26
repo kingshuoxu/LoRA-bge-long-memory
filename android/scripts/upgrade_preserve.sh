@@ -231,6 +231,7 @@ png_file() {
   [ "$sig" = "89504e47" ]
 }
 # 仪器测试结束时 Gradle 会卸掉应用，应用私有目录里的截图一起没了。测试还在跑的时候就往外拷。
+# ffmpeg 和 adb 默认读标准输入。这个循环正用标准输入送文件名，不隔开会把后面的 canvas-*.png 和 nebula-renderer.txt 吃掉。
 pull_e2e() {
   mkdir -p "$STAGE/shots" "$STAGE/shots/frames"
   if ! "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls -1 files/e2e >"$STAGE/e2e-ls.txt" 2>/dev/null; then
@@ -243,12 +244,12 @@ pull_e2e() {
       *" "*|*"run-as"*) continue ;;
     esac
     if [ "$name" = "frames" ]; then
-      "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls -1 files/e2e/frames >"$STAGE/frames-ls.txt" 2>/dev/null || true
+      "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls -1 files/e2e/frames >"$STAGE/frames-ls.txt" </dev/null 2>/dev/null || true
       while IFS= read -r frame; do
         frame=$(printf '%s' "$frame" | tr -d '\r')
         [ -n "$frame" ] || continue
         tmp="$STAGE/shots/frames/.incoming"
-        "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$tmp" || true
+        "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$tmp" </dev/null || true
         if [ -s "$tmp" ] && ! head -c 16 "$tmp" | grep -q 'run-as:' && png_file "$tmp"; then
           mv "$tmp" "$STAGE/shots/frames/$frame"
         else
@@ -257,7 +258,7 @@ pull_e2e() {
       done <"$STAGE/frames-ls.txt"
     else
       tmp="$STAGE/shots/.incoming"
-      "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/$name" >"$tmp" || true
+      "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/$name" >"$tmp" </dev/null || true
       good=0
       if [ -s "$tmp" ] && ! head -c 64 "$tmp" | grep -q 'run-as:'; then
         case "$name" in
@@ -283,7 +284,7 @@ pull_e2e() {
         canvas-*.png) ;;
         *.png)
           if [ "$good" = 1 ] && [ -n "${GRAB_SIZE:-}" ] && [ ! -s "$STAGE/shots/$name.host.png" ]; then
-            ffmpeg -y -v error -f x11grab -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" -frames:v 1 "$STAGE/shots/$name.host.png" \
+            ffmpeg -nostdin -y -v error -f x11grab -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" -frames:v 1 "$STAGE/shots/$name.host.png" </dev/null \
               && cp "$STAGE/shots/$name.host.png" "$STAGE/shots/$name" || true
           elif [ -s "$STAGE/shots/$name.host.png" ] && ! png_file "$STAGE/shots/$name"; then
             cp "$STAGE/shots/$name.host.png" "$STAGE/shots/$name"
@@ -327,8 +328,8 @@ for _ in $(seq 1 180); do
       "$ADB" -s "emulator-$PORT" emu screenrecord start "$RECORD_NAME" >"$STAGE/screenrecord-start.txt" 2>&1 || true
     fi
     if [ -n "${GRAB_SIZE:-}" ]; then
-      ffmpeg -y -f x11grab -framerate 8 -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" \
-        -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/nebula-host.mp4" >"$STAGE/x11grab.log" 2>&1 &
+      ffmpeg -nostdin -y -f x11grab -framerate 8 -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" \
+        -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/nebula-host.mp4" </dev/null >"$STAGE/x11grab.log" 2>&1 &
       HOST_PID=$!
     fi
     recorded=1
@@ -357,7 +358,7 @@ else
   gradle_status=$nebula_status
 fi
 if ls "$STAGE/shots/frames/"*.png >/dev/null 2>&1; then
-  ffmpeg -y -framerate 2 -i "$STAGE/shots/frames/%04d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4" || true
+  ffmpeg -nostdin -y -framerate 2 -i "$STAGE/shots/frames/%04d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4" </dev/null || true
 fi
 WEBM=""
 if [ -s "$RECORD" ]; then
@@ -378,7 +379,7 @@ fi
 # 星云像素以画布 readPixels 为准。模拟器窗口大多是灰边，不能拿来当手势证据。
 CANVAS="$STAGE/shots/nebula-canvas.mp4"
 if [ -s "$STAGE/shots/canvas-before.png" ] && [ -s "$STAGE/shots/canvas-after.png" ]; then
-  ffmpeg -y -v error -loop 1 -t 1 -i "$STAGE/shots/canvas-before.png" -loop 1 -t 1 -i "$STAGE/shots/canvas-after.png" \
+  ffmpeg -nostdin -y -v error -loop 1 -t 1 -i "$STAGE/shots/canvas-before.png" -loop 1 -t 1 -i "$STAGE/shots/canvas-after.png" \
     -filter_complex "[0:v]scale=160:220:flags=neighbor,setsar=1[a];[1:v]scale=160:220:flags=neighbor,setsar=1[b];[a][b]concat=n=2:v=1:a=0" \
     -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$CANVAS" || true
 fi
