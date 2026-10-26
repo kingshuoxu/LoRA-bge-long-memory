@@ -1,5 +1,7 @@
 import { createNebula } from "./nebula.js";
-import { createGl1Nebula, gl2Available } from "./nebula-gl1.js";
+import { createCanvasNebula } from "./nebula-canvas.js";
+import { gl2Available } from "./nebula-gl1.js";
+import { startSky } from "../sky/sky.js";
 
 let canvas = document.getElementById("nebula-canvas");
 const detail = document.getElementById("detail");
@@ -153,14 +155,24 @@ const hooks = {
   },
   onBroken(error) {
     log(`three broken ${error && error.message ? error.message : error}`);
-    mountGl1("render");
+    mountCanvas("render");
+  },
+  onVisualFail(report) {
+    const flip = report && report.flip != null ? Number(report.flip).toFixed(3) : "?";
+    const rough = report && report.rough != null ? Number(report.rough).toFixed(2) : "?";
+    log(`nebula lattice flip=${flip} rough=${rough}`);
+    mountCanvas("lattice");
   },
 };
 
 let nebula = null;
 
-function mountGl1(reason) {
-  if (nebula && nebula.kind === "gl1") return nebula;
+let mountingCanvas = false;
+
+function mountCanvas(reason) {
+  if (mountingCanvas) return nebula;
+  if (nebula && nebula.kind === "canvas2d") return nebula;
+  mountingCanvas = true;
   const previous = nebula;
   nebula = null;
   try {
@@ -170,23 +182,23 @@ function mountGl1(reason) {
   }
   try {
     replaceCanvas();
-    const gl1 = createGl1Nebula(canvas, hooks);
-    if (gl1) {
-      nebula = gl1;
-      log(`fallback webgl1 ${reason || ""}`);
-      if (!noticed && window.Android && Android.onNotice) {
-        noticed = true;
-        Android.onNotice("webgl1");
-      }
-      if (lastPayload) applyMessage(lastPayload);
-      publish();
-      return gl1;
+    const next = createCanvasNebula(canvas, hooks);
+    nebula = next;
+    log(`fallback canvas2d ${reason || ""}`);
+    if (!noticed && window.Android && Android.onNotice) {
+      noticed = true;
+      Android.onNotice("canvas2d");
     }
+    if (lastPayload) applyMessage(lastPayload);
+    publish();
+    return next;
   } catch (error) {
-    log(`webgl1 failed ${error && error.message ? error.message : error}`);
+    log(`canvas2d failed ${error && error.message ? error.message : error}`);
+  } finally {
+    mountingCanvas = false;
   }
   nebula = deadNebula();
-  log(`fallback canvas ${reason || ""}`);
+  log(`fallback compose ${reason || ""}`);
   if (window.Android && Android.onFallback) Android.onFallback("canvas");
   if (!noticed && window.Android && Android.onNotice) {
     noticed = true;
@@ -202,7 +214,7 @@ function boot() {
   if (probe.ok) {
     try {
       const created = createNebula(canvas, hooks);
-      if (nebula && nebula.kind === "gl1") {
+      if (nebula && nebula.kind === "canvas2d") {
         try { if (created && created.dispose) created.dispose(); } catch (error) { log(String(error)); }
         return;
       }
@@ -216,7 +228,7 @@ function boot() {
       log(`webgl2 init ${error && error.message ? error.message : error}`);
     }
   }
-  if (!(nebula && (nebula.kind === "gl1" || nebula.kind === "three"))) mountGl1(probe.reason || "no-webgl2");
+  if (!(nebula && (nebula.kind === "canvas2d" || nebula.kind === "three"))) mountCanvas(probe.reason || "no-webgl2");
 }
 
 let lastData = "";
@@ -343,6 +355,11 @@ window.addEventListener("resize", () => {
 });
 setInterval(publish, 400);
 
+try {
+  startSky();
+} catch (error) {
+  log(`sky init ${error && error.message ? error.message : error}`);
+}
 boot();
 
 const shot = new URLSearchParams(location.search).get("shot");

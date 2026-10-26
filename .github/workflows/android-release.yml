@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Nebula lattice classifier
+        run: node android/apk/app/src/main/assets/nebula/nebula-pixels.test.mjs
+
       - name: Reuse the 0.1.0 model manifest
         run: |
           set -eu
@@ -70,7 +73,7 @@ jobs:
       - name: Write the update manifest
         run: |
           set -eu
-          TAG=android-v0.1.4
+          TAG=android-v0.1.5
           STAGE=android/out/release
           mkdir -p "$STAGE"
           APK=android/apk/app/build/outputs/apk/debug/app-debug.apk
@@ -181,7 +184,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG=android-v0.1.4
+          TAG=android-v0.1.5
           STAGE=android/out/release
           python3 - << 'PY'
           import hashlib, json, pathlib
@@ -189,8 +192,8 @@ jobs:
           meta = json.loads((stage / "update.json").read_text())
           apk = (stage / "app-debug.apk").read_bytes()
           digest = hashlib.sha256(apk).hexdigest()
-          assert meta["versionName"] == "0.1.4"
-          assert meta["versionCode"] == 1004
+          assert meta["versionName"] == "0.1.5"
+          assert meta["versionCode"] == 1005
           assert meta["sha256"] == digest
           assert meta["size"] == len(apk)
           sums = (stage / "SHA256SUMS").read_text().split()
@@ -199,7 +202,9 @@ jobs:
           NOTES=$(cat << EOF
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
 
-          从这一版起，安装包用同一把测试钥匙签名。设置里的「检查更新」会读 android-v* 发布和 update.json（GitHub，失败再试 ghproxy），按 versionCode 比较，下载 APK 可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。
+          0.1.5 修了真机上星云背景变成整屏棕色格子噪点的问题。银河着色器改用高精度和不会溢出的散列，粒子改成面向相机的四边形，直接画进 8 位帧缓冲，不再经过半精度离屏目标和点精灵。画面若仍被判成格子噪点，就在同一页改画 canvas 星云，专家标签和事实卡还在。
+
+          从 0.1.4 起，安装包用同一把测试钥匙签名。设置里的「检查更新」会读 android-v* 发布和 update.json（GitHub，失败再试 ghproxy），按 versionCode 比较，下载 APK 可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。已经装了 0.1.4 的手机可以直接覆盖安装这一版。
 
           0.1.2、更早的包，以及标签上那份旧的 0.1.3，都是每次 CI 一把新的调试钥匙，签不上这一版。已经装过那些包的手机要先卸一次。卸载会清掉应用私有目录和 Android/data 里的模型、专家、对话和设置，下次打开会按 0.1.0 的清单重新下载。卸完装上这一版之后，以后的版本可以在应用里直接更新，不用再卸。
 
@@ -219,5 +224,5 @@ jobs:
           EOF
           )
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.4" --notes "$NOTES"
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.5" --notes "$NOTES"
           gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS" --clobber

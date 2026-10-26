@@ -1,4 +1,5 @@
 import * as THREE from "./vendor/three.module.js";
+import { classifyField } from "./nebula-pixels.js";
 
 const PALETTES = [
   { core: [1.15, 0.28, 0.16], mid: [0.72, 0.14, 0.12], edge: [0.38, 0.07, 0.09], wisp: [0.98, 0.62, 0.18] },
@@ -17,62 +18,75 @@ const GAS_VERT = `
   }
 `;
 
-const POINT_VERT = `
+const CLOUD_VERT = `
+  attribute vec3 iOffset;
   attribute float aSize;
   attribute float aAlpha;
   attribute vec3 aColor;
+  varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
   uniform float uPixelRatio;
+  uniform vec2 uResolution;
   uniform float uDim;
   uniform float uBoost;
   void main() {
+    vUv = uv;
     vColor = aColor;
     vAlpha = aAlpha * uDim * uBoost;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(aSize * uPixelRatio, 3.0, 112.0);
+    vec4 clip = projectionMatrix * modelViewMatrix * vec4(iOffset, 1.0);
+    float pixel = clamp(aSize * uPixelRatio, 3.0, 112.0);
+    vec2 span = max(uResolution, vec2(1.0));
+    clip.xy += position.xy * (pixel / span) * 2.0 * clip.w;
+    gl_Position = clip;
   }
 `;
 
-const POINT_FRAG = `
-  precision mediump float;
+const CLOUD_FRAG = `
+  varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
   void main() {
-    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    vec2 p = vUv * 2.0 - 1.0;
     float r = length(p);
     if (r > 1.0) discard;
     float mask = pow(smoothstep(1.0, 0.0, r), 1.5);
     float gaussian = exp(-r * r * 3.6) * mask;
     float alpha = gaussian * vAlpha;
-    gl_FragColor = vec4(vColor * alpha, alpha);
+    vec3 col = min(vColor, vec3(1.0)) * alpha * 2.4;
+    gl_FragColor = vec4(min(col, vec3(1.0)), alpha);
   }
 `;
 
 const STAR_VERT = `
+  attribute vec3 iOffset;
   attribute float aSize;
   attribute float aBright;
   attribute float aFlare;
   attribute vec3 aTint;
+  varying vec2 vUv;
   varying float vBright;
   varying vec3 vTint;
   uniform float uPixelRatio;
+  uniform vec2 uResolution;
   void main() {
+    vUv = uv;
     vBright = aBright;
     vTint = aTint;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_Position = projectionMatrix * mv;
-    gl_PointSize = clamp(aSize * aFlare * uPixelRatio, 8.0, 120.0);
+    vec4 clip = projectionMatrix * modelViewMatrix * vec4(iOffset, 1.0);
+    float pixel = clamp(aSize * aFlare * uPixelRatio, 8.0, 96.0);
+    vec2 span = max(uResolution, vec2(1.0));
+    clip.xy += position.xy * (pixel / span) * 2.0 * clip.w;
+    gl_Position = clip;
   }
 `;
 
 const STAR_FRAG = `
-  precision mediump float;
+  varying vec2 vUv;
   varying float vBright;
   varying vec3 vTint;
   void main() {
-    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    vec2 p = vUv * 2.0 - 1.0;
     float r = length(p);
     if (r > 1.0) discard;
     float core = pow(smoothstep(0.16, 0.0, r), 1.35);
@@ -85,60 +99,6 @@ const STAR_FRAG = `
     float alpha = clamp(core + spikes + halo * vBright, 0.0, 1.0);
     vec3 col = mix(vTint, vec3(1.0, 0.98, 0.94), clamp(core * 1.4 + axis * 0.35, 0.0, 1.0));
     gl_FragColor = vec4(col * alpha, alpha);
-  }
-`;
-
-const BLOOM_VERT = `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = vec4(position.xy, 0.0, 1.0);
-  }
-`;
-
-const BLOOM_FRAG = `
-  precision mediump float;
-  varying vec2 vUv;
-  uniform sampler2D tScene;
-  uniform vec2 uTexel;
-  uniform float uExposure;
-  uniform float uBloom;
-  uniform float uThreshold;
-
-  float aces1(float x) {
-    x = max(x, 0.0);
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
-  }
-  void main() {
-    vec4 center = texture2D(tScene, vUv);
-    vec3 rgb = center.rgb;
-    vec2 step = uTexel * 2.5;
-    vec3 glow = vec3(0.0);
-    vec2 taps[4];
-    taps[0] = vec2(step.x, 0.0);
-    taps[1] = vec2(-step.x, 0.0);
-    taps[2] = vec2(0.0, step.y);
-    taps[3] = vec2(0.0, -step.y);
-    for (int i = 0; i < 4; i++) {
-      vec4 s = texture2D(tScene, vUv + taps[i]);
-      float sa = max(s.a, 0.03);
-      vec3 sampleStraight = s.rgb / sa;
-      float p = max(sampleStraight.r, max(sampleStraight.g, sampleStraight.b));
-      float w = smoothstep(uThreshold, uThreshold + 0.25, p) * smoothstep(0.1, 0.35, s.a);
-      glow += s.rgb * w;
-    }
-    rgb += glow * uBloom;
-    float a = center.a;
-    vec3 straight = rgb;
-    if (a > 0.025) straight /= a;
-    float peak = max(straight.r, max(straight.g, straight.b));
-    if (peak > 0.001) {
-      float mapped = aces1(peak * uExposure);
-      straight *= mapped / peak;
-    }
-    float cover = clamp(1.0 - exp(-a * 1.65), 0.0, 0.86);
-    straight = min(straight, vec3(0.97));
-    gl_FragColor = vec4(straight * cover, cover);
   }
 `;
 
@@ -422,7 +382,7 @@ export function createNebula(canvas, hooks) {
     return fallbackNebula(canvas);
   }
   if (!renderer.getContext()) return fallbackNebula(canvas);
-  renderer.setClearColor(0x000000, 0);
+  renderer.setClearColor(0x070910, 1);
   renderer.debug.onShaderError = (_gl, program) => {
     const log = _gl.getProgramInfoLog(program) || "shader link failed";
     console.error("nebula shader", log);
@@ -442,34 +402,8 @@ export function createNebula(canvas, hooks) {
   camera.position.copy(camTarget);
 
   const gl = renderer.getContext();
-  const floatTarget = Boolean(gl.getExtension("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_half_float"));
-  const sceneTarget = new THREE.WebGLRenderTarget(8, 8, {
-    format: THREE.RGBAFormat,
-    type: floatTarget ? THREE.HalfFloatType : THREE.UnsignedByteType,
-    depthBuffer: false,
-    stencilBuffer: false,
-  });
-  if (THREE.LinearSRGBColorSpace) sceneTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
-  const bloomUniforms = {
-    tScene: { value: sceneTarget.texture },
-    uTexel: { value: new THREE.Vector2(1 / 8, 1 / 8) },
-    uExposure: { value: 0.78 },
-    uBloom: { value: 0.06 },
-    uThreshold: { value: 0.86 },
-  };
-  const bloomMaterial = new THREE.ShaderMaterial({
-    uniforms: bloomUniforms,
-    vertexShader: BLOOM_VERT,
-    fragmentShader: BLOOM_FRAG,
-    transparent: true,
-    depthTest: false,
-    depthWrite: false,
-    premultipliedAlpha: true,
-    blending: THREE.NormalBlending,
-  });
-  const bloomScene = new THREE.Scene();
-  const bloomCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  bloomScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bloomMaterial));
+  // 直接画到默认的 8 位帧缓冲。半精度离屏目标在一些 GPU 上采样成整屏噪点，再被全屏合成盖住星云。
+  const resolution = new THREE.Vector2(1, 1);
 
   const sprite = starTexture();
   const bead = beadTexture();
@@ -542,25 +476,44 @@ export function createNebula(canvas, hooks) {
     userMoved = false;
   }
 
+  function quadGeometry(offsets, extras) {
+    const geometry = new THREE.InstancedBufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array([
+      -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0,
+      -0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0,
+    ]), 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(new Float32Array([
+      0, 0, 1, 0, 1, 1,
+      0, 0, 1, 1, 0, 1,
+    ]), 2));
+    geometry.setAttribute("iOffset", new THREE.InstancedBufferAttribute(offsets, 3));
+    Object.keys(extras).forEach((name) => {
+      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(extras[name].array, extras[name].size));
+    });
+    geometry.instanceCount = offsets.length / 3;
+    return geometry;
+  }
+
   function makeCloud(position, index, name, expert, weight, fresh) {
     const group = new THREE.Group();
     group.position.copy(position);
     group.rotation.x = 0.28 + index * 0.31;
     group.rotation.z = -0.4 + index * 0.37;
     const cloud = sampleCloud(index, weight, fresh);
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(cloud.positions, 3));
-    geometry.setAttribute("aColor", new THREE.Float32BufferAttribute(cloud.colors, 3));
-    geometry.setAttribute("aSize", new THREE.Float32BufferAttribute(cloud.sizes, 1));
-    geometry.setAttribute("aAlpha", new THREE.Float32BufferAttribute(cloud.alphas, 1));
+    const geometry = quadGeometry(new Float32Array(cloud.positions), {
+      aColor: { array: new Float32Array(cloud.colors), size: 3 },
+      aSize: { array: new Float32Array(cloud.sizes), size: 1 },
+      aAlpha: { array: new Float32Array(cloud.alphas), size: 1 },
+    });
     const material = new THREE.ShaderMaterial({
       uniforms: {
         uPixelRatio: { value: renderer.getPixelRatio() },
+        uResolution: { value: resolution },
         uDim: { value: 1 },
         uBoost: { value: 1 },
       },
-      vertexShader: POINT_VERT,
-      fragmentShader: POINT_FRAG,
+      vertexShader: CLOUD_VERT,
+      fragmentShader: CLOUD_FRAG,
       transparent: true,
       depthWrite: false,
       depthTest: false,
@@ -568,7 +521,7 @@ export function createNebula(canvas, hooks) {
       premultipliedAlpha: true,
     });
     gasMats.push(material);
-    const points = new THREE.Points(geometry, material);
+    const points = new THREE.Mesh(geometry, material);
     points.frustumCulled = false;
     points.renderOrder = 1;
     group.add(points);
@@ -913,15 +866,18 @@ export function createNebula(canvas, hooks) {
   }
 
   function makePoints(positions, sizes, brights, flares, tints, order) {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
-    geometry.setAttribute("aBright", new THREE.BufferAttribute(brights, 1));
-    geometry.setAttribute("aFlare", new THREE.BufferAttribute(flares, 1));
-    geometry.setAttribute("aTint", new THREE.BufferAttribute(tints, 3));
+    const geometry = quadGeometry(positions, {
+      aSize: { array: sizes, size: 1 },
+      aBright: { array: brights, size: 1 },
+      aFlare: { array: flares, size: 1 },
+      aTint: { array: tints, size: 3 },
+    });
     geometry.userData.baseBright = Array.from(brights);
     const material = new THREE.ShaderMaterial({
-      uniforms: { uPixelRatio: { value: renderer.getPixelRatio() } },
+      uniforms: {
+        uPixelRatio: { value: renderer.getPixelRatio() },
+        uResolution: { value: resolution },
+      },
       vertexShader: STAR_VERT,
       fragmentShader: STAR_FRAG,
       transparent: true,
@@ -930,7 +886,7 @@ export function createNebula(canvas, hooks) {
       blending: THREE.AdditiveBlending,
       premultipliedAlpha: true,
     });
-    const points = new THREE.Points(geometry, material);
+    const points = new THREE.Mesh(geometry, material);
     points.frustumCulled = false;
     points.renderOrder = order;
     overlay.add(points);
@@ -1186,8 +1142,7 @@ export function createNebula(canvas, hooks) {
     renderer.setSize(width, height, false);
     const bufferW = Math.max(1, Math.floor(width * ratio));
     const bufferH = Math.max(1, Math.floor(height * ratio));
-    sceneTarget.setSize(bufferW, bufferH);
-    bloomUniforms.uTexel.value.set(2.2 / bufferW, 2.2 / bufferH);
+    resolution.set(bufferW, bufferH);
     camera.aspect = width / Math.max(1, height);
     camera.updateProjectionMatrix();
     const page = Boolean(canvas.closest("#nebula-host"));
@@ -1386,6 +1341,9 @@ export function createNebula(canvas, hooks) {
   let canvasVariance = 0;
   let canvasDiff = 0;
   let canvasMoved = 0;
+  let visualChecked = false;
+  let probed = false;
+  let probe = { flip: 0, peak: 0, rough: 0, lattice: false, variance: 0 };
   let capturedBefore = false;
   let beforeLumas = null;
   let gestureAt = 0;
@@ -1482,6 +1440,50 @@ export function createNebula(canvas, hooks) {
     }
   }
 
+  function probeVisual() {
+    if (visualChecked) return false;
+    if (frameCount < 8) return false;
+    if (expertClouds.size === 0 && frameCount < 45) return false;
+    const bw = gl.drawingBufferWidth || canvas.width || 0;
+    const bh = gl.drawingBufferHeight || canvas.height || 0;
+    const tw = 96;
+    const th = 72;
+    if (bw < tw + 2 || bh < th + 2) return false;
+    visualChecked = true;
+    try {
+      const x = Math.floor((bw - tw) / 2);
+      const y = Math.floor((bh - th) / 2);
+      const pixels = new Uint8Array(tw * th * 4);
+      gl.readPixels(x, y, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      const lumas = new Float32Array(tw * th);
+      for (let i = 0; i < tw * th; i += 1) {
+        const o = i * 4;
+        lumas[i] = (pixels[o] + pixels[o + 1] + pixels[o + 2]) / 3;
+      }
+      probe = classifyField(lumas, tw, th);
+      probed = true;
+      if (!probe.lattice) return false;
+      broken = true;
+      running = false;
+      const report = probe;
+      console.info(`nebula lattice flip=${report.flip.toFixed(3)} rough=${report.rough.toFixed(2)} peak=${report.peak.toFixed(3)}`);
+      // 等这一帧的渲染返回再拆掉 WebGL，避免在 draw 回调里销毁上下文。
+      setTimeout(() => {
+        if (hooks.onVisualFail) hooks.onVisualFail(report);
+      }, 0);
+      return true;
+    } catch (error) {
+      probed = true;
+      broken = true;
+      running = false;
+      console.info(`nebula probe ${error && error.message ? error.message : error}`);
+      setTimeout(() => {
+        if (hooks.onVisualFail) hooks.onVisualFail({ lattice: true, flip: 1, peak: 1, rough: 99 });
+      }, 0);
+      return true;
+    }
+  }
+
   function frame(now) {
     if (!running || broken) return;
     if (mode === "dim") {
@@ -1531,7 +1533,7 @@ export function createNebula(canvas, hooks) {
       starPoints.material.uniforms.uPixelRatio.value = ratio;
     }
     if (sparkPoints) {
-      const attr = sparkPoints.geometry.getAttribute("position");
+      const attr = sparkPoints.geometry.getAttribute("iOffset");
       const groups = sparkPoints.userData.groups || [];
       groups.forEach((group, groupIndex) => {
         const origin = group.position;
@@ -1574,17 +1576,16 @@ export function createNebula(canvas, hooks) {
       camera.position.lerp(camTarget, reduce ? 1 : 0.08);
       camera.lookAt(look);
       placeLabels();
-      renderer.setRenderTarget(sceneTarget);
-      renderer.setClearColor(0x000000, 0);
+      resolution.set(renderer.domElement.width || 1, renderer.domElement.height || 1);
+      renderer.setRenderTarget(null);
+      renderer.setClearColor(0x070910, 1);
       renderer.clear();
       renderer.render(scene, camera);
-      renderer.setRenderTarget(null);
-      renderer.clear();
-      renderer.render(bloomScene, bloomCamera);
       renderer.autoClear = false;
       renderer.render(overlay, camera);
       renderer.autoClear = true;
       captureE2eFrame();
+      if (probeVisual()) return;
     } catch (error) {
       broken = true;
       running = false;
@@ -1625,6 +1626,11 @@ export function createNebula(canvas, hooks) {
       canvasVariance,
       canvasDiff,
       canvasMoved,
+      flip: probe.flip,
+      peak: probe.peak,
+      rough: probe.rough,
+      lattice: probe.lattice,
+      probed,
     };
   }
 
@@ -1663,8 +1669,6 @@ export function createNebula(canvas, hooks) {
       labelLayer = null;
       sprite.dispose();
       bead.dispose();
-      bloomMaterial.dispose();
-      sceneTarget.dispose();
       renderer.dispose();
     },
   };

@@ -21,12 +21,15 @@ class AppUpdateTest {
         assertTrue(versionCodeOf("0.1.3") > 4)
         assertEquals(1004, versionCodeOf("0.1.4"))
         assertTrue(versionCodeOf("0.1.4") > versionCodeOf("0.1.3"))
+        assertEquals(1005, versionCodeOf("0.1.5"))
+        assertTrue(versionCodeOf("0.1.5") > versionCodeOf("0.1.4"))
         assertEquals("0.1.3", versionNameOfTag("android-v0.1.3"))
         assertEquals("0.1.4", versionNameOfTag("android-v0.1.4"))
+        assertEquals("0.1.5", versionNameOfTag("android-v0.1.5"))
         assertNull(versionNameOfTag("v0.1.3"))
         assertNull(versionNameOfTag("android-v0.1"))
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains(""""0.1.4""""))
+        assertTrue(gradle.contains(""""0.1.5""""))
         assertTrue(gradle.contains("releaseVersionCode(appVersion)"))
     }
 

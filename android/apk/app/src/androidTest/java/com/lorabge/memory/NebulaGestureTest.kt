@@ -183,11 +183,35 @@ class NebulaGestureTest {
             abs(moved.optDouble("cameraZ") - beforeZ) > 0.15 || abs(moved.optDouble("cameraX") - beforeX) > 0.05,
         )
         val canvasShot = waitStatus(15_000) { status ->
-            status.optDouble("canvasVariance") > 6.0 && status.optDouble("canvasDiff") > 2.0
+            status.optBoolean("probed") &&
+                !status.optBoolean("lattice") &&
+                status.optDouble("canvasVariance") > 6.0 &&
+                status.optDouble("canvasDiff") > 2.0
         }
         assertTrue(
-            "nebula canvas pixels did not show a gesture variance=${canvasShot.optDouble("canvasVariance")} diff=${canvasShot.optDouble("canvasDiff")}",
-            canvasShot.optDouble("canvasVariance") > 6.0 && canvasShot.optDouble("canvasDiff") > 2.0,
+            "nebula canvas pixels did not show a gesture variance=${canvasShot.optDouble("canvasVariance")} diff=${canvasShot.optDouble("canvasDiff")} probed=${canvasShot.optBoolean("probed")}",
+            canvasShot.optBoolean("probed") && canvasShot.optDouble("canvasVariance") > 6.0 && canvasShot.optDouble("canvasDiff") > 2.0,
+        )
+        assertFalse(
+            "nebula framebuffer is a noise lattice flip=${canvasShot.optDouble("flip")} rough=${canvasShot.optDouble("rough")} peak=${canvasShot.optDouble("peak")} path=${renderPath(canvasShot)}",
+            canvasShot.optBoolean("lattice"),
+        )
+        File(shots, "nebula-renderer.txt").writeText(
+            "renderer=${canvasShot.optString("renderer")}\n" +
+                "version=${canvasShot.optString("version")}\n" +
+                "path=${renderPath(canvasShot)}\n" +
+                "fallback=${canvasShot.optString("fallback")}\n" +
+                "touches=${canvasShot.optInt("touches")}\n" +
+                "variance=$variance\n" +
+                "idleDiff=$idleDiff\n" +
+                "pixelDiff=$pixelDiff\n" +
+                "flip=${canvasShot.optDouble("flip")}\n" +
+                "rough=${canvasShot.optDouble("rough")}\n" +
+                "lattice=${canvasShot.optBoolean("lattice")}\n" +
+                "probed=${canvasShot.optBoolean("probed")}\n" +
+                "sky=${canvasShot.optString("skyVersion")}\n" +
+                "canvasVariance=${canvasShot.optDouble("canvasVariance")}\n" +
+                "canvasDiff=${canvasShot.optDouble("canvasDiff")}\n",
         )
         assertTrue("fact card did not open\n${opened ?: hit}", opened != null)
         // 主机每秒才拉一次私有目录。文件多留一会儿，Gradle 卸包之前才能拷走。
@@ -200,14 +224,16 @@ class NebulaGestureTest {
 
     private fun renderPath(status: JSONObject): String {
         val path = status.optString("path")
-        if (path == "webgl2" || path == "webgl1" || path == "canvas") return path
+        if (path == "webgl2" || path == "webgl1" || path == "canvas" || path == "canvas2d") return path
         return when (status.optString("version")) {
             "webgl2" -> "webgl2"
             "webgl", "webgl1" -> "webgl1"
             "canvas" -> "canvas"
+            "canvas2d" -> "canvas2d"
             else -> when (status.optString("fallback")) {
                 "webgl1" -> "webgl1"
                 "canvas" -> "canvas"
+                "canvas2d" -> "canvas2d"
                 else -> ""
             }
         }

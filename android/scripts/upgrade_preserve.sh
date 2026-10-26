@@ -1,5 +1,5 @@
 #!/bin/sh
-# 用同一把测试钥匙打 0.1.3 和 0.1.4 的 x86_64 包（不含 arm64 .so），
+# 用同一把测试钥匙打 0.1.4 和 0.1.5 的 x86_64 包（不含 arm64 .so），
 # 在模拟器上 adb install -r，确认记忆、模型和设置还在。
 # 已发布的 0.1.2 和标签上那份 0.1.3 是另一把钥匙，不能拿来做这次覆盖安装。
 set -eu
@@ -123,25 +123,25 @@ export DISPLAY=:99
 EMU_PID=$!
 
 cd "$ROOT/android/apk"
-./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 --no-daemon
-cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.3.apk"
 ./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.4 --no-daemon
 cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.4.apk"
+./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.5 --no-daemon
+cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.5.apk"
 
 badging() {
   "$AAPT" dump badging "$1"
 }
-echo "$(badging "$STAGE/app-0.1.3.apk")" | grep -q "versionCode='1003'"
-echo "$(badging "$STAGE/app-0.1.3.apk")" | grep -q "versionName='0.1.3'"
 echo "$(badging "$STAGE/app-0.1.4.apk")" | grep -q "versionCode='1004'"
 echo "$(badging "$STAGE/app-0.1.4.apk")" | grep -q "versionName='0.1.4'"
-if unzip -l "$STAGE/app-0.1.4.apk" | grep -q '\.so$'; then
+echo "$(badging "$STAGE/app-0.1.5.apk")" | grep -q "versionCode='1005'"
+echo "$(badging "$STAGE/app-0.1.5.apk")" | grep -q "versionName='0.1.5'"
+if unzip -l "$STAGE/app-0.1.5.apk" | grep -q '\.so$'; then
   echo "升级测试包不应带原生库，否则 x86_64 模拟器装不上" >&2
   exit 1
 fi
 
-CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.3.apk" | grep 'SHA-256 digest' | head -1)
-CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.4.apk" | grep 'SHA-256 digest' | head -1)
+CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.4.apk" | grep 'SHA-256 digest' | head -1)
+CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.5.apk" | grep 'SHA-256 digest' | head -1)
 test -n "$CERT_A"
 test "$CERT_A" = "$CERT_B"
 
@@ -196,7 +196,7 @@ PY
 # shellcheck disable=SC1091
 . "$STAGE/grab.env"
 
-"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.3.apk"
+"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.4.apk"
 # adb shell 会把 run-as … sh -c "echo > file" 里的重定向吃掉，文件写不进应用目录。
 printf '%s\n' 'keep-memory' >"$STAGE/keep.txt"
 printf '%s\n' 'keep-model' >"$STAGE/keep.bin"
@@ -210,7 +210,7 @@ printf '%s\n' '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' '<map>'
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.bin files/models/keep.bin
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-setup.xml shared_prefs/setup.xml
 
-"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.4.apk"
+"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.5.apk"
 MEM=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/keep.txt | tr -d '\r')
 MOD=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/models/keep.bin | tr -d '\r')
 PREF=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat shared_prefs/setup.xml | tr -d '\r')
@@ -218,8 +218,8 @@ CODE=$("$ADB" -s "emulator-$PORT" shell dumpsys package com.lorabge.memory | tr 
 printf '%s\n' "$MEM" | grep -qx 'keep-memory'
 printf '%s\n' "$MOD" | grep -qx 'keep-model'
 printf '%s\n' "$PREF" | grep -q 'name="keep">yes'
-test "$CODE" = "1004"
-echo "upgrade preserved memory, models, settings; versionCode 1004"
+test "$CODE" = "1005"
+echo "upgrade preserved memory, models, settings; versionCode 1005"
 
 "$ADB" -s "emulator-$PORT" shell settings put secure show_ime_with_hard_keyboard 1
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
@@ -295,7 +295,7 @@ pull_e2e() {
   done <"$STAGE/e2e-ls.txt"
 }
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.5 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
 chat_pid=$!
 set -e
 while kill -0 "$chat_pid" 2>/dev/null; do
@@ -316,7 +316,7 @@ fi
 RECORD="$STAGE/nebula-gesture.webm"
 RECORD_NAME="$RECORD"
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.5 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
 nebula_pid=$!
 recorded=0
 for _ in $(seq 1 180); do
@@ -480,7 +480,7 @@ fi
 if [ -s "$STAGE/nebula-renderer.keep" ] && ! grep -q '^path=' "$STAGE/shots/nebula-renderer.txt" 2>/dev/null; then
   cp "$STAGE/nebula-renderer.keep" "$STAGE/shots/nebula-renderer.txt"
 fi
-for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png 09-nebula-before.png 10-nebula-after.png canvas-before.png canvas-after.png nebula-gesture.mp4 nebula-renderer.txt; do
+for name in 01-ime.png 02-typing.png 03-ack.png 04-pending.png 05-train.png 06-recall-cat.png 07-zore.png 08-nebula-fact.png 09-nebula-before.png 10-nebula-after.png canvas-before.png canvas-after.png canvas-sky.png nebula-gesture.mp4 nebula-renderer.txt; do
   if [ ! -s "$STAGE/shots/$name" ]; then
     echo "缺少 $STAGE/shots/$name" >&2
     find "$STAGE/shots" -type f -exec ls -l {} \; >&2 || true

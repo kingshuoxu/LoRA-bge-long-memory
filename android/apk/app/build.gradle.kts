@@ -13,7 +13,7 @@ fun releaseVersionCode(versionName: String): Int {
     return parts[0].toInt() * 1_000_000 + parts[1].toInt() * 1_000 + parts[2].toInt()
 }
 
-val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.4"
+val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.5"
 val skipNative = findProperty("lorabge.skipNative") == "true"
 fun secretOr(name: String, fallback: String): String =
     System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
@@ -135,4 +135,13 @@ dependencies {
 tasks.withType<Test> {
     // 单元测试跑在 JVM 上,android.jar 里的 org.json 是空壳。换成真正的实现。
     classpath = files(classpath.filter { file -> !file.name.contains("android.jar") })
+}
+
+tasks.register<Exec>("nebulaPixelTest") {
+    workingDir(project.projectDir)
+    commandLine("node", "src/main/assets/nebula/nebula-pixels.test.mjs")
+}
+
+tasks.named("testDebugUnitTest").configure {
+    dependsOn("nebulaPixelTest")
 }

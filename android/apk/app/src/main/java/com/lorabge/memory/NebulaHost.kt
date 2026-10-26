@@ -144,7 +144,12 @@ private fun writeNebulaStatus(context: android.content.Context, json: String) {
             "touches=${obj.optInt("touches")}\n" +
             "zoom=${obj.optDouble("zoom")}\n" +
             "cameraZ=${obj.optDouble("cameraZ")}\n" +
-            "skyRenderer=${obj.optString("skyRenderer")}\n"
+            "skyRenderer=${obj.optString("skyRenderer")}\n" +
+            "skyVersion=${obj.optString("skyVersion")}\n" +
+            "flip=${obj.optDouble("flip")}\n" +
+            "rough=${obj.optDouble("rough")}\n" +
+            "lattice=${obj.optBoolean("lattice")}\n" +
+            "probed=${obj.optBoolean("probed")}\n"
     }
     File(setup, "nebula-gl.txt").writeText(body)
 }
@@ -181,7 +186,7 @@ private class NebulaBridge(
 
     @JavascriptInterface
     fun onFrame(name: String, dataUrl: String, variance: String) {
-        if (name != "canvas-before" && name != "canvas-after") return
+        if (name != "canvas-before" && name != "canvas-after" && name != "canvas-sky") return
         if (!File(appContext.filesDir, "setup/e2e").exists()) return
         val comma = dataUrl.indexOf(',')
         if (comma < 0 || comma > 80) return
