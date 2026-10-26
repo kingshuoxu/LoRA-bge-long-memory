@@ -243,7 +243,7 @@ jobs:
           NOTES=$(cat << EOF
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
 
-          0.1.6 修了设置里的「检查更新」。直连 GitHub 失败会继续试 gh-proxy.com、gh-proxy.org、ghfast.top、gh.llkk.cc 和 gh.nxnow.top。HTML 落地页会被跳过。ghproxy.net 超时、mirror.ghproxy.com 没有 DNS，不再使用。连不上时界面用中文说明，并给出发布页上的安装包。不读 releases/latest。
+          0.1.6 修了设置里的「检查更新」。直连 GitHub 失败会继续试 gh-proxy.com、gh-proxy.org、ghfast.top、gh.llkk.cc 和 gh.nxnow.top。HTML 落地页会被跳过。ghproxy.net 超时、mirror.ghproxy.com 没有 DNS，不再使用。连不上时界面用中文说明，并给出发布页上的安装包。不读 releases/latest。设置页里直接有「下载并安装」，不用先关掉设置。
 
           0.1.5 修了真机上星云背景变成整屏棕色格子噪点的问题。银河着色器改用高精度和不会溢出的散列，粒子改成面向相机的四边形，直接画进 8 位帧缓冲，不再经过半精度离屏目标和点精灵。画面若仍被判成格子噪点，就在同一页改画 canvas 星云，专家标签和事实卡还在。
 

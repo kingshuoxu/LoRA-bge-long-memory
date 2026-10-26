@@ -631,6 +631,14 @@ private fun SettingsPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) 
         if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
             Text(state.updateMessage.ifBlank { skyText(state.lang, "updateReady") }, color = Ink, fontSize = 14.sp)
         }
+        if (state.updatePhase == "available" || state.updatePhase == "need_permission" || state.updatePhase == "error") {
+            Text(
+                skyText(state.lang, "updateDownload"),
+                color = Accent2,
+                fontSize = 16.sp,
+                modifier = Modifier.clickable { onEvent(SkyEvent.StartUpdate) }.padding(vertical = 4.dp),
+            )
+        }
         Text(skyText(state.lang, "advanced"), color = Muted, modifier = Modifier.padding(top = 8.dp))
         Text(skyText(state.lang, "import"), color = Accent, modifier = Modifier.clickable { onEvent(SkyEvent.ImportExperts) })
         Text(skyText(state.lang, "selfCheck"), color = Accent2, modifier = Modifier.clickable { onEvent(SkyEvent.SelfCheck) })

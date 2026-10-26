@@ -15,7 +15,7 @@ SHOTS = STAGE / "shots"
 SHOTS.mkdir(parents=True, exist_ok=True)
 EXPECTED_NEW_SHA = "7efa7e71366df3a03b6dc3272f3f6feea94044b148011436ac5c865c2070a861"
 EXPECTED_NEW_SIZE = 51542731
-INSTALL_LABELS = {"Install", "Update", "安装", "更新", "Install anyway", "More details", "Update anyway"}
+INSTALL_LABELS = {"Install", "Update", "安装", "更新", "Install anyway", "Update anyway", "仍然安装", "安装应用"}
 
 
 def adb(*args, timeout=90, check=True):
@@ -132,6 +132,79 @@ def swipe_up():
     adb("shell", "input", "swipe", "540", "1800", "540", "700", "350")
 
 
+def swipe_down():
+    adb("shell", "input", "swipe", "540", "700", "540", "1800", "350")
+
+
+def clickable_nodes(root):
+    if root is None:
+        return []
+    found = []
+    for node in root.iter("node"):
+        if node.attrib.get("clickable") != "true":
+            continue
+        point = center(node)
+        if point:
+            found.append(point + (node.attrib.get("text", ""), node.attrib.get("content-desc", "")))
+    return found
+
+
+def find_header_close(root):
+    best = None
+    for x, y, text, desc in clickable_nodes(root):
+        if text or desc:
+            continue
+        if x < 700 or y < 20 or y > 460:
+            continue
+        if best is None or y < best[1] or (y == best[1] and x > best[0]):
+            best = (x, y)
+    return best
+
+
+def close_settings():
+    """0.1.4 draws 下载并安装 on a card under the full-screen settings sheet."""
+    notes = []
+    for _ in range(8):
+        root = dump_root()
+        title = find_exact(root, "设置")
+        close = find_header_close(root)
+        notes.append(f"title={title} close={close}")
+        if close and title and abs(close[1] - title[1]) < 90 and 20 < title[1] < 460:
+            tap(close)
+            time.sleep(1)
+            (STAGE / "close-settings.txt").write_text("\n".join(notes) + "\n", encoding="utf-8")
+            return
+        if title and 40 < title[1] < 420:
+            tap((1000, title[1]))
+            time.sleep(1)
+            again = dump_root()
+            if find_exact(again, "下载并安装") or find_exact(again, "设置") is None:
+                notes.append("tapped title row right edge")
+                (STAGE / "close-settings.txt").write_text("\n".join(notes) + "\n", encoding="utf-8")
+                return
+        swipe_down()
+        time.sleep(0.6)
+    tap((1000, 160))
+    notes.append("fallback tap 1000,160")
+    (STAGE / "close-settings.txt").write_text("\n".join(notes) + "\n", encoding="utf-8")
+
+
+def find_install_button(root):
+    for label in INSTALL_LABELS:
+        point = find_exact(root, label)
+        if point:
+            return point, label
+    if root is None:
+        return None, ""
+    for node in root.iter("node"):
+        rid = node.attrib.get("resource-id", "")
+        if rid.endswith("/ok_button") or rid.endswith(":id/button1"):
+            point = center(node)
+            if point:
+                return point, rid
+    return None, ""
+
+
 def wait_exact(needle, seconds, shot_name):
     deadline = time.time() + seconds
     last = ""
@@ -177,12 +250,27 @@ def main():
     started = time.time()
     offer = None
     offer_text = ""
+    closed_settings = False
     deadline = time.time() + 150
     while time.time() < deadline:
         root = dump_root()
         offer_text = visible_text(root)
-        if "下载并安装" in offer_text or "可以更新 0.1.5" in offer_text or "版本 0.1.5" in offer_text:
-            offer = find_exact(root, "下载并安装")
+        offer = find_exact(root, "下载并安装")
+        if offer:
+            break
+        if "版本 0.1.5" in offer_text or "可以更新 0.1.5" in offer_text:
+            shot("03-version")
+            (STAGE / "offer-text.txt").write_text(offer_text, encoding="utf-8")
+            close_settings()
+            closed_settings = True
+            inner = time.time() + 20
+            while time.time() < inner:
+                root = dump_root()
+                offer_text = visible_text(root)
+                offer = find_exact(root, "下载并安装")
+                if offer:
+                    break
+                time.sleep(1)
             break
         if any(bad in offer_text for bad in ("连不上", "connection closed", "connection abort", "Software caused", "检查失败")):
             shot("03-check-failed")
@@ -197,6 +285,7 @@ def main():
     tap(offer)
 
     installer_tapped = False
+    installer_label = ""
     updated = False
     end = time.time() + 600
     last = offer_text
@@ -207,14 +296,13 @@ def main():
             break
         root = dump_root()
         last = visible_text(root)
-        for label in INSTALL_LABELS:
-            point = find_exact(root, label)
-            if point:
-                shot("04-installer")
-                tap(point)
-                installer_tapped = True
-                time.sleep(2)
-                break
+        point, label = find_install_button(root)
+        if point:
+            shot("04-installer")
+            tap(point)
+            installer_tapped = True
+            installer_label = label
+            time.sleep(2)
         time.sleep(3)
     shot("04-after-download")
     if not updated:
@@ -263,7 +351,10 @@ def main():
         f"before=1004 0.1.4",
         f"after={code} {name}",
         f"offer_seconds={found_after}",
+        f"closed_settings_to_reach_download={str(closed_settings).lower()}",
         f"installer_tapped={str(installer_tapped).lower()}",
+        f"installer_label={installer_label}",
+        f"urls_baked_into_0.1.4={(STAGE / 'urls-in-0.1.4.txt').read_text(encoding='utf-8').strip().replace(chr(10), ' | ') if (STAGE / 'urls-in-0.1.4.txt').exists() else ''}",
         f"installed_apk_sha256={sha}",
         f"installed_apk_bytes={size}",
         f"published_0.1.5_sha256={EXPECTED_NEW_SHA}",
