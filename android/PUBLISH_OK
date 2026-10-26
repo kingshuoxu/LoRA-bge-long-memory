@@ -1,0 +1,9 @@
+ca92142 的 upgrade-e2e 已核对，可以发 android-v0.1.4。
+
+运行 https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/40308248465
+
+画布 canvas-before.png / canvas-after.png 是 160×220，近黑像素为 0，平均亮度约 74，最大亮度 255。捏合前后平均亮度差 3.55，亮度差大于 12 的像素有 1527 个，亮部重心从 x≈115 移到 x≈108。nebula-gesture.mp4 由这两帧转出，160×220、2 秒，亮度方差 159.65，帧差 14.31。
+
+nebula-renderer.txt：path=webgl2，SwiftShader，touches=3。状态里 canvasVariance=129，canvasDiff=3.54，canvasMoved=1518，事实卡是佐雷公司 1979。
+
+控制台 webm 仍是黑的 1080×2400，窗口抓取仍是灰边，这两路不算星云证据。
