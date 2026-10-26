@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LoRA 长记忆</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="sky" aria-hidden="true"></canvas>
+  <div id="boot" class="boot">
+    <div class="boot-card">
+      <img class="boot-mark" src="icon.png" alt="" />
+      <div class="orb" aria-hidden="true"></div>
+      <h1 data-i18n="app.name">LoRA 长记忆</h1>
+      <p id="boot-text" data-i18n="boot.loading">正在准备本地模型…</p>
+      <div id="boot-progress" class="boot-progress" hidden>
+        <div class="boot-progress-meta">
+          <span id="boot-file"></span>
+          <span id="boot-percent"></span>
+        </div>
+        <div id="boot-bar" class="boot-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="boot-bar-fill"></div>
+        </div>
+        <p id="boot-bytes" class="muted"></p>
+      </div>
+      <p class="muted" data-i18n="boot.download">首次运行会下载 Qwen2.5-0.5B-Instruct 和 bge-small-zh-v1.5，大约 1.1 GB，只下载一次。</p>
+    </div>
+  </div>
+  <div id="app" class="app" hidden>
+    <aside class="side">
+      <div class="brand">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <strong data-i18n="app.name">LoRA 长记忆</strong>
+          <div class="muted" id="device-label" data-i18n="device.local">本地</div>
+        </div>
+      </div>
+      <nav class="side-actions" data-i18n-aria="nav.label" aria-label="视图">
+        <button id="nav-chat" type="button" class="nav active"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7.2H6.2L3.2 13V3.5z" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span data-i18n="nav.chat">对话</span></button>
+        <button id="nav-consolidate" type="button" class="nav"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 11.5l3.2-4.2 2.4 2.2L14 3.5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="14" cy="3.5" r="1.1" fill="currentColor"/></svg><span data-i18n="nav.consolidate">巩固</span></button>
+        <button id="nav-nebula" type="button" class="nav"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="10.2" cy="7.2" r="2.4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span data-i18n="nav.nebula">星云</span></button>
+        <button id="memory-tab" type="button" class="nav"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.8h7.2v10.4H3zM10.2 2.8H13v10.4h-2.8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span data-i18n="nav.memory">记忆库</span></button>
+      </nav>
+      <div class="side-actions secondary">
+        <button id="new-chat" type="button"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span data-i18n="action.new">新对话</span></button>
+        <button id="consolidate" type="button" class="primary"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.2l3.1 3.1L13 4.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span data-i18n="action.consolidate">巩固所选</span></button>
+      </div>
+      <div id="conv-list" class="conv-list"></div>
+    </aside>
+    <main>
+      <header class="top">
+        <div>
+          <p class="eyebrow" id="eyebrow" data-i18n="nav.chat">对话</p>
+          <h2 id="title" data-i18n="title.new">新对话</h2>
+        </div>
+        <div class="top-tools">
+          <button id="open-settings" type="button" data-i18n="action.settings">设置</button>
+          <div class="lang" id="lang-switch" role="group" data-i18n-aria="lang.label" aria-label="语言">
+            <button id="lang-zh" type="button" data-locale="zh-CN" aria-pressed="true">中文</button>
+            <button id="lang-en" type="button" data-locale="en" aria-pressed="false">EN</button>
+          </div>
+          <div id="jobbar" class="jobbar" hidden></div>
+        </div>
+      </header>
+      <div id="update-banner" class="update-banner" hidden>
+        <div>
+          <strong id="update-title"></strong>
+          <p id="update-detail" class="muted"></p>
+          <pre id="update-notes" hidden></pre>
+        </div>
+        <div class="sheet-actions">
+          <a id="update-link" hidden></a>
+          <button id="update-install" type="button" hidden></button>
+          <button id="update-dismiss" type="button" data-i18n="settings.later">稍后</button>
+        </div>
+      </div>
+      <section id="chat-view">
+        <div class="chat-split">
+          <div class="chat-column">
+            <div id="messages" class="messages"></div>
+            <form id="composer" class="composer">
+              <textarea id="input" rows="3" data-i18n-placeholder="composer.placeholder" data-i18n-title="composer.hint" placeholder="发消息…" title="若要改一条已经记住的事实，直接说出新的取值"></textarea>
+              <button id="send" type="submit" data-i18n="action.send">发送</button>
+            </form>
+          </div>
+          <div id="recall-host" class="recall-host">
+            <div id="nebula-column" class="nebula-column">
+              <p id="recall-banner" class="recall-banner" hidden>未调用记忆</p>
+              <div id="nebula-stage" class="nebula-wrap">
+                <canvas id="nebula-canvas"></canvas>
+                <div id="nebula-tip" class="nebula-tip" hidden></div>
+                <div id="nebula-empty" class="nebula-empty" hidden data-i18n="empty.nebula">星图还是空的。先在对话里留下事实，再点「巩固所选」。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section id="consolidate-view" hidden>
+        <div class="stage-layout">
+          <div id="stage-status" class="stage-status" hidden>
+            <div class="stage-status-row">
+              <strong id="stage-kicker"></strong>
+              <span id="stage-elapsed" class="muted"></span>
+            </div>
+            <p id="stage-detail"></p>
+            <div id="stage-meter" class="boot-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+              <div id="stage-meter-fill"></div>
+            </div>
+          </div>
+          <div id="stage-list" class="stage-list"></div>
+          <div class="stage-panel">
+            <div id="loss-card" class="loss-card" hidden></div>
+            <div id="stage-feed" class="stage-feed"></div>
+            <div id="fact-editor" hidden>
+              <div id="fact-list" class="fact-list"></div>
+              <div class="sheet-actions">
+                <button id="editor-commit" type="button" class="primary" data-i18n="action.start">开始巩固</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section id="nebula-view" hidden>
+        <div id="nebula-host" class="nebula-host"></div>
+      </section>
+      <section id="memory-view" hidden></section>
+    </main>
+  </div>
+  <div id="settings" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h3 id="settings-title" data-i18n="settings.title">设置</h3>
+      <p class="muted" data-i18n="settings.mirrorHint">GitHub 下载慢时，填一个放了同样安装包、latest-*.yml、blockmap 和 desktop-release.json 的地址。</p>
+      <p id="settings-gatekeeper" class="muted" hidden data-i18n="settings.gatekeeper">这个应用没有签名。第一次打开时，在访达里按住 Control 点按应用，选「打开」，再在对话框里点「打开」。直接双击会被系统拦住。</p>
+      <label class="settings-field">
+        <span data-i18n="settings.advanced">显示路由和分数</span>
+        <input id="settings-advanced" type="checkbox" />
+      </label>
+      <label class="settings-field">
+        <span data-i18n="settings.mirror">更新镜像</span>
+        <input id="update-url" type="url" data-i18n-placeholder="settings.mirrorPlaceholder" placeholder="https://example.com/lora-bge-memory/">
+      </label>
+      <p id="settings-update-status" class="muted"></p>
+      <pre id="settings-changelog" hidden></pre>
+      <div class="sheet-actions">
+        <button id="settings-close" type="button" data-i18n="action.close">关闭</button>
+        <button id="settings-save-mirror" type="button" data-i18n="settings.saveMirror">保存镜像</button>
+        <button id="settings-check" type="button" class="primary" data-i18n="settings.check">检查更新</button>
+        <button id="settings-install" type="button" class="primary" hidden></button>
+      </div>
+    </div>
+  </div>
+  <div id="modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h3 id="modal-title" data-i18n="title.detail">细节</h3>
+      <div id="modal-body"></div>
+      <div class="sheet-actions">
+        <button id="modal-close" type="button" data-i18n="action.close">关闭</button>
+        <button id="modal-commit" type="button" class="primary" data-i18n="action.confirm">确认</button>
+      </div>
+    </div>
+  </div>
+  <div id="recall-comet" class="recall-comet" hidden></div>
+  <script src="sky.js"></script>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

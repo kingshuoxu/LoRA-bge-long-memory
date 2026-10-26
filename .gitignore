@@ -28,3 +28,10 @@ data_router/
 models/
 __pycache__/
 *.pyc
+
+# 桌面客户端构建产物
+desktop/node_modules/
+desktop/dist/
+desktop/dist-prev/
+packaging/runtime/
+packaging/cache/
