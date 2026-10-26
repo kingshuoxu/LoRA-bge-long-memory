@@ -142,6 +142,7 @@ class TrainService : Service() {
                 .apply {
                     environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
                     // 只占超大核和大核。天玑 9400 的 1+3+4 是 4 线程，小米 15 两档 Oryon 仍是 8。
+                    // 绑核在 OpenBLAS 编译时关掉。运行时再设线程数，避免按小核把 GEMM 拖死。
                     environment()["OPENBLAS_NUM_THREADS"] = threads.toString()
                     environment()["OMP_NUM_THREADS"] = "1"
                 }
@@ -161,21 +162,30 @@ class TrainService : Service() {
             var step = 0
             var total = 0
             var loss: Float? = null
+            var pendingStep = 0
+            var micro = 0
+            var microTotal = 0
             var lastLine = "开始训练 ${expanded.size} 条事实"
+            var lastAdvance = System.currentTimeMillis()
+            var stalled = false
             while (reader.isAlive || pending.isNotEmpty()) {
                 if (cancel.exists()) {
-                    proc.destroy()
-                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消,检查点留在 ${outDir.name}", tailOf(log))
+                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消,检查点留在 ${outDir.name}", tailOf(log), pendingStep, micro, microTotal)
+                    killTrain(proc)
                     break
                 }
-                var line = pending.poll()
-                while (line != null) {
+                var advanced = false
+                while (true) {
+                    val line = pending.poll() ?: break
+                    if (line.isNotBlank()) {
+                        advanced = true
+                        lastLine = line.take(180)
+                    }
                     val parsed = parseStepLine(line)
                     if (parsed != null) {
                         step = parsed.first
                         total = parsed.second
                         loss = parsed.third
-                        lastLine = line.take(180)
                         val rss = File("/proc/${pidOf(proc)}/status").takeIf { it.exists() }
                             ?.readLines()?.firstOrNull { it.startsWith("VmRSS") }?.substringAfter(":")?.trim() ?: ""
                         val thermal = File("/sys/class/thermal").listFiles()
@@ -184,18 +194,49 @@ class TrainService : Service() {
                             }?.joinToString(",") ?: ""
                         val battery = (getSystemService(BATTERY_SERVICE) as BatteryManager).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
                         telemetry.appendText("${(System.currentTimeMillis() - started) / 1000}\t$rss\t$thermal\t$battery\n")
-                    } else if (line.isNotBlank()) {
-                        lastLine = line.take(180)
                     }
-                    line = pending.poll()
+                    val mark = parseMicroLine(line)
+                    if (mark != null) {
+                        micro = mark.micro
+                        microTotal = mark.microTotal
+                        pendingStep = mark.pendingStep
+                        total = mark.total
+                    }
                 }
-                publish(status, "running", "train", step, total, epochs, loss, started, lastLine, "")
-                notify(if (total > 0) "第 $step/$total 步" else "这一步还在计算")
+                if (advanced) lastAdvance = System.currentTimeMillis()
+                if (trainStillExpected(step, total) && trainQuietTooLong(lastAdvance, System.currentTimeMillis())) {
+                    val detail = trainStallDetail(lastLine)
+                    publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
+                    notify("训练没有前进")
+                    stalled = true
+                    killTrain(proc)
+                    break
+                }
+                publish(status, "running", "train", step, total, epochs, loss, started, lastLine, "", pendingStep, micro, microTotal)
+                notify(
+                    when {
+                        total > 0 && step > 0 -> "第 $step/$total 步"
+                        pendingStep > 0 && microTotal > 0 -> "第 $pendingStep/$total 步 · 微批 $micro/$microTotal"
+                        else -> "这一步还在计算"
+                    },
+                )
                 if (!reader.isAlive && pending.isEmpty()) break
                 Thread.sleep(1000)
             }
             reader.join(2000)
-            val code = if (proc.isAlive) proc.waitFor() else proc.exitValue()
+            if (stalled) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return
+            }
+            val code = when {
+                !proc.isAlive -> runCatching { proc.exitValue() }.getOrDefault(-1)
+                proc.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) -> proc.exitValue()
+                else -> {
+                    killTrain(proc)
+                    if (proc.isAlive) -1 else runCatching { proc.exitValue() }.getOrDefault(-1)
+                }
+            }
             if (cancel.exists()) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -255,9 +296,22 @@ class TrainService : Service() {
         startedMs: Long,
         detail: String,
         logTail: String,
+        pendingStep: Int = 0,
+        micro: Int = 0,
+        microTotal: Int = 0,
     ) {
         val elapsed = (System.currentTimeMillis() - startedMs) / 1000
-        file.writeText(trainSnapshotJson(state, stage, step, total, epochs, loss, elapsed, detail, logTail))
+        file.writeText(
+            trainSnapshotJson(
+                state, stage, step, total, epochs, loss, elapsed, detail, logTail,
+                pendingStep, micro, microTotal,
+            ),
+        )
+    }
+
+    private fun killTrain(proc: Process) {
+        runCatching { proc.destroyForcibly() }
+        runCatching { proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) }
     }
 
     private fun tailOf(log: File): String {

@@ -37,7 +37,7 @@ QVAC 这一版一次一步、没有微批,`--assistant-loss-only` 吃 ChatML JSO
 
 QVAC 的反向和 PyTorch 对不上。同一条序列上,24 层 LoRA 梯度的余弦大约是 -0.03,前面几层的梯度范数比 PyTorch 大几十倍。Adam 和 SGD 都会停在初始 loss,或者把 loss 越训越高。这不是学习率能修的。
 
-训练改走 MobileFineTuner 的 Qwen2.5-0.5B 原生自动微分,提交 `086b1a027fe708d5eaca89b1ec2bf1a876fb80de`,补丁在 `android/trainer/mft-ffn-lora.patch`。补丁加了 FFN 的 gate/up/down LoRA,loss 只算 JSONL 掩码标出来的 token,和仓库 `selective_loss` 一样是移位后的交叉熵。单条事实可以在几步里从 4.7 收到 0.0001。配方是 rank 32、alpha 64、Adam、学习率 5e-4、weight decay 0、梯度裁剪 1.0、batch 8、seed 42。基座在内存里用 fp32,这样 GEMM 走 BLAS;对话仍用 f16 GGUF。手机上的 `libtrain-mft.so` 和桌面这个二进制是同一份源码,并且都链 OpenBLAS。手机这份是 OpenBLAS 0.3.28、`TARGET=ARMV8`(NEON,不用 SVE),编译期最多 8 线程。小米 15 的 8 个 Oryon 都是性能核,训练时把 `OPENBLAS_NUM_THREADS` 设成 `availableProcessors()` 和 8 里较小的那个。学习率、epoch、LoRA 目标和 loss 掩码是同一套。巩固时的样本格式也改成和桌面 `AssistantDataset` 一样:先问「请说出这条事实。」,每条确认过的问句再加「请简短回答。」,损失只在助手 token 上。闸门用的改写问句不进训练。
+训练改走 MobileFineTuner 的 Qwen2.5-0.5B 原生自动微分,提交 `086b1a027fe708d5eaca89b1ec2bf1a876fb80de`,补丁在 `android/trainer/mft-ffn-lora.patch`。补丁加了 FFN 的 gate/up/down LoRA,loss 只算 JSONL 掩码标出来的 token,和仓库 `selective_loss` 一样是移位后的交叉熵。单条事实可以在几步里从 4.7 收到 0.0001。配方是 rank 32、alpha 64、Adam、学习率 5e-4、weight decay 0、梯度裁剪 1.0、batch 8、seed 42。基座在内存里用 fp32,这样 GEMM 走 BLAS;对话仍用 f16 GGUF。手机上的 `libtrain-mft.so` 和桌面这个二进制是同一份源码,并且都链 OpenBLAS。手机这份是 OpenBLAS 0.3.28、`TARGET=ARMV8`(NEON,不用 SVE)、`NO_AFFINITY=1`,编译期最多 8 线程。交叉编译时 `uname` 是 Linux,OpenBLAS 会自己打开 `sched_setaffinity`。vivo X200 Pro 上第一次 `cblas_sgemm` 因此不返回,巩固停在 `[Dataset] epochs=4 max_steps=8`,界面是「这一步还在计算 · 已过 2480 秒」。小米 15 的 8 个 Oryon 都是性能核,训练时把 `OPENBLAS_NUM_THREADS` 设成 `availableProcessors()` 和 8 里较小的那个。学习率、epoch、LoRA 目标和 loss 掩码是同一套。巩固时的样本格式也改成和桌面 `AssistantDataset` 一样:先问「请说出这条事实。」,每条确认过的问句再加「请简短回答。」,损失只在助手 token 上。闸门用的改写问句不进训练。
 
 batch_0 的 450 条样本(50 条陈述句 + 每条 8 个 QA)跑了 12 个 epoch。每个 epoch 结束存一次权重,再用 f16 基座、`verify_memory_gguf.py` 的贪心规则打分。
 
@@ -139,7 +139,7 @@ System image must match the host architecture.
 
 vivo X200 Pro 上星云曾停在一块不动的底色上：WebView 被盖住，点不了，Three.js 又只申请 WebGL2。0.1.3 让触摸进到页面，WebGL2 失败时改画 WebGL1，两种都没有就用 Compose 画粒子云、星和连线。控制台和 `gl.getParameter(RENDERER)` 进 logcat，也附在导出诊断里。改走兼容画面时只提示一次。「新」只标这次打开之后巩固出来的专家，导入的不算。模拟器任务会在 SwiftShader 上捏合、拖动、点开事实卡，录像在 `upgrade-e2e` 的 `nebula-gesture.mp4`。
 
-vivo X200 Pro 上 0.1.2 的对话不再崩溃。0.1.3 接着修键盘挡住输入栏、生成时静止的省略号、巩固停在「损失 · 0 步」、开放问题不走记忆并让基座编造佐雷公司年份,以及陈述句只回一个名字。原生路由对「告诉我佐雷公司相关信息」常在事实闸门 `abstain_fact` 或没有业务线索时不开火,界面于是把问题交给基座。现在只要问句里的名字对上 `fact_memory.json` 里的实体,就用已存事实作答,不再生成;库里没有的那一项会写「其余不在记忆里」。这次路由的 `nativeFired` / `nativeReason` / `nativeSim` 记在 `files/setup/last-route.json`,导出诊断时附在末尾。「损失 · 0 步」是因为训练要攒满 8 个微批才打出第一行 `loss=`,状态文件以前不在这一步中间更新。现在 `:train` 每秒写心跳,第一步显示「这一步还在计算 · 已过 N 秒」。
+vivo X200 Pro 上 0.1.2 的对话不再崩溃。0.1.3 接着修键盘挡住输入栏、生成时静止的省略号、巩固停在「损失 · 0 步」、开放问题不走记忆并让基座编造佐雷公司年份,以及陈述句只回一个名字。原生路由对「告诉我佐雷公司相关信息」常在事实闸门 `abstain_fact` 或没有业务线索时不开火,界面于是把问题交给基座。现在只要问句里的名字对上 `fact_memory.json` 里的实体,就用已存事实作答,不再生成;库里没有的那一项会写「其余不在记忆里」。这次路由的 `nativeFired` / `nativeReason` / `nativeSim` 记在 `files/setup/last-route.json`,导出诊断时附在末尾。「损失 · 0 步」是因为训练要攒满 8 个微批才打出第一行 `loss=`,状态文件以前不在这一步中间更新。现在 `:train` 每秒写心跳,第一步显示「这一步还在计算 · 已过 N 秒」。0.1.5 给这一步加了上限:每个微批开始打出 `[micro i/n] step k/m`,页面显示「第 k/m 步 · 微批 i/n」;超过 3 分钟没有新输出就失败,可以重试或取消。最后一步打出之后写适配器的那段安静时间不算卡住。
 
 这次运行的 URL 写在文末和 PR 描述里。
 

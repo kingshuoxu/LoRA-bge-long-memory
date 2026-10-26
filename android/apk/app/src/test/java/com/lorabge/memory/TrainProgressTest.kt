@@ -49,4 +49,58 @@ class TrainProgressTest {
         assertTrue(text.contains("失败"))
         assertTrue(text.contains("signal 11"))
     }
+
+    @Test
+    fun datasetLineIsNotAStep() {
+        assertEquals(null, parseStepLine("[Dataset] epochs=4 max_steps=8"))
+        val mark = parseMicroLine("[micro 3/8] step 1/8")
+        assertEquals(3, mark?.micro)
+        assertEquals(8, mark?.microTotal)
+        assertEquals(1, mark?.pendingStep)
+        assertEquals(8, mark?.total)
+        assertEquals(null, parseMicroLine("[Dataset] epochs=4 max_steps=8"))
+    }
+
+    @Test
+    fun microProgressShowsBeforeTheFirstLoss() {
+        val text = formatTrainProgress(
+            "zh",
+            TrainSnapshot(
+                state = "running",
+                stage = "train",
+                step = 0,
+                total = 8,
+                pendingStep = 1,
+                micro = 3,
+                microTotal = 8,
+                elapsedSec = 40,
+            ),
+        )
+        assertTrue(text.contains("第 1/8 步"))
+        assertTrue(text.contains("微批 3/8"))
+        assertTrue(text.contains("已过 40 秒"))
+        assertFalse(text.contains("0 步"))
+        assertFalse(text.contains("这一步还在计算"))
+        assertEquals(0.046875f, trainFraction(TrainSnapshot(step = 0, total = 8, pendingStep = 1, micro = 3, microTotal = 8)), 0.0001f)
+    }
+
+    @Test
+    fun quietTrainerBecomesARetryableFailure() {
+        assertFalse(trainQuietTooLong(1_000, 1_000 + TRAIN_STALL_MS - 1))
+        assertTrue(trainQuietTooLong(1_000, 1_000 + TRAIN_STALL_MS))
+        assertTrue(trainStillExpected(0, 0))
+        assertTrue(trainStillExpected(0, 8))
+        assertTrue(trainStillExpected(7, 8))
+        assertFalse(trainStillExpected(8, 8))
+        assertEquals(180_000L, TRAIN_STALL_MS)
+        val detail = trainStallDetail("[Dataset] epochs=4 max_steps=8")
+        assertTrue(detail.contains("3 分钟"))
+        assertTrue(detail.contains("确认并训练"))
+        assertTrue(detail.contains("取消训练"))
+        assertTrue(detail.contains("[Dataset] epochs=4 max_steps=8"))
+        val shown = formatTrainProgress("zh", TrainSnapshot(state = "error", detail = detail))
+        assertTrue(shown.contains("失败"))
+        assertTrue(shown.contains("确认并训练"))
+        assertFalse(shown.contains("这一步还在计算"))
+    }
 }

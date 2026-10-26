@@ -2,6 +2,8 @@
 # 给手机训练程序编一份 arm64 OpenBLAS。纯 C++ GEMM 在这台 Xeon 上一个微批要 11 秒,
 # 450 行的研究批次会拖到几小时。ARMv8 NEON 这份静态库链进 libtrain-mft.so。
 # 用 ARMV8 而不是 NEOVERSE/SVE:小米 15 的 Oryon 能跑 NEON,SVE 目标没有在这台机器上核对过。
+# 交叉编译时 uname 是 Linux,OpenBLAS 会打开 sched_setaffinity。手机是 big.LITTLE,
+# 第一次 cblas_sgemm 会把工作线程停住,巩固就停在 [Dataset] 那一行。NO_AFFINITY=1 关掉绑核。
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")"/../.. && pwd)
 PREFIX=${OPENBLAS_PREFIX:-$ROOT/android/trainer/openblas-android}
@@ -44,11 +46,13 @@ void cblas_sgemm(const CBLAS_ORDER Order, const CBLAS_TRANSPOSE TransA,
 #endif
 EOF
 }
-if [ -f "$PREFIX/lib/libopenblas.a" ]; then
+STAMP="$PREFIX/no-affinity"
+if [ -f "$PREFIX/lib/libopenblas.a" ] && [ -f "$STAMP" ]; then
   write_cblas_header
   echo "已有 $PREFIX/lib/libopenblas.a"
   exit 0
 fi
+rm -f "$PREFIX/lib/libopenblas.a"
 if [ ! -d "$SRC/.git" ]; then
   git clone --depth 1 --branch "$TAG" https://github.com/OpenMathLib/OpenBLAS.git "$SRC"
 fi
@@ -62,6 +66,7 @@ make -C "$SRC" -j"${JOBS:-4}" \
   NO_LAPACK=1 \
   NUM_THREADS=8 \
   USE_OPENMP=0 \
+  NO_AFFINITY=1 \
   CC="$CC" \
   AR="$AR" \
   RANLIB="$RANLIB" \
@@ -70,4 +75,5 @@ mkdir -p "$PREFIX/lib" "$PREFIX/include"
 # NO_SHARED=1 时 install 会找不到 .so。静态库和头文件已经够用。
 cp -a "$SRC"/libopenblas_armv8p-*.a "$PREFIX/lib/libopenblas.a"
 write_cblas_header
+printf 'NO_AFFINITY=1\n' > "$STAMP"
 echo "已放入 $PREFIX/lib/libopenblas.a"

@@ -1029,7 +1029,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
 @Composable
 private fun TrainBars(snap: TrainSnapshot) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Meter(if (snap.total > 0) snap.step.toFloat() / snap.total else 0f)
+        Meter(trainFraction(snap))
         if (snap.epochs > 0) Meter(if (snap.epoch > 0) snap.epoch.toFloat() / snap.epochs else 0f)
     }
 }

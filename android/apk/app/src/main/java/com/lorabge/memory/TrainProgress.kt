@@ -14,12 +14,56 @@ data class TrainSnapshot(
     val etaSec: Long = 0,
     val detail: String = "",
     val logTail: String = "",
+    val pendingStep: Int = 0,
+    val micro: Int = 0,
+    val microTotal: Int = 0,
 )
 
 fun parseStepLine(line: String): Triple<Int, Int, Float>? {
     val match = Regex("""\[step\s+(\d+)\s*/\s*(\d+)\].*?loss=([0-9]*\.?[0-9]+)""").find(line) ?: return null
     val loss = match.groupValues[3].toFloatOrNull() ?: return null
     return Triple(match.groupValues[1].toInt(), match.groupValues[2].toInt(), loss)
+}
+
+data class MicroMark(val micro: Int, val microTotal: Int, val pendingStep: Int, val total: Int)
+
+/** Printed before each forward. `[Dataset] epochs=4 max_steps=8` is not a step. */
+fun parseMicroLine(line: String): MicroMark? {
+    val match = Regex("""\[micro\s+(\d+)\s*/\s*(\d+)\].*?step\s+(\d+)\s*/\s*(\d+)""").find(line) ?: return null
+    val micro = match.groupValues[1].toIntOrNull() ?: return null
+    val microTotal = match.groupValues[2].toIntOrNull() ?: return null
+    val pending = match.groupValues[3].toIntOrNull() ?: return null
+    val total = match.groupValues[4].toIntOrNull() ?: return null
+    if (micro <= 0 || microTotal <= 0 || pending <= 0 || total <= 0) return null
+    if (micro > microTotal || pending > total) return null
+    return MicroMark(micro, microTotal, pending, total)
+}
+
+/** No new trainer line for this long means the process is not advancing. */
+const val TRAIN_STALL_MS = 180_000L
+
+fun trainQuietTooLong(lastAdvanceMs: Long, nowMs: Long, stallMs: Long = TRAIN_STALL_MS): Boolean {
+    if (lastAdvanceMs < 0 || nowMs < lastAdvanceMs) return false
+    return nowMs - lastAdvanceMs >= stallMs
+}
+
+/** After the last logged step the process writes the adapter and may be quiet. */
+fun trainStillExpected(step: Int, total: Int): Boolean = total <= 0 || step < total
+
+fun trainStallDetail(lastLine: String): String {
+    val head = "超过 3 分钟没有新的训练输出，这一步没有打出 loss。点「确认并训练」重试，或点「取消训练」。"
+    val where = lastLine.trim().take(180)
+    return if (where.isEmpty()) head else "$head\n停在: $where"
+}
+
+fun trainFraction(snap: TrainSnapshot): Float {
+    if (snap.total <= 0) return 0f
+    if (snap.step > 0) return (snap.step.toFloat() / snap.total).coerceIn(0f, 1f)
+    if (snap.pendingStep > 0 && snap.microTotal > 0) {
+        val into = (snap.pendingStep - 1) + snap.micro.toFloat() / snap.microTotal
+        return (into / snap.total).coerceIn(0f, 1f)
+    }
+    return 0f
 }
 
 fun epochOf(step: Int, total: Int, epochs: Int): Int {
@@ -44,6 +88,9 @@ fun trainSnapshotJson(
     elapsedSec: Long,
     detail: String,
     logTail: String,
+    pendingStep: Int = 0,
+    micro: Int = 0,
+    microTotal: Int = 0,
 ): String {
     val epoch = epochOf(step, total, epochs)
     val eta = etaSeconds(elapsedSec, step, total)
@@ -58,6 +105,9 @@ fun trainSnapshotJson(
         .put("etaSec", eta)
         .put("detail", detail)
         .put("logTail", logTail)
+        .put("pendingStep", pendingStep)
+        .put("micro", micro)
+        .put("microTotal", microTotal)
         .apply { if (loss != null) put("loss", loss.toDouble()) }
         .toString()
 }
@@ -79,6 +129,9 @@ fun parseTrainSnapshot(raw: String): TrainSnapshot {
         etaSec = obj.optLong("etaSec"),
         detail = obj.optString("detail"),
         logTail = obj.optString("logTail"),
+        pendingStep = obj.optInt("pendingStep"),
+        micro = obj.optInt("micro"),
+        microTotal = obj.optInt("microTotal"),
     )
 }
 
@@ -89,6 +142,20 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
         return if (tail.isBlank()) head else "$head\n$tail"
     }
     if (snap.step <= 0) {
+        if (snap.state == "running" && snap.micro > 0 && snap.microTotal > 0 && snap.pendingStep > 0) {
+            val steps = if (snap.total > 0) {
+                if (lang == "en") "Step ${snap.pendingStep}/${snap.total}" else "第 ${snap.pendingStep}/${snap.total} 步"
+            } else {
+                if (lang == "en") "Step ${snap.pendingStep}" else "第 ${snap.pendingStep} 步"
+            }
+            val micro = if (lang == "en") " · micro ${snap.micro}/${snap.microTotal}" else " · 微批 ${snap.micro}/${snap.microTotal}"
+            val elapsed = if (snap.elapsedSec > 0) {
+                if (lang == "en") " · ${snap.elapsedSec}s" else " · 已过 ${snap.elapsedSec} 秒"
+            } else {
+                ""
+            }
+            return steps + micro + elapsed
+        }
         if (snap.state == "running") {
             return if (lang == "en") "Still computing this step · ${snap.elapsedSec}s" else "这一步还在计算 · 已过 ${snap.elapsedSec} 秒"
         }
