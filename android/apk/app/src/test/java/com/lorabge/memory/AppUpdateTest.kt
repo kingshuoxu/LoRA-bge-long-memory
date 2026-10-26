@@ -173,7 +173,7 @@ class AppUpdateTest {
         assertTrue(message.contains("连不上"))
         assertTrue(message.contains("GitHub"))
         assertTrue(message.contains("镜像"))
-        assertTrue(message.contains("android-v0.1.5/app-debug.apk"))
+        assertTrue(message.contains("android-v0.1.6/app-debug.apk"))
         assertTrue(message.contains("https://github.com/kingshuoxu/LoRA-bge-long-memory/releases"))
         assertFalse(message.contains("releases/latest"))
         assertFalse(message.contains("Software caused connection abort"))

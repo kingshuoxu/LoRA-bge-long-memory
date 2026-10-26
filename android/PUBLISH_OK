@@ -1,0 +1,7 @@
+Lumi 已核对应用内升级截图，可以发 android-v0.1.6。
+
+运行 https://github.com/kingshuoxu/LoRA-bge-long-memory/actions/runs/40342688527
+
+inapp-update PASS。已发布 android-v0.1.4（versionCode 1004）在模拟器里点「检查更新」，系统安装器升到已发布 android-v0.1.5（versionCode 1005）。装上的 APK SHA256 7efa7e71366df3a03b6dc3272f3f6feea94044b148011436ac5c865c2070a861，51542731 字节。关于页是长期记忆 0.1.5。
+
+这一包带上镜像回退、按标签读 update.json，以及中文失败说明。正在用 0.1.4 的手机这一次用浏览器安装。
