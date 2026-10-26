@@ -96,20 +96,20 @@ class ChatFlowTest {
         waitText("hello", 8_000)
         val settled = waitUntil(25_000) {
             device.findObject(By.descStartsWith("typing-")) == null && (
-                device.hasObject(By.textContains("没有")) ||
+                device.hasObject(By.textContains("llama-cli")) ||
+                    device.hasObject(By.textContains("没有生成")) ||
                     device.hasObject(By.textContains("生成失败")) ||
-                    device.hasObject(By.textContains("Couldn't")) ||
-                    device.hasObject(By.textContains("llama"))
+                    device.hasObject(By.textContains("Couldn't"))
                 )
         }
         assertTrue("hello was sent but the reply never settled, so later sends would be ignored", settled)
 
-        sendComposer("__e2e_wait__")
-        val typingNode = device.wait(Until.findObject(By.descStartsWith("typing-")), 8_000)
+        fillComposer("__e2e_wait__")
+        clickDesc("send")
+        val typingNode = device.wait(Until.findObject(By.descStartsWith("typing-")), 15_000)
+            ?: device.wait(Until.findObject(By.res(context.packageName, "typing")), 2_000)
         if (typingNode == null) {
-            val hierarchy = File(shots, "typing-missing.xml")
-            device.dumpWindowHierarchy(hierarchy)
-            error("missing typing-\n" + hierarchy.readText().take(2500))
+            error("missing typing-\n" + visibleNodes())
         }
         val first = typingNode.contentDescription
         val changed = waitUntil(6_000) {
@@ -303,5 +303,13 @@ class ChatFlowTest {
 
     private fun shot(name: String) {
         device.takeScreenshot(File(shots, name))
+    }
+
+    private fun visibleNodes(): String {
+        return device.findObjects(By.pkg(context.packageName)).take(40).joinToString("\n") { node ->
+            val desc = node.contentDescription?.take(60).orEmpty()
+            val text = node.text?.take(60).orEmpty()
+            "${node.className} desc=$desc text=$text"
+        }
     }
 }

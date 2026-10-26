@@ -19,11 +19,14 @@ class AppUpdateTest {
         assertTrue(versionCodeOf("0.1.3") > versionCodeOf("0.1.2"))
         // 已发布的 0.1.2 用的是手写 versionCode 4。新规则必须高于它。
         assertTrue(versionCodeOf("0.1.3") > 4)
+        assertEquals(1004, versionCodeOf("0.1.4"))
+        assertTrue(versionCodeOf("0.1.4") > versionCodeOf("0.1.3"))
         assertEquals("0.1.3", versionNameOfTag("android-v0.1.3"))
+        assertEquals("0.1.4", versionNameOfTag("android-v0.1.4"))
         assertNull(versionNameOfTag("v0.1.3"))
         assertNull(versionNameOfTag("android-v0.1"))
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains(""""0.1.3""""))
+        assertTrue(gradle.contains(""""0.1.4""""))
         assertTrue(gradle.contains("releaseVersionCode(appVersion)"))
     }
 

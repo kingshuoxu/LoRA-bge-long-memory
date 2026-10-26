@@ -223,7 +223,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.3"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.4"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -341,7 +341,8 @@ private fun PhoneApp(
                     generating = true
                     streaming = ""
                     Thread {
-                        Thread.sleep(4200)
+                        // 模拟器上 UiAutomator 一轮查询就要一两秒。圆点留够久，测试才看得到相位变化和「已等待」。
+                        Thread.sleep(12_000)
                         streaming = "好"
                         Thread.sleep(300)
                         val saved = store.loadConversation(conversation.id)

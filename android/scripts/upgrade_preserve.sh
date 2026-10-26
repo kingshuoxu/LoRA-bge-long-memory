@@ -1,7 +1,7 @@
 #!/bin/sh
-# 用同一把测试钥匙打 0.1.2 和 0.1.3 的 x86_64 包（不含 arm64 .so），
+# 用同一把测试钥匙打 0.1.3 和 0.1.4 的 x86_64 包（不含 arm64 .so），
 # 在模拟器上 adb install -r，确认记忆、模型和设置还在。
-# 已发布的 0.1.2 是另一把钥匙，不能拿来做这次覆盖安装。
+# 已发布的 0.1.2 和标签上那份 0.1.3 是另一把钥匙，不能拿来做这次覆盖安装。
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
@@ -68,11 +68,19 @@ wanted = {
     "firstboot.bootFromDownloadableSnapshot": "no",
     "firstboot.bootFromLocalSnapshot": "no",
     "hw.ramSize": "2048M",
+    "hw.lcd.width": "1080",
+    "hw.lcd.height": "2400",
+    "hw.lcd.density": "420",
+    "skin.dynamic": "yes",
+    "showDeviceFrame": "no",
 }
+drop = {"skin.name", "skin.path"}
 seen = set()
 lines = []
 for line in path.read_text(encoding="utf-8").splitlines():
     key = line.split("=", 1)[0].strip()
+    if key in drop:
+        continue
     if key in wanted:
         lines.append(f"{key} = {wanted[key]}")
         seen.add(key)
@@ -97,25 +105,25 @@ trap cleanup EXIT
 EMU_PID=$!
 
 cd "$ROOT/android/apk"
-./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.2 --no-daemon
-cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.2.apk"
 ./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.3 --no-daemon
 cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.3.apk"
+./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.4 --no-daemon
+cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.4.apk"
 
 badging() {
   "$AAPT" dump badging "$1"
 }
-echo "$(badging "$STAGE/app-0.1.2.apk")" | grep -q "versionCode='1002'"
-echo "$(badging "$STAGE/app-0.1.2.apk")" | grep -q "versionName='0.1.2'"
 echo "$(badging "$STAGE/app-0.1.3.apk")" | grep -q "versionCode='1003'"
 echo "$(badging "$STAGE/app-0.1.3.apk")" | grep -q "versionName='0.1.3'"
-if unzip -l "$STAGE/app-0.1.3.apk" | grep -q '\.so$'; then
+echo "$(badging "$STAGE/app-0.1.4.apk")" | grep -q "versionCode='1004'"
+echo "$(badging "$STAGE/app-0.1.4.apk")" | grep -q "versionName='0.1.4'"
+if unzip -l "$STAGE/app-0.1.4.apk" | grep -q '\.so$'; then
   echo "升级测试包不应带原生库，否则 x86_64 模拟器装不上" >&2
   exit 1
 fi
 
-CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.2.apk" | grep 'SHA-256 digest' | head -1)
-CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.3.apk" | grep 'SHA-256 digest' | head -1)
+CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.3.apk" | grep 'SHA-256 digest' | head -1)
+CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.4.apk" | grep 'SHA-256 digest' | head -1)
 test -n "$CERT_A"
 test "$CERT_A" = "$CERT_B"
 
@@ -141,7 +149,9 @@ if [ "$boot" != "1" ]; then
 fi
 "$ADB" -s "emulator-$PORT" shell input keyevent 82 >/dev/null 2>&1 || true
 
-"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.2.apk"
+"$ADB" -s "emulator-$PORT" shell wm size 1080x2400 || true
+"$ADB" -s "emulator-$PORT" shell wm density 420 || true
+"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.3.apk"
 # adb shell 会把 run-as … sh -c "echo > file" 里的重定向吃掉，文件写不进应用目录。
 printf '%s\n' 'keep-memory' >"$STAGE/keep.txt"
 printf '%s\n' 'keep-model' >"$STAGE/keep.bin"
@@ -155,7 +165,7 @@ printf '%s\n' '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' '<map>'
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.bin files/models/keep.bin
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-setup.xml shared_prefs/setup.xml
 
-"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.3.apk"
+"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.4.apk"
 MEM=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/keep.txt | tr -d '\r')
 MOD=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/models/keep.bin | tr -d '\r')
 PREF=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat shared_prefs/setup.xml | tr -d '\r')
@@ -163,31 +173,68 @@ CODE=$("$ADB" -s "emulator-$PORT" shell dumpsys package com.lorabge.memory | tr 
 printf '%s\n' "$MEM" | grep -qx 'keep-memory'
 printf '%s\n' "$MOD" | grep -qx 'keep-model'
 printf '%s\n' "$PREF" | grep -q 'name="keep">yes'
-test "$CODE" = "1003"
-echo "upgrade preserved memory, models, settings; versionCode 1003"
+test "$CODE" = "1004"
+echo "upgrade preserved memory, models, settings; versionCode 1004"
 
 "$ADB" -s "emulator-$PORT" shell settings put secure show_ime_with_hard_keyboard 1
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
 "$ADB" -s "emulator-$PORT" shell ime set com.android.inputmethod.latin/.LatinIME || true
 export ANDROID_SERIAL="emulator-$PORT"
+# 仪器测试结束时 Gradle 会卸掉应用，应用私有目录里的截图一起没了。测试还在跑的时候就往外拷。
+pull_e2e() {
+  mkdir -p "$STAGE/shots" "$STAGE/shots/frames"
+  if ! "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e >"$STAGE/e2e-ls.txt" 2>/dev/null; then
+    return 0
+  fi
+  while IFS= read -r name; do
+    name=$(printf '%s' "$name" | tr -d '\r')
+    [ -n "$name" ] || continue
+    if [ "$name" = "frames" ]; then
+      "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e/frames >"$STAGE/frames-ls.txt" 2>/dev/null || true
+      while IFS= read -r frame; do
+        frame=$(printf '%s' "$frame" | tr -d '\r')
+        [ -n "$frame" ] || continue
+        "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$STAGE/shots/frames/$frame" || true
+      done <"$STAGE/frames-ls.txt"
+    else
+      "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/$name" >"$STAGE/shots/$name" || true
+    fi
+  done <"$STAGE/e2e-ls.txt"
+}
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
+chat_pid=$!
+set -e
+while kill -0 "$chat_pid" 2>/dev/null; do
+  pull_e2e || true
+  sleep 3
+done
+set +e
+wait "$chat_pid"
 chat_status=$?
 set -e
+pull_e2e || true
 if [ "$chat_status" -ne 0 ]; then
   echo "对话流程失败" >&2
 fi
 # 星云单独跑。UiAutomation.takeScreenshot 在 aosp_atd 上只有 WebView 的纯色底，没有 GL。
 # 等测试写好 nebula-ready，再用模拟器控制台录物理画面，这一路包含 SwiftShader 画出来的像素。
+# 录像写到绝对路径。相对文件名会落在模拟器进程的工作目录，不在 AVD 目录里。
+RECORD="$STAGE/nebula-gesture.webm"
+RECORD_NAME="$RECORD"
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.3 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.4 -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
 nebula_pid=$!
 recorded=0
-for _ in $(seq 1 150); do
-  if "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e/nebula-ready >/dev/null 2>&1; then
-    "$ADB" -s "emulator-$PORT" emu screenrecord start nebula-gesture.webm >"$STAGE/screenrecord-start.txt" 2>&1 || true
+for _ in $(seq 1 180); do
+  pull_e2e || true
+  if [ "$recorded" = 0 ] && "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e/nebula-ready >/dev/null 2>&1; then
+    "$ADB" -s "emulator-$PORT" emu screenrecord start "$RECORD" >"$STAGE/screenrecord-start.txt" 2>&1 || true
+    if ! grep -q OK "$STAGE/screenrecord-start.txt"; then
+      RECORD_NAME="nebula-gesture.webm"
+      "$ADB" -s "emulator-$PORT" emu screenrecord start "$RECORD_NAME" >"$STAGE/screenrecord-start.txt" 2>&1 || true
+    fi
     recorded=1
-    break
   fi
   if ! kill -0 "$nebula_pid" 2>/dev/null; then
     break
@@ -197,37 +244,29 @@ done
 wait "$nebula_pid"
 nebula_status=$?
 if [ "$recorded" = 1 ]; then
-  "$ADB" -s "emulator-$PORT" emu screenrecord stop nebula-gesture.webm >"$STAGE/screenrecord-stop.txt" 2>&1 || true
+  "$ADB" -s "emulator-$PORT" emu screenrecord stop "$RECORD_NAME" >"$STAGE/screenrecord-stop.txt" 2>&1 || true
   sleep 2
 fi
 set -e
+pull_e2e || true
 if [ "$chat_status" -ne 0 ]; then
   gradle_status=$chat_status
 else
   gradle_status=$nebula_status
 fi
-# aosp_atd 没有 tar。逐个 cat 出来。测试失败也要留下截图。
-mkdir -p "$STAGE/shots" "$STAGE/shots/frames"
-: >"$STAGE/e2e-ls.txt"
-"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e >"$STAGE/e2e-ls.txt" || true
-while IFS= read -r name; do
-  name=$(printf '%s' "$name" | tr -d '\r')
-  [ -n "$name" ] || continue
-  if [ "$name" = "frames" ]; then
-    "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory ls files/e2e/frames >"$STAGE/frames-ls.txt" || true
-    while IFS= read -r frame; do
-      frame=$(printf '%s' "$frame" | tr -d '\r')
-      [ -n "$frame" ] || continue
-      "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/frames/$frame" >"$STAGE/shots/frames/$frame" || true
-    done <"$STAGE/frames-ls.txt"
-  else
-    "$ADB" -s "emulator-$PORT" exec-out run-as com.lorabge.memory cat "files/e2e/$name" >"$STAGE/shots/$name" || true
-  fi
-done <"$STAGE/e2e-ls.txt"
 if ls "$STAGE/shots/frames/"*.png >/dev/null 2>&1; then
   ffmpeg -y -framerate 2 -i "$STAGE/shots/frames/%04d.png" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4" || true
 fi
-WEBM=$(find "$ANDROID_AVD_HOME" "$HOME/.android" -name 'nebula-gesture.webm' 2>/dev/null | head -1 || true)
+WEBM=""
+if [ -s "$RECORD" ]; then
+  WEBM="$RECORD"
+elif [ -s "$ROOT/nebula-gesture.webm" ]; then
+  WEBM="$ROOT/nebula-gesture.webm"
+elif [ -s "$ROOT/android/apk/nebula-gesture.webm" ]; then
+  WEBM="$ROOT/android/apk/nebula-gesture.webm"
+else
+  WEBM=$(find "$STAGE" "$ANDROID_AVD_HOME" "$HOME/.android" -name 'nebula-gesture.webm' -size +1k 2>/dev/null | head -1 || true)
+fi
 if [ -n "$WEBM" ] && [ -s "$WEBM" ]; then
   cp "$WEBM" "$STAGE/shots/nebula-gesture.webm"
   ffmpeg -y -i "$WEBM" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -movflags +faststart "$STAGE/shots/nebula-gesture.mp4"
