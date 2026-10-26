@@ -1385,12 +1385,13 @@ export function createNebula(canvas, hooks) {
   let frozenAt = 0;
   let canvasVariance = 0;
   let canvasDiff = 0;
+  let canvasMoved = 0;
   let capturedBefore = false;
-  let capturedAfter = false;
   let beforeLumas = null;
-  let beforeFrame = 0;
+  let gestureAt = 0;
+  let lastSampleAt = 0;
 
-  function sampleGl() {
+  function sampleGl(encode) {
     const bw = gl.drawingBufferWidth || canvas.width || 0;
     const bh = gl.drawingBufferHeight || canvas.height || 0;
     const tw = Math.min(160, bw);
@@ -1413,6 +1414,7 @@ export function createNebula(canvas, hooks) {
     const n = tw * th;
     const mean = sum / n;
     const variance = sum2 / n - mean * mean;
+    if (!encode) return { variance, lumas, png: "" };
     const out = document.createElement("canvas");
     out.width = tw;
     out.height = th;
@@ -1432,31 +1434,48 @@ export function createNebula(canvas, hooks) {
   }
 
   // 模拟器的截图和 screenrecord 不含 WebGL。仪器测试直接读绘制缓冲。
+  // 按下后立刻取样会落在镜头 0.08 插值之前，平均亮度差停在 0.5 左右。手势开始后再隔一段时间取样，只留下差值最大的一帧。
   function captureE2eFrame() {
     if (!e2eShot) return;
     try {
-      const wantBefore = !capturedBefore && frameCount >= 5;
-      const wantAfter = capturedBefore && !capturedAfter && touches > 0 && frameCount >= beforeFrame + 4;
-      if (!wantBefore && !wantAfter) return;
-      const shot = sampleGl();
-      if (!shot) return;
-      if (wantBefore) {
-        if (shot.variance <= 6) return;
+      if (!capturedBefore) {
+        if (frameCount < 5) return;
+        const shot = sampleGl(true);
+        if (!shot || shot.variance <= 6) return;
         capturedBefore = true;
-        beforeFrame = frameCount;
         beforeLumas = shot.lumas;
         canvasVariance = shot.variance;
         postFrame("canvas-before", shot);
         if (window.nebulaHost && window.nebulaHost.probe) window.nebulaHost.probe();
         return;
       }
+      if (!beforeLumas || touches <= 0) return;
+      const now = performance.now();
+      if (!gestureAt) gestureAt = now;
+      const elapsed = now - gestureAt;
+      if (elapsed < 450) return;
+      if (elapsed > 14000) return;
+      const gap = elapsed < 9000 ? 160 : 320;
+      if (now - lastSampleAt < gap) return;
+      lastSampleAt = now;
+      const shot = sampleGl(false);
+      if (!shot) return;
       let diff = 0;
+      let moved = 0;
       const n = Math.min(beforeLumas.length, shot.lumas.length);
-      for (let i = 0; i < n; i += 1) diff += Math.abs(beforeLumas[i] - shot.lumas[i]);
-      canvasDiff = n ? diff / n : 0;
+      for (let i = 0; i < n; i += 1) {
+        const delta = Math.abs(beforeLumas[i] - shot.lumas[i]);
+        diff += delta;
+        if (delta > 12) moved += 1;
+      }
+      const mean = n ? diff / n : 0;
       canvasVariance = Math.max(canvasVariance, shot.variance);
-      capturedAfter = true;
-      postFrame("canvas-after", shot);
+      if (mean <= canvasDiff + 0.05) return;
+      canvasDiff = mean;
+      canvasMoved = moved;
+      const encoded = sampleGl(true);
+      if (!encoded || !encoded.png) return;
+      postFrame("canvas-after", encoded);
       if (window.nebulaHost && window.nebulaHost.probe) window.nebulaHost.probe();
     } catch (error) {
       console.error("nebula capture", error && error.message ? error.message : error);
@@ -1605,6 +1624,7 @@ export function createNebula(canvas, hooks) {
       kind: "three",
       canvasVariance,
       canvasDiff,
+      canvasMoved,
     };
   }
 
