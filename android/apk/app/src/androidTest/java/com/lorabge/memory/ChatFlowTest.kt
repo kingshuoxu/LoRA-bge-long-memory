@@ -118,7 +118,10 @@ class ChatFlowTest {
         assertTrue("typing dots stayed on $first", changed)
         waitText("已等待", 8_000)
         shot("02-typing.png")
-        waitUntil(8_000) { device.findObject(By.descStartsWith("typing-")) == null }
+        val typed = waitUntil(20_000) {
+            device.findObject(By.descStartsWith("typing-")) == null && device.hasObject(By.text("好"))
+        }
+        assertTrue("typing indicator never finished, so the next send would be ignored\n" + visibleNodes(), typed)
 
         sendComposer("我的猫猫叫咪咪")
         waitText("好的，记住了，你的猫叫咪咪。", 8_000)

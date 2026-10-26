@@ -174,11 +174,14 @@ private fun PhoneApp(
     var recallJson by remember { mutableStateOf("") }
     var recallBanner by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
+    var draftEpoch by remember { mutableIntStateOf(0) }
     LaunchedEffect(e2e) {
         if (!e2e) return@LaunchedEffect
         while (true) {
             delay(200)
+            val epoch = draftEpoch
             val text = E2eDraft.poll(context.filesDir) ?: continue
+            if (epoch != draftEpoch) continue
             if (draft != text) draft = text
         }
     }
@@ -326,9 +329,12 @@ private fun PhoneApp(
                 onCleared()
             }
             SkyEvent.Send -> {
-                if (e2e) E2eDraft.clear(context.filesDir)
                 val text = draft.trim()
                 if (text.isEmpty() || generating) return@SkyFrame
+                if (e2e) {
+                    draftEpoch++
+                    E2eDraft.clear(context.filesDir)
+                }
                 val conversation = current ?: store.newConversation().also { currentId = it.id }
                 val now = Instant.now().toString()
                 val title = if (conversation.messages.isEmpty()) text.take(18) else conversation.title
