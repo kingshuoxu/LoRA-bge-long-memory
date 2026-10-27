@@ -85,6 +85,41 @@ class TrainProgressTest {
     }
 
     @Test
+    fun microOfTheNextStepAgreesWithTheBar() {
+        val snap = TrainSnapshot(
+            state = "running",
+            stage = "train",
+            step = 2,
+            total = 8,
+            epoch = 1,
+            epochs = 4,
+            loss = 0.74f,
+            elapsedSec = 117,
+            etaSec = etaSeconds(117, 2, 8),
+            pendingStep = 3,
+            micro = 6,
+            microTotal = 8,
+        )
+        assertEquals(351, snap.etaSec)
+        assertEquals(2, epochOf(3, 8, 4))
+        val text = formatTrainProgress("zh", snap)
+        assertTrue(text.contains("第 3/8 步"))
+        assertTrue(text.contains("微批 6/8"))
+        assertTrue(text.contains("第 2/4 轮"))
+        assertTrue(text.contains("loss 0.74"))
+        assertTrue(text.contains("已过 117 秒"))
+        assertTrue(text.contains("剩余 6 分"))
+        assertFalse(text.contains("第 2/8 步"))
+        assertFalse(text.contains("第 1/4 轮"))
+        assertEquals(0.34375f, trainFraction(snap), 0.0001f)
+        val done = snap.copy(pendingStep = 2, micro = 8, microTotal = 8)
+        val doneText = formatTrainProgress("zh", done)
+        assertTrue(doneText.contains("第 2/8 步"))
+        assertFalse(doneText.contains("微批"))
+        assertEquals(0.25f, trainFraction(done), 0.0001f)
+    }
+
+    @Test
     fun quietTrainerBecomesARetryableFailure() {
         assertFalse(trainQuietTooLong(1_000, 1_000 + TRAIN_STALL_MS - 1))
         assertTrue(trainQuietTooLong(1_000, 1_000 + TRAIN_STALL_MS))

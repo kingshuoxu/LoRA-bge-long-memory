@@ -1036,10 +1036,8 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
 
 @Composable
 private fun TrainBars(snap: TrainSnapshot) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Meter(trainFraction(snap))
-        if (snap.epochs > 0) Meter(if (snap.epoch > 0) snap.epoch.toFloat() / snap.epochs else 0f)
-    }
+    // One meter. Step and epoch used to be two gold bars; at 2/8 and 1/4 both were a quarter full.
+    Meter(trainFraction(snap))
 }
 
 @Composable

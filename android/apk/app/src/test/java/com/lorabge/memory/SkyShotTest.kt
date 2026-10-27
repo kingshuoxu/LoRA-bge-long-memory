@@ -69,6 +69,11 @@ class SkyShotTest {
     }
 
     @Test
+    fun consolidateMicro() {
+        paparazzi.snapshot { SkyFrame(consolidateMicroSample()) {} }
+    }
+
+    @Test
     fun nebula() {
         paparazzi.snapshot { SkyFrame(nebulaSample("zh", recall = false)) {} }
     }
@@ -172,6 +177,36 @@ class SkyShotTest {
             loss = 0.19f,
             elapsedSec = 40,
             etaSec = 88,
+        ),
+    )
+
+    /** The vivo frame: last loss is step 2, micro 6 of step 3 is in progress. */
+    private fun consolidateMicroSample() = sample().copy(
+        tab = SkyTab.Consolidate,
+        training = true,
+        statusTop = 36.dp,
+        navBottom = 24.dp,
+        entity = "我",
+        statement = "我的猫猫叫咪咪",
+        value = "咪咪",
+        question = "我的猫叫什么名字？",
+        answer = "咪咪",
+        force = true,
+        loss = listOf(1.10f, 0.74f),
+        status = "巩固中",
+        train = TrainSnapshot(
+            state = "running",
+            stage = "train",
+            step = 2,
+            total = 8,
+            epoch = 1,
+            epochs = 4,
+            loss = 0.74f,
+            elapsedSec = 117,
+            etaSec = 351,
+            pendingStep = 3,
+            micro = 6,
+            microTotal = 8,
         ),
     )
 

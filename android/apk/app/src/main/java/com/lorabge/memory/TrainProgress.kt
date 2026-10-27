@@ -56,13 +56,19 @@ fun trainStallDetail(lastLine: String): String {
     return if (where.isEmpty()) head else "$head\n停在: $where"
 }
 
+/** The trainer has logged a micro of a step that does not have a loss line yet. */
+fun countingMicro(snap: TrainSnapshot): Boolean {
+    if (snap.pendingStep <= snap.step || snap.pendingStep <= 0 || snap.microTotal <= 0) return false
+    return snap.micro > 0 || snap.step <= 0
+}
+
 fun trainFraction(snap: TrainSnapshot): Float {
     if (snap.total <= 0) return 0f
-    if (snap.step > 0) return (snap.step.toFloat() / snap.total).coerceIn(0f, 1f)
-    if (snap.pendingStep > 0 && snap.microTotal > 0) {
+    if (countingMicro(snap)) {
         val into = (snap.pendingStep - 1) + snap.micro.toFloat() / snap.microTotal
         return (into / snap.total).coerceIn(0f, 1f)
     }
+    if (snap.step > 0) return (snap.step.toFloat() / snap.total).coerceIn(0f, 1f)
     return 0f
 }
 
@@ -175,15 +181,24 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
     } else {
         ""
     }
+    // A micro line means that step is the one on screen. The stored step is the last loss.
+    val live = snap.pendingStep > snap.step && snap.micro > 0 && snap.microTotal > 0
+    val shownStep = if (live) snap.pendingStep else snap.step
+    val shownEpoch = if (live) epochOf(shownStep, snap.total, snap.epochs) else snap.epoch
     val steps = if (snap.total > 0) {
-        if (lang == "en") "Step ${snap.step}/${snap.total}" else "第 ${snap.step}/${snap.total} 步"
+        if (lang == "en") "Step ${shownStep}/${snap.total}" else "第 ${shownStep}/${snap.total} 步"
     } else {
-        if (lang == "en") "Step ${snap.step}" else "第 ${snap.step} 步"
+        if (lang == "en") "Step $shownStep" else "第 $shownStep 步"
     }
-    val epoch = if (snap.epochs > 0 && snap.epoch > 0) {
-        if (lang == "en") " · epoch ${snap.epoch}/${snap.epochs}" else " · 第 ${snap.epoch}/${snap.epochs} 轮"
+    val micro = if (live) {
+        if (lang == "en") " · micro ${snap.micro}/${snap.microTotal}" else " · 微批 ${snap.micro}/${snap.microTotal}"
     } else {
         ""
     }
-    return steps + epoch + loss + elapsed + eta
+    val epoch = if (snap.epochs > 0 && shownEpoch > 0) {
+        if (lang == "en") " · epoch ${shownEpoch}/${snap.epochs}" else " · 第 ${shownEpoch}/${snap.epochs} 轮"
+    } else {
+        ""
+    }
+    return steps + micro + epoch + loss + elapsed + eta
 }

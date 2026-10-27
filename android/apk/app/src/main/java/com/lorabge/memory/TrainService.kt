@@ -215,6 +215,8 @@ class TrainService : Service() {
                 publish(status, "running", "train", step, total, epochs, loss, started, lastLine, "", pendingStep, micro, microTotal)
                 notify(
                     when {
+                        total > 0 && pendingStep > step && micro > 0 && microTotal > 0 ->
+                            "第 $pendingStep/$total 步 · 微批 $micro/$microTotal"
                         total > 0 && step > 0 -> "第 $step/$total 步"
                         pendingStep > 0 && microTotal > 0 -> "第 $pendingStep/$total 步 · 微批 $micro/$microTotal"
                         else -> "这一步还在计算"

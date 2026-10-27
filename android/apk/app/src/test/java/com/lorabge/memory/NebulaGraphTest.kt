@@ -121,6 +121,11 @@ class NebulaGraphTest {
         assertFalse(line.contains(" ok"))
         val status = presentTrainStatus("zh", """{"state":"running","detail":"expert_0"}""")
         assertEquals("巩固中", status)
+        val micro = presentTrainStatus("zh", """{"state":"running","detail":"[micro 6/8] step 3/8"}""")
+        assertEquals("巩固中", micro)
+        assertFalse(micro.contains("step"))
+        val named = presentTrainStatus("zh", """{"state":"running","detail":"生成样本 1 条"}""")
+        assertEquals("巩固中 · 生成样本 1 条", named)
     }
 
     private fun writeShots(store: MemoryStore) {
