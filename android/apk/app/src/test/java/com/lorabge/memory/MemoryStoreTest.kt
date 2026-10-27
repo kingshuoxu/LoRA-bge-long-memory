@@ -3,8 +3,10 @@ package com.lorabge.memory
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.nio.file.Files
 
 class MemoryStoreTest {
@@ -82,5 +84,28 @@ class MemoryStoreTest {
         assertTrue(text.contains("请说出这条事实。"))
         assertTrue(text.contains("请简短回答。"))
         assertTrue(text.lines().filter { it.isNotBlank() }.size > 2)
+    }
+
+    @Test
+    fun blankOrBrokenConversationDoesNotCrash() {
+        assertEquals("", Conversation.fromJson("").id)
+        assertEquals("", Conversation.fromJson("   ").id)
+        assertEquals("", Conversation.fromJson("{").id)
+        assertEquals("", Conversation.fromJson("[]").id)
+        val root = Files.createTempDirectory("memory-blank").toFile()
+        val store = MemoryStore(root)
+        store.ensure()
+        val empty = File(store.conversationsDir, "c-empty.json")
+        empty.writeText("")
+        File(store.conversationsDir, "c-bad.json").writeText("{")
+        assertNull(store.loadConversation("c-empty"))
+        assertNull(store.loadConversation("c-bad"))
+        assertTrue(store.listConversations().isEmpty())
+        val saved = store.newConversation()
+        val loaded = store.loadConversation(saved.id)
+        assertEquals(saved.id, loaded?.id)
+        assertEquals(0, loaded?.messages?.size)
+        assertTrue(File(store.conversationsDir, "${saved.id}.json").readText().trim().startsWith("{"))
+        assertEquals(saved.id, store.listConversations().single().id)
     }
 }

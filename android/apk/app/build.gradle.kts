@@ -13,7 +13,7 @@ fun releaseVersionCode(versionName: String): Int {
     return parts[0].toInt() * 1_000_000 + parts[1].toInt() * 1_000 + parts[2].toInt()
 }
 
-val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.12"
+val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.13"
 val skipNative = findProperty("lorabge.skipNative") == "true"
 fun secretOr(name: String, fallback: String): String =
     System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() } ?: fallback

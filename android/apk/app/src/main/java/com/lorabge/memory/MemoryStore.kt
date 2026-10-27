@@ -3,6 +3,9 @@ package com.lorabge.memory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import java.util.UUID
 
@@ -35,7 +38,9 @@ class MemoryStore(val root: File) {
     fun listConversations(): List<Conversation> {
         ensure()
         return conversationsDir.listFiles { f -> f.extension == "json" }
-            ?.map { Conversation.fromJson(it.readText()) }
+            ?.mapNotNull { file ->
+                Conversation.fromJson(file.readText()).takeIf { it.id.isNotBlank() }
+            }
             ?.sortedByDescending { it.updated }
             ?: emptyList()
     }
@@ -43,12 +48,28 @@ class MemoryStore(val root: File) {
     fun loadConversation(id: String): Conversation? {
         val file = File(conversationsDir, "$id.json")
         if (!file.exists()) return null
-        return Conversation.fromJson(file.readText())
+        val parsed = Conversation.fromJson(file.readText())
+        if (parsed.id.isBlank()) return null
+        return parsed
     }
 
     fun saveConversation(conversation: Conversation) {
         ensure()
-        File(conversationsDir, "${conversation.id}.json").writeText(conversation.toJson())
+        val dest = File(conversationsDir, "${conversation.id}.json")
+        // writeText 会先把原文件截成空。回复线程正在写、界面又按 tick 重读时，
+        // JSONObject("") 会把 PhoneApp 打崩。先写临时文件，再原子换上。
+        val tmp = File(conversationsDir, "${conversation.id}.${System.nanoTime()}.tmp")
+        tmp.writeText(conversation.toJson())
+        try {
+            Files.move(
+                tmp.toPath(),
+                dest.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     fun newConversation(): Conversation {
@@ -277,6 +298,18 @@ data class Conversation(
 
     companion object {
         fun fromJson(text: String): Conversation {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) return blank()
+            return try {
+                parse(trimmed)
+            } catch (_: Throwable) {
+                blank()
+            }
+        }
+
+        private fun blank() = Conversation(id = "", title = "", created = "", updated = "", messages = emptyList())
+
+        private fun parse(text: String): Conversation {
             val obj = JSONObject(text)
             val messages = obj.getJSONArray("messages")
             val list = ArrayList<ChatMessage>()
