@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity() {
                 }
                 startForegroundService(Intent(this, TrainService::class.java))
             }, onCancel = {
+                TrainService.abandon(store)
                 startService(Intent(this, TrainService::class.java).setAction(TrainService.ACTION_CANCEL))
             }, onExport = {
                 shareDiagnostics(engine.diagnostics())
@@ -237,7 +238,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.13"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.14"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -473,7 +474,16 @@ private fun PhoneApp(
             }
             is SkyEvent.Force -> force = event.on
             SkyEvent.Train -> {
-                if (entity.isBlank() || statement.isBlank() || value.isBlank()) return@SkyFrame
+                if (entity.isBlank() || statement.isBlank() || value.isBlank()) {
+                    val job = File(store.trainDir, "job.json")
+                    val again = trainSnap.state == "error" || trainSnap.state == "cancelled" || trainSnap.state == "waiting"
+                    if (job.exists() && again) {
+                        File(store.trainDir, "cancel").delete()
+                        onTrain()
+                        tick++
+                    }
+                    return@SkyFrame
+                }
                 val qa = if (question.isBlank()) emptyList() else listOf(question to answer.ifBlank { value })
                 val fact = ReviewedFact(
                     entity.trim(),

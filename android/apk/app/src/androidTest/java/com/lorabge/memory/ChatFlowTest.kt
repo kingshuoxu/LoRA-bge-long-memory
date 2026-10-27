@@ -62,6 +62,42 @@ class ChatFlowTest {
         device.executeShellCommand("ime set com.android.inputmethod.latin/.LatinIME")
     }
 
+    @Test(timeout = 90_000)
+    fun cancelAfterStallLeavesConsolidateUsable() {
+        val store = MemoryStore(File(context.filesDir, "memory"))
+        File(store.trainDir, "status.json").writeText(
+            trainSnapshotJson(
+                "error",
+                "train",
+                0,
+                0,
+                4,
+                null,
+                180,
+                trainLoadStallDetail("[facts] rows=20 max_len=36"),
+                "",
+            ),
+        )
+        File(store.trainDir, "train.log").writeText("[step 1/4] loss=1.40\n[step 2/4] loss=0.00\n")
+        File(store.trainDir, "job.json").writeText("""{"expert":"expert_self","epochs":4,"facts":[]}""")
+        val intent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        context.startActivity(intent)
+        waitDesc("composer", 25_000)
+        clickTab("tab-consolidate")
+        waitText("加载模型没有进展", 15_000)
+        waitDesc("cancelTrain", 8_000)
+        clickDesc("cancelTrain")
+        val cleared = waitUntil(12_000) {
+            device.findObject(By.textContains("加载模型没有进展")) == null &&
+                device.findObject(By.textContains("超过 3 分钟")) == null
+        }
+        assertTrue("failure stayed on screen\n" + visibleNodes(), cleared)
+        waitText("说出一条事实后", 8_000)
+        assertTrue(device.findObject(By.desc("tab-chat")) != null)
+        shot("08-cancel.png")
+    }
+
     @Test(timeout = 180_000)
     fun keyboardProgressAndRecall() {
         val intent = Intent(context, MainActivity::class.java)

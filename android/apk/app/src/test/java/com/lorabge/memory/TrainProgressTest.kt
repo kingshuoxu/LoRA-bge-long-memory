@@ -166,4 +166,39 @@ class TrainProgressTest {
         assertTrue(shown.contains("确认并训练"))
         assertFalse(shown.contains("这一步还在计算"))
     }
+
+    @Test
+    fun loadingModelIsNotASilentStepStall() {
+        val facts = "[facts] rows=20 max_len=36"
+        assertTrue(isTrainSetupLine(facts))
+        assertTrue(isTrainSetupLine("[load] model"))
+        assertFalse(isTrainSetupLine("[micro 1/8] step 1/8"))
+        assertTrue(rssMoved(0, 12_000))
+        assertTrue(rssMoved(12_000, 20_000))
+        assertFalse(rssMoved(20_000, 20_100))
+        val start = 1_000L
+        val stillLoading = start + TRAIN_STALL_MS
+        assertFalse(trainQuietTooLong(stillLoading, stillLoading))
+        val heartbeat = trainLoadHeartbeat(200, 512_000)
+        assertTrue(heartbeat.contains("正在加载模型"))
+        assertTrue(heartbeat.contains("500 MB"))
+        val stalled = trainLoadStallDetail(facts)
+        assertTrue(stalled.contains("加载模型没有进展"))
+        assertTrue(stalled.contains("确认并训练"))
+        assertTrue(stalled.contains("取消训练"))
+        assertTrue(stalled.contains("rows=20"))
+        val hidden = lossChartValues(
+            TrainSnapshot(state = "error", step = 0, loss = null, detail = stalled),
+            listOf(1.4f, 0.8f, 0f),
+        )
+        assertTrue(hidden.isEmpty())
+        val kept = lossChartValues(
+            TrainSnapshot(state = "error", step = 2, total = 8, loss = 0.2f),
+            listOf(1.4f, 0.2f),
+        )
+        assertEquals(listOf(1.4f, 0.2f), kept)
+        assertTrue(trainActionsOpen(false, TrainSnapshot(state = "error")))
+        assertTrue(trainActionsOpen(true, TrainSnapshot()))
+        assertFalse(trainActionsOpen(false, TrainSnapshot(state = "cancelled")))
+    }
 }

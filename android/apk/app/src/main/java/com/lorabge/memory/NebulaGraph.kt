@@ -287,6 +287,9 @@ internal fun presentTrainStatus(lang: String, raw: String): String {
     val detail = obj.optString("detail").trim()
     // Trainer stdout ("[micro 6/8] step 3/8") is a second counter. The progress line already shows it.
     val extra = if (
+        obj.optString("state") == "error" ||
+        obj.optString("state") == "cancelled" ||
+        obj.optString("state") == "canceled" ||
         detail.isBlank() ||
         detail.contains("expert_") ||
         detail.contains("Exception") ||

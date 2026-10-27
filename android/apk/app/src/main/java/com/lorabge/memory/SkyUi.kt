@@ -1005,14 +1005,15 @@ private fun shownTrain(state: SkyState): TrainSnapshot {
 private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         StageTimeline(state)
+        val snap = shownTrain(state)
+        val chartLoss = lossChartValues(snap, state.loss)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             if (state.statement.isBlank() && state.entity.isBlank()) {
                 Text(skyText(state.lang, "stage.pending"), color = Muted, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp))
             } else {
                 FactCard(state, onEvent)
             }
-            val snap = shownTrain(state)
-            if (state.loss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error") {
+            if (chartLoss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error") {
                 Spacer(Modifier.height(12.dp))
                 TrainBars(snap)
                 val progress = formatTrainProgress(state.lang, snap)
@@ -1024,15 +1025,45 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                         modifier = Modifier.semantics { contentDescription = "trainProgress" }.padding(top = 6.dp),
                     )
                 }
-                if (state.loss.isNotEmpty() || state.training) {
+                if (chartLoss.isNotEmpty() || (state.training && snap.step > 0)) {
                     Spacer(Modifier.height(8.dp))
-                    LossChart(state.loss, state.lang)
+                    LossChart(chartLoss, state.lang)
                 }
             }
             if (state.status.isNotEmpty()) {
                 Text(state.status, color = Ink, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
             }
         }
+        if (trainActionsOpen(state.training, snap)) {
+            TrainActionRow(state, onEvent)
+        }
+    }
+}
+
+@Composable
+private fun TrainActionRow(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            skyText(state.lang, "train"),
+            color = Accent2,
+            fontSize = 16.sp,
+            modifier = Modifier
+                .clickable { onEvent(SkyEvent.Train) }
+                .semantics { contentDescription = "confirmTrain" }
+                .padding(vertical = 10.dp, horizontal = 8.dp),
+        )
+        Text(
+            skyText(state.lang, "cancel"),
+            color = Ink,
+            fontSize = 16.sp,
+            modifier = Modifier
+                .clickable { onEvent(SkyEvent.CancelTrain) }
+                .semantics { contentDescription = "cancelTrain" }
+                .padding(vertical = 10.dp, horizontal = 8.dp),
+        )
     }
 }
 
@@ -1160,7 +1191,15 @@ private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                             .semantics { contentDescription = "confirmTrain" }
                             .padding(vertical = 8.dp, horizontal = 4.dp),
                     )
-                    Text(skyText(state.lang, "cancel"), color = Muted, fontSize = 15.sp, modifier = Modifier.clickable { onEvent(SkyEvent.CancelTrain) }.padding(8.dp))
+                    Text(
+                        skyText(state.lang, "cancel"),
+                        color = Muted,
+                        fontSize = 15.sp,
+                        modifier = Modifier
+                            .clickable { onEvent(SkyEvent.CancelTrain) }
+                            .semantics { contentDescription = "cancelTrain" }
+                            .padding(8.dp),
+                    )
                 }
             }
         }

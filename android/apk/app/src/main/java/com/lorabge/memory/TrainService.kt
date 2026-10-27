@@ -40,7 +40,7 @@ class TrainService : Service() {
         } catch (_: Throwable) {
         }
         if (intent?.action == ACTION_CANCEL) {
-            File(memoryRoot(), "train/cancel").writeText("1")
+            abandon(MemoryStore(memoryRoot()))
             return START_NOT_STICKY
         }
         Thread { runJob() }.start()
@@ -168,10 +168,13 @@ class TrainService : Service() {
             var microTotal = 0
             var lastLine = "开始训练 ${expanded.size} 条事实"
             var lastAdvance = System.currentTimeMillis()
+            var lastRssKb = 0L
+            var lastRssMove = lastAdvance
             var stalled = false
+            File(store.trainDir, "pid").writeText(pidOf(proc).toString())
             while (reader.isAlive || pending.isNotEmpty()) {
                 if (cancel.exists()) {
-                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消,检查点留在 ${outDir.name}", tailOf(log), pendingStep, micro, microTotal)
+                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消", tailOf(log), pendingStep, micro, microTotal)
                     killTrain(proc)
                     break
                 }
@@ -187,8 +190,7 @@ class TrainService : Service() {
                         step = parsed.first
                         total = parsed.second
                         loss = parsed.third
-                        val rss = File("/proc/${pidOf(proc)}/status").takeIf { it.exists() }
-                            ?.readLines()?.firstOrNull { it.startsWith("VmRSS") }?.substringAfter(":")?.trim() ?: ""
+                        val rss = rssKbOf(proc)
                         val thermal = File("/sys/class/thermal").listFiles()
                             ?.mapNotNull { zone ->
                                 File(zone, "temp").takeIf { it.exists() }?.readText()?.trim()
@@ -204,22 +206,41 @@ class TrainService : Service() {
                         total = mark.total
                     }
                 }
-                if (advanced) lastAdvance = System.currentTimeMillis()
-                if (trainStillExpected(step, total) && trainQuietTooLong(lastAdvance, System.currentTimeMillis())) {
-                    val detail = trainStallDetail(lastLine)
-                    publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
-                    notify("训练没有前进")
-                    stalled = true
-                    killTrain(proc)
-                    break
+                val now = System.currentTimeMillis()
+                if (advanced) lastAdvance = now
+                val rssNow = if (proc.isAlive) rssKbOf(proc) else 0L
+                if (rssMoved(lastRssKb, rssNow)) lastRssMove = now
+                if (rssNow > 0L) lastRssKb = rssNow
+                val setup = step <= 0 && pendingStep <= 0 && isTrainSetupLine(lastLine)
+                if (proc.isAlive && trainStillExpected(step, total)) {
+                    val quietOut = trainQuietTooLong(lastAdvance, now)
+                    val quietMem = trainQuietTooLong(lastRssMove, now)
+                    if (setup && quietOut && quietMem) {
+                        val detail = trainLoadStallDetail(lastLine)
+                        publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
+                        notify("加载模型没有进展")
+                        stalled = true
+                        killTrain(proc)
+                        break
+                    }
+                    if (!setup && quietOut) {
+                        val detail = trainStallDetail(lastLine)
+                        publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
+                        notify("训练没有前进")
+                        stalled = true
+                        killTrain(proc)
+                        break
+                    }
                 }
-                publish(status, "running", "train", step, total, epochs, loss, started, lastLine, "", pendingStep, micro, microTotal)
+                val detail = if (setup) trainLoadHeartbeat((now - started) / 1000, lastRssKb) else lastLine
+                publish(status, "running", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
                 notify(
                     when {
                         total > 0 && pendingStep > step && micro > 0 && microTotal > 0 ->
                             "第 $pendingStep/$total 步 · 微批 $micro/$microTotal"
                         total > 0 && step > 0 -> "第 $step/$total 步"
                         pendingStep > 0 && microTotal > 0 -> "第 $pendingStep/$total 步 · 微批 $micro/$microTotal"
+                        setup -> "正在加载模型"
                         else -> "这一步还在计算"
                     },
                 )
@@ -385,6 +406,12 @@ class TrainService : Service() {
         getSystemService(NotificationManager::class.java).notify(7, notification)
     }
 
+    private fun rssKbOf(proc: Process): Long {
+        val text = File("/proc/${pidOf(proc)}/status").takeIf { it.exists() }
+            ?.readLines()?.firstOrNull { it.startsWith("VmRSS") }?.substringAfter(":")?.trim().orEmpty()
+        return text.substringBefore(" ").toLongOrNull() ?: 0L
+    }
+
     private fun pidOf(proc: Process): Int = try {
         proc.javaClass.getMethod("pid").invoke(proc) as Int
     } catch (_: Throwable) {
@@ -497,6 +524,19 @@ class TrainService : Service() {
                 selected = row.optBoolean("selected", true),
                 gate = row.optString("gate"),
             )
+        }
+
+        fun abandon(store: MemoryStore) {
+            store.ensure()
+            File(store.trainDir, "cancel").writeText("1")
+            File(store.trainDir, "train.log").writeText("")
+            File(store.trainDir, "status.json").writeText(
+                trainSnapshotJson("cancelled", "", 0, 0, 0, null, 0, "已取消", ""),
+            )
+            val pid = File(store.trainDir, "pid").takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
+            if (pid != null && pid > 0) {
+                runCatching { Runtime.getRuntime().exec(arrayOf("kill", "-9", pid.toString())) }
+            }
         }
 
         fun writeReviewed(store: MemoryStore, fact: ReviewedFact, force: Boolean) {

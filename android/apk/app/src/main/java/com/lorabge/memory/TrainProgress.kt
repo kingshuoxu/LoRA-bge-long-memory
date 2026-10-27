@@ -42,6 +42,51 @@ fun parseMicroLine(line: String): MicroMark? {
 /** No new trainer line for this long means the process is not advancing. */
 const val TRAIN_STALL_MS = 180_000L
 
+/**
+ * `[facts]` is printed after tokenization and before the weights load.
+ * That load is quiet. A line here is not a training step.
+ */
+fun isTrainSetupLine(line: String): Boolean {
+    val text = line.trim()
+    return text.startsWith("[facts]") ||
+        text.startsWith("[Config]") ||
+        text.startsWith("[Dataset]") ||
+        text.startsWith("[LoRA]") ||
+        text.startsWith("[load]") ||
+        text.startsWith("开始训练") ||
+        text.startsWith("生成样本") ||
+        text.startsWith("抽取事实") ||
+        text.startsWith("写闸门")
+}
+
+/** Resident set moved enough that the silent loader is still doing work. */
+fun rssMoved(previousKb: Long, currentKb: Long): Boolean {
+    if (currentKb <= 0L) return false
+    if (previousKb <= 0L) return true
+    return kotlin.math.abs(currentKb - previousKb) >= 256L
+}
+
+fun trainLoadHeartbeat(elapsedSec: Long, rssKb: Long): String {
+    val mem = if (rssKb > 0L) " · 内存 ${rssKb / 1024} MB" else ""
+    return "正在加载模型 · 已过 ${elapsedSec} 秒$mem"
+}
+
+fun trainLoadStallDetail(lastLine: String): String {
+    val head = "加载模型没有进展。点「确认并训练」重试，或点「取消训练」。"
+    val where = lastLine.trim().take(180)
+    return if (where.isEmpty()) head else "$head\n停在: $where"
+}
+
+/** Failure before any loss should not keep a curve from an older log. */
+fun lossChartValues(snap: TrainSnapshot, parsed: List<Float>): List<Float> {
+    if (snap.state == "error" && snap.step <= 0 && snap.loss == null) return emptyList()
+    return parsed
+}
+
+fun trainActionsOpen(training: Boolean, snap: TrainSnapshot): Boolean {
+    return training || snap.state == "running" || snap.state == "error" || snap.state == "waiting"
+}
+
 fun trainQuietTooLong(lastAdvanceMs: Long, nowMs: Long, stallMs: Long = TRAIN_STALL_MS): Boolean {
     if (lastAdvanceMs < 0 || nowMs < lastAdvanceMs) return false
     return nowMs - lastAdvanceMs >= stallMs
