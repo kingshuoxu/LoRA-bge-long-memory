@@ -169,10 +169,14 @@ class ChatFlowTest {
         assertFalse(shown.contains("0 步"))
         assertTrue(shown, Regex("第 \\d+/\\d+ 步").containsMatchIn(shown))
         shot("05-train.png")
-        waitUntil(20_000) {
+        val registered = waitUntil(30_000) {
             val text = device.findObject(By.desc("trainProgress"))?.text.orEmpty()
-            text.contains("第 4/4 步") || text.contains("已完成") || text.contains("已登记")
+            text.contains("已完成") || text.contains("已登记") || text.contains("Finished")
         }
+        assertTrue(
+            "expert was not registered before recall\n" + device.findObject(By.desc("trainProgress"))?.text.orEmpty(),
+            registered,
+        )
 
         clickTab("tab-chat")
         clickDesc("newChat")

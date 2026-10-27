@@ -148,6 +148,19 @@ class TrainProgressTest {
         assertTrue(detail.contains("确认并训练"))
         assertTrue(detail.contains("取消训练"))
         assertTrue(detail.contains("[Dataset] epochs=4 max_steps=8"))
+        val runningLast = formatTrainProgress(
+            "zh",
+            TrainSnapshot(state = "running", stage = "train", step = 4, total = 4, epoch = 1, epochs = 1, loss = 0.6f),
+        )
+        assertTrue(runningLast.contains("第 4/4 步"))
+        assertFalse(runningLast.contains("已完成"))
+        assertFalse(runningLast.contains("已登记"))
+        val finished = formatTrainProgress(
+            "zh",
+            TrainSnapshot(state = "done", stage = "done", step = 4, total = 4, detail = "已登记 expert_self"),
+        )
+        assertTrue(finished.contains("已完成"))
+        assertTrue(finished.contains("已登记"))
         val shown = formatTrainProgress("zh", TrainSnapshot(state = "error", detail = detail))
         assertTrue(shown.contains("失败"))
         assertTrue(shown.contains("确认并训练"))

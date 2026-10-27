@@ -147,6 +147,16 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
         val tail = snap.logTail.ifBlank { snap.detail }
         return if (tail.isBlank()) head else "$head\n$tail"
     }
+    // Step 4/4 is published before the expert is written. Only "done" means recall can see the fact.
+    if (snap.state == "done") {
+        val head = if (lang == "en") "Finished" else "已完成"
+        val registered = if (snap.detail.contains("已登记") || snap.detail.contains("registered", ignoreCase = true)) {
+            if (lang == "en") "Registered" else "已登记"
+        } else {
+            ""
+        }
+        return listOf(head, registered).filter { it.isNotBlank() }.joinToString(" · ")
+    }
     if (snap.step <= 0) {
         if (snap.state == "running" && snap.micro > 0 && snap.microTotal > 0 && snap.pendingStep > 0) {
             val steps = if (snap.total > 0) {
