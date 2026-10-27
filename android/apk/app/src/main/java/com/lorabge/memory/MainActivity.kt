@@ -237,7 +237,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.9"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.10"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -611,11 +611,7 @@ internal fun guessCorrection(text: String): PendingCorrection {
 
 internal fun readLoss(log: File): List<Float> {
     if (!log.exists()) return emptyList()
-    return log.readLines().mapNotNull { line ->
-        val at = line.indexOf("loss=")
-        if (at < 0) return@mapNotNull null
-        line.drop(at + 5).takeWhile { it.isDigit() || it == '.' }.toFloatOrNull()
-    }
+    return log.readLines().mapNotNull { parseStepLine(it)?.third }
 }
 
 private fun skyExperts(store: MemoryStore, lang: String): List<SkyExpert> {

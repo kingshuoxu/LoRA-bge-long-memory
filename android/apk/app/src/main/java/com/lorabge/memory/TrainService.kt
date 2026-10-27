@@ -134,6 +134,7 @@ class TrainService : Service() {
             )
             publish(status, "running", "build", 0, 0, epochs, null, started, "生成样本 ${expanded.size} 条", "")
             val log = File(store.trainDir, "train.log")
+            log.writeText("")
             val telemetry = File(store.trainDir, "telemetry.tsv")
             telemetry.writeText("wall_s\trss_kb\tthermal\tbattery\n")
             val threads = PhoneFacts.threads()
@@ -330,6 +331,7 @@ class TrainService : Service() {
         started: Long,
     ) {
         val log = File(store.trainDir, "train.log")
+        log.writeText("")
         val total = 4
         for (step in 1..total) {
             val loss = 1.4f - step * 0.2f

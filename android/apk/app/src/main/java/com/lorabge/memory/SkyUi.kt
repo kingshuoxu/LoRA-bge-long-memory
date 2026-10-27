@@ -63,6 +63,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -1025,7 +1026,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 }
                 if (state.loss.isNotEmpty() || state.training) {
                     Spacer(Modifier.height(8.dp))
-                    Constellation(state.loss, state.training)
+                    LossChart(state.loss, state.lang)
                 }
             }
             if (state.status.isNotEmpty()) {
@@ -1180,36 +1181,44 @@ private fun FactLine(label: String, value: String, onChange: (String) -> Unit) {
 }
 
 @Composable
-private fun Constellation(loss: List<Float>, training: Boolean) {
-    Canvas(Modifier.fillMaxWidth().height(160.dp)) {
-        val n = maxOf(loss.size, 6)
-        val pts = ArrayList<Offset>()
-        for (i in 0 until n) {
-            val t = i / (n - 1f)
-            val x = 24f + t * (size.width - 48f)
-            val y = size.height * 0.55f + sin(t * 6f) * 28f - if (i < loss.size) 10f else 0f
-            pts.add(Offset(x, y))
-        }
-        for (i in 1 until pts.size) {
-            drawLine(Accent.copy(alpha = 0.35f), pts[i - 1], pts[i], strokeWidth = 1.5f)
-        }
-        pts.forEachIndexed { i, p ->
-            val done = i < loss.size
-            drawCircle(if (done) Gold else Accent.copy(alpha = 0.45f), if (done) 5f else 3f, p)
-        }
-        if (loss.size >= 2) {
-            val minL = loss.min()
-            val maxL = loss.max().coerceAtLeast(minL + 1e-3f)
-            val path = Path()
-            loss.forEachIndexed { i, value ->
-                val x = 24f + i / (loss.size - 1f) * (size.width - 48f)
-                val y = size.height * 0.9f - ((value - minL) / (maxL - minL)) * size.height * 0.48f
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+private fun LossChart(loss: List<Float>, lang: String) {
+    val latest = loss.lastOrNull()
+    val caption = when {
+        latest == null && lang == "en" -> "Loss not in yet"
+        latest == null -> "损失还没出来"
+        lang == "en" -> "Loss ${"%.2f".format(latest)}"
+        else -> "损失 ${"%.2f".format(latest)}"
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Text(caption, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
+        Canvas(Modifier.fillMaxWidth().height(112.dp)) {
+            val left = 8f
+            val right = size.width - 8f
+            val top = 10f
+            val bottom = size.height - 8f
+            drawLine(Color(0x33B4C6DC), Offset(left, bottom), Offset(right, bottom), 1.2f)
+            if (loss.isEmpty()) return@Canvas
+            val maxL = (loss.maxOrNull() ?: 0.05f).coerceAtLeast(0.05f)
+            fun yOf(value: Float): Float {
+                val span = (bottom - top).coerceAtLeast(1f)
+                return bottom - (value / maxL).coerceIn(0f, 1f) * span
             }
-            drawPath(path, Accent2, style = Stroke(width = 3f))
-        }
-        if (training) {
-            drawCircle(Gold.copy(alpha = 0.15f), 18f, pts[loss.size.coerceAtMost(pts.lastIndex)])
+            fun xOf(index: Int): Float {
+                if (loss.size == 1) return (left + right) / 2f
+                return left + index / (loss.size - 1f) * (right - left)
+            }
+            if (loss.size >= 2) {
+                val path = Path()
+                loss.forEachIndexed { index, value ->
+                    val x = xOf(index)
+                    val y = yOf(value)
+                    if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                drawPath(path, Accent2, style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+            loss.forEachIndexed { index, value ->
+                drawCircle(Accent2, if (index == loss.lastIndex) 4.5f else 3f, Offset(xOf(index), yOf(value)))
+            }
         }
     }
 }

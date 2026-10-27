@@ -4,8 +4,23 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class TrainProgressTest {
+    @Test
+    fun chartKeepsStepLossAndDropsStrayNumbers() {
+        val log = File.createTempFile("train", ".log")
+        log.writeText(
+            """
+            noise loss=9.9
+            [step 1/8] loss=5.35
+            [micro 2/8] step 2/8
+            [step 2/8] loss=0.22 extra
+            """.trimIndent() + "\n",
+        )
+        assertEquals(listOf(5.35f, 0.22f), readLoss(log))
+    }
+
     @Test
     fun parsesTrainerStepLine() {
         val parsed = parseStepLine("[step 2/16] loss=1.10 step_time_s=3 elapsed_s=9")
