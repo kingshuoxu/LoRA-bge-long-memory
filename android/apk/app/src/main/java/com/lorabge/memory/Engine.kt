@@ -268,7 +268,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     fun runtimeRecord(): BackendRecord {
         val stamp = DeviceTune.probeStamp(appVersion())
         val record = backendRecord()
-        if (record.mode == "auto" && record.version != stamp) {
+        if (record.mode == "auto" && !DeviceTune.sameProbePolicy(record.version, stamp)) {
             return record.copy(probe = "cpu", probed = false, checking = true, reason = "pending")
         }
         if (record.mode == "auto" && record.probe == "vulkan" && record.mali && !record.isolated) {
@@ -333,9 +333,16 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             record.vkName + " " + record.glRenderer,
         )
         if (!suspect) return
-        val proven = record.isolated && record.probe == "vulkan" && record.version == stamp && record.reason == "matched_faster"
-        if (proven) return
-        if (record.version == stamp && record.probed && record.probe == "cpu" && record.reason != "pending") return
+        val proven = record.isolated && record.probe == "vulkan" &&
+            DeviceTune.sameProbePolicy(record.version, stamp) && record.reason == "matched_faster"
+        if (proven) {
+            if (record.version != stamp) writeBackend(record.copy(version = stamp))
+            return
+        }
+        if (DeviceTune.sameProbePolicy(record.version, stamp) && record.probed && record.probe == "cpu" && record.reason != "pending") {
+            if (record.version != stamp) writeBackend(record.copy(version = stamp))
+            return
+        }
         writeBackend(
             record.copy(
                 probe = "cpu",
@@ -367,11 +374,16 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             setBackendMode(current.mode)
             return
         }
-        if (current.probed && current.version == stamp && current.reason != "no_model") return
+        val strikes = LlmGuard(crashFile()).vulkanStrikes()
+        if (!DeviceTune.shouldReprobe(current, stamp, strikes)) {
+            if (current.version != stamp) writeBackend(current.copy(version = stamp))
+            return
+        }
         writeBackend(current.copy(checking = true, reason = "checking", version = stamp))
         val vulkan = tool("libggml-vulkan.so") != null && tool("libggml-cpu.so") != null
         val ready = baseModel() != null && bgeModel() != null && binariesReady()
-        val gpuChat = if (vulkan && ready) probeChat(99) else TimedRun(2, "", "")
+        var gpuChat = if (vulkan && ready) probeChat(99) else TimedRun(2, "", "")
+        if (vulkan && ready && gpuChat.code > 128) gpuChat = probeChat(99)
         val cpuChat = if (vulkan && ready && gpuChat.code == 0) probeChat(0) else TimedRun(1, "", "")
         val gpuReply = DeviceTune.extractReply(gpuChat.text)
         val cpuReply = DeviceTune.extractReply(cpuChat.text)
@@ -454,6 +466,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
                 glRenderer = renderer.ifBlank { current.glRenderer },
             ),
         )
+        if (decided.probe == "vulkan") LlmGuard(crashFile()).clearBad("vulkan")
     }
 
     fun diagnostics(): String {

@@ -61,6 +61,32 @@ object DeviceTune {
     // 0.1.2 起,Mali 只有在独立进程里自检并且比 CPU 快才升到 GPU。旧记录的戳对不上,会重新测。
     fun probeStamp(version: String) = "$version+iso1"
 
+    /** The suffix after '+' is the GPU policy. An app version bump alone is not a new policy. */
+    fun probePolicy(stamp: String): String {
+        val trimmed = stamp.trim()
+        val plus = trimmed.lastIndexOf('+')
+        return if (plus >= 0 && plus < trimmed.length - 1) trimmed.substring(plus + 1) else trimmed
+    }
+
+    fun sameProbePolicy(recordVersion: String, stamp: String): Boolean {
+        if (recordVersion.isBlank() || stamp.isBlank()) return false
+        return probePolicy(recordVersion) == probePolicy(stamp)
+    }
+
+    /**
+     * Re-run the Vulkan self-test for a new policy, a missing result, or one crash/timeout.
+     * A proven match on the same policy stays put. Two strikes stay on CPU.
+     */
+    fun shouldReprobe(record: BackendRecord, stamp: String, vulkanStrikes: Int): Boolean {
+        if (record.mode != "auto") return false
+        if (!record.probed || record.reason == "no_model" || record.reason == "pending" || record.reason == "checking") {
+            return true
+        }
+        if (!sameProbePolicy(record.version, stamp)) return true
+        if (record.probe == "cpu" && record.reason in CRASH_REASONS && vulkanStrikes < 2) return true
+        return false
+    }
+
     fun suspectMali(soc: String, model: String, gpu: String): Boolean {
         val blob = "$soc $model $gpu".lowercase()
         return blob.contains("mali") || blob.contains("immortalis") || blob.contains("dimensity") ||
@@ -280,6 +306,16 @@ object DeviceTune {
         }
         return finish(BackendRecord("auto", "vulkan", "matched", true, version, false))
     }
+
+    private val CRASH_REASONS = setOf(
+        "chat_exit",
+        "embed_exit",
+        "speed_exit",
+        "native_crash",
+        "chat_timeout",
+        "embed_timeout",
+        "speed_timeout",
+    )
 
     private fun tpsText(value: Double): String {
         if (value <= 0.0 || !value.isFinite()) return "未测"

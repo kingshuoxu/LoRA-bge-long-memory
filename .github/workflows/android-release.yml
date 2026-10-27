@@ -76,7 +76,7 @@ jobs:
       - name: Write the update manifest
         run: |
           set -eu
-          TAG=android-v0.1.8
+          TAG=android-v0.1.9
           STAGE=android/out/release
           mkdir -p "$STAGE"
           APK=android/apk/app/build/outputs/apk/debug/app-debug.apk
@@ -175,7 +175,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # Lumi 已核对运行 40342688527：已发布的 0.1.4 在应用里升到 0.1.5。
-    # 0.1.4 仍会访问没有 DNS 的 mirror.ghproxy.com，重跑可能再次失败。这不应挡住 0.1.8。
+    # 0.1.4 仍会访问没有 DNS 的 mirror.ghproxy.com，重跑可能再次失败。这不应挡住 0.1.9。
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -228,7 +228,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG=android-v0.1.8
+          TAG=android-v0.1.9
           STAGE=android/out/release
           python3 - << 'PY'
           import hashlib, json, pathlib
@@ -236,21 +236,23 @@ jobs:
           meta = json.loads((stage / "update.json").read_text())
           apk = (stage / "app-debug.apk").read_bytes()
           digest = hashlib.sha256(apk).hexdigest()
-          assert meta["versionName"] == "0.1.8"
-          assert meta["versionCode"] == 1008
+          assert meta["versionName"] == "0.1.9"
+          assert meta["versionCode"] == 1009
           assert meta["sha256"] == digest
           assert meta["size"] == len(apk)
           sums = (stage / "SHA256SUMS").read_text().split()
           assert sums[0] == digest and sums[1] == "app-debug.apk"
           PY
           NOTES=$(cat << EOF
+          0.1.9 修的是对话用的 Vulkan，不是星云。换版本号时，已经在这台 Mali 上证明比 CPU 快的结果被当成没测过，打开应用会重新自检。自检进程崩一次就弹出「图形后端异常，已改用 CPU」，并且以后不再试 GPU。这一版同一套图形策略沿用上次的结果，不会因为版本号再测一遍。自检如果退出，会立刻再测一次；还失败才改用 CPU，下次打开再试 GPU。连续两次失败才固定用 CPU。提示里写明是自检还是生成，以及信号。设置里把图形后端改成自动，会清掉失败记录再测。
+
           0.1.8 把星云缩到最小、回到开场取景时再压暗。云团和事实星按屏幕像素来画，相机拉远时它们不会跟着变小。好几朵云挤在一小块画面里，最亮的核心和光刺叠在一起，中心变成纯白。这一版只在开场那一帧收掉那些最亮的核心粒子，并把光刺压下去。放大看同一朵云时，亮度和大小与 0.1.7 相同。
 
           0.1.7 把星云压暗，并让放大之后能缩回开场画面。原先云团和银河叠色太亮。缩小的最远距离被写死成 90，而竖屏上好几个专家的开场距离往往超过 200，所以放大之后缩不回原来的取景。点进一朵云还会把距离收到 22，相机转到云的背面。现在最远可以回到开场那一帧，双指张开和捏合都走这个范围。关于自己的事实（实体仍是「我」，这样「我的猫叫什么」还能对上）收进稳定的「关于你」，下一次巩固会把以前单独成团的「我」并进去。
 
           0.1.7 也修了巩固页训练时的进度线。原先两条一样的金色粗线叠在一起：步数 2/8 和轮次 1/4 都是四分之一，看起来像同一条线画了两次。同一屏上面写第 2/8 步、第 1/4 轮，页脚又写 micro 6/8、step 3/8。现在只留一条进度线，按已经打出 loss 的步，加上正在算的微批来填充。同一行写成第 3/8 步、微批 6/8、第 2/4 轮，损失、已过时间和剩余时间还在。页脚不再贴训练进程的英文日志。
 
-          已经装了 0.1.7 或 0.1.6 的手机，可以在应用里点「检查更新」。还停在 0.1.4 的手机，这一次请用手机浏览器打开下面的 APK 安装。0.1.4 里的「检查更新」还是旧地址，连不上 GitHub 时升不到这一版。签名和 0.1.4、0.1.5、0.1.6、0.1.7 是同一把测试钥匙，不用卸载，模型和对话留着。
+          已经装了 0.1.8、0.1.7 或 0.1.6 的手机，可以在应用里点「检查更新」。还停在 0.1.4 的手机，这一次请用手机浏览器打开下面的 APK 安装。0.1.4 里的「检查更新」还是旧地址，连不上 GitHub 时升不到这一版。签名和 0.1.4、0.1.5、0.1.6、0.1.7、0.1.8 是同一把测试钥匙，不用卸载，模型和对话留着。
 
           手机浏览器可以直接安装的调试包。第一次打开会自己下载基座、bge、训练权重和五个专家。
 
@@ -260,7 +262,7 @@ jobs:
 
           0.1.5 也修了巩固停在「这一步还在计算」。vivo X200 Pro 上这一步停了大约 41 分钟，页面只剩 Dataset 那一行（epochs=4 max_steps=8），步数和 loss 都没有。训练进程已经把数据集行打出来了，卡住的是后面第一次矩阵乘：OpenBLAS 交叉编译时按 Linux 打开了绑核，在手机上 sched_setaffinity 会把工作线程停住。这一版编译关掉绑核，每个微批开始就写出「第 1/8 步 · 微批 1/8」。超过 3 分钟没有新输出就记成失败，可以点「确认并训练」重试，或点「取消训练」。
 
-          从 0.1.4 起，安装包用同一把测试钥匙签名。0.1.8 的「检查更新」读 android-v* 发布和 update.json，不读 releases/latest。GitHub 失败再试上面的镜像；发布列表拿不到就按更新的标签读 update.json。下载可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。已经装了 0.1.4 的手机，这一次用浏览器安装，不要指望 0.1.4 自己检查更新。已经装了 0.1.6 或 0.1.7 的手机用应用里的检查更新即可。
+          从 0.1.4 起，安装包用同一把测试钥匙签名。0.1.9 的「检查更新」读 android-v* 发布和 update.json，不读 releases/latest。GitHub 失败再试上面的镜像；发布列表拿不到就按更新的标签读 update.json。下载可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。已经装了 0.1.4 的手机，这一次用浏览器安装，不要指望 0.1.4 自己检查更新。已经装了 0.1.6、0.1.7 或 0.1.8 的手机用应用里的检查更新即可。
 
           0.1.2、更早的包，以及标签上那份旧的 0.1.3，都是每次 CI 一把新的调试钥匙，签不上这一版。已经装过那些包的手机要先卸一次。卸载会清掉应用私有目录和 Android/data 里的模型、专家、对话和设置，下次打开会按 0.1.0 的清单重新下载。卸完装上这一版之后，以后的版本可以在应用里直接更新，不用再卸。
 
@@ -280,5 +282,5 @@ jobs:
           EOF
           )
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.8" --notes "$NOTES"
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.9" --notes "$NOTES"
           gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS" --clobber

@@ -58,7 +58,7 @@ class LlmService : Service() {
         val current = engine ?: error("engine")
         if (op == "ensure") {
             if (backend == "vulkan") current.ensureBackend()
-            else current.noteCpu(if (current.tool("libggml-vulkan.so") == null) "no_vulkan" else "native_crash")
+            else if (current.tool("libggml-vulkan.so") == null) current.noteCpu("no_vulkan")
             return "ok"
         }
         return current.withBackend(backend) {

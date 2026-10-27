@@ -178,6 +178,19 @@ class DeviceTuneTest {
         assertTrue(DeviceTune.suspectMali("MediaTek Dimensity 9400", "V2413", ""))
         assertFalse(DeviceTune.suspectMali("Qualcomm", "2407FPN8EG", "Adreno 830"))
         assertEquals("0.1.2+iso1", DeviceTune.probeStamp("0.1.2"))
+        assertTrue(DeviceTune.sameProbePolicy("0.1.6+iso1", "0.1.9+iso1"))
+        assertFalse(DeviceTune.sameProbePolicy("0.1.8+iso1", "0.1.9+iso2"))
+        val proven = BackendRecord(
+            "auto", "vulkan", "matched_faster", true, "0.1.6+iso1", false,
+            mali = true, isolated = true,
+        )
+        assertFalse(DeviceTune.shouldReprobe(proven, "0.1.9+iso1", 0))
+        val crashed = proven.copy(probe = "cpu", reason = "chat_exit", isolated = false)
+        assertTrue(DeviceTune.shouldReprobe(crashed, "0.1.9+iso1", 1))
+        assertFalse(DeviceTune.shouldReprobe(crashed, "0.1.9+iso1", 2))
+        val mismatch = proven.copy(probe = "cpu", reason = "chat_mismatch", isolated = false)
+        assertFalse(DeviceTune.shouldReprobe(mismatch, "0.1.9+iso1", 0))
+        assertTrue(DeviceTune.shouldReprobe(proven.copy(version = "0.1.6+iso1", reason = "matched_faster"), "0.1.9+iso2", 0))
     }
 
     @Test

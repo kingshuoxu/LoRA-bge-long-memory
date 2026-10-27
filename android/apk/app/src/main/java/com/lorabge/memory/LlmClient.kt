@@ -39,26 +39,37 @@ class LlmClient(context: Context) {
     private val supervisor = LlmSupervisor(guard) { backend -> RemoteWorker(backend) }
 
     fun ensure() {
+        settleGpuBan()
+        if (guard.vulkanStrikes() >= 2) return
         val key = engine.driverKey()
-        val allow = engine.tool("libggml-vulkan.so") != null && !guard.isBad("vulkan", key)
-        supervisor.call("ensure", if (allow) "vulkan" else "cpu", key, "")
+        if (engine.tool("libggml-vulkan.so") == null || guard.isBad("vulkan", key)) return
+        supervisor.call("ensure", "vulkan", key, "")
+        settleGpuBan()
     }
 
     fun route(text: String): RouteHit {
-        val json = supervisor.call(
-            "route",
-            chatBackend(),
-            engine.driverKey(),
-            JSONObject().put("text", text).toString(),
-        )
-        val obj = JSONObject(json)
-        val expert = obj.optString("expert").ifBlank { null }
-        return RouteHit(expert, obj.optBoolean("fired"), obj.optString("reason"), obj.optDouble("sim"))
+        try {
+            val json = supervisor.call(
+                "route",
+                chatBackend(),
+                engine.driverKey(),
+                JSONObject().put("text", text).toString(),
+            )
+            val obj = JSONObject(json)
+            val expert = obj.optString("expert").ifBlank { null }
+            return RouteHit(expert, obj.optBoolean("fired"), obj.optString("reason"), obj.optDouble("sim"))
+        } finally {
+            settleGpuBan()
+        }
     }
 
     fun answer(text: String, expert: String?, onPartial: (String) -> Unit): String {
-        val payload = JSONObject().put("text", text).put("expert", expert ?: "").toString()
-        return supervisor.call("answer", chatBackend(), engine.driverKey(), payload, onPartial)
+        try {
+            val payload = JSONObject().put("text", text).put("expert", expert ?: "").toString()
+            return supervisor.call("answer", chatBackend(), engine.driverKey(), payload, onPartial)
+        } finally {
+            settleGpuBan()
+        }
     }
 
     fun rebuild() {
@@ -72,6 +83,14 @@ class LlmClient(context: Context) {
     }
 
     fun notice(lang: String): String = guard.notice(lang)
+
+    fun acknowledgeNotice() = guard.acknowledge()
+
+    private fun settleGpuBan() {
+        val record = engine.backendRecord()
+        if (record.mode == "gpu") return
+        if (guard.vulkanStrikes() >= 2 && record.probe == "vulkan") engine.noteCpu("native_crash")
+    }
 
     private fun chatBackend(): String {
         val record = engine.runtimeRecord()

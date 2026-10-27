@@ -157,7 +157,10 @@ private fun PhoneApp(
             } catch (_: Throwable) {
             } finally {
                 val fallback = client.notice(langNow)
-                if (fallback.isNotBlank()) toast = fallback
+                if (fallback.isNotBlank()) {
+                    toast = fallback
+                    client.acknowledgeNotice()
+                }
                 running.set(false)
             }
         }.start()
@@ -234,7 +237,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.8"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.9"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -429,7 +432,10 @@ private fun PhoneApp(
                     generating = false
                     streaming = ""
                     val fallback = client.notice(langNow)
-                    if (fallback.isNotBlank()) toast = fallback
+                    if (fallback.isNotBlank()) {
+                        toast = fallback
+                        client.acknowledgeNotice()
+                    }
                     tick++
                 }.start()
             }

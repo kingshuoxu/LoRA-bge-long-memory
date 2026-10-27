@@ -12,7 +12,9 @@ import java.io.RandomAccessFile
 class LlmGuard(private val file: File?) {
     private val crashes = ArrayList<CrashNote>()
     private val bad = HashSet<String>()
+    private val sessionBad = HashSet<String>()
     private var notice: String = ""
+    private var recoveredAt: Long = 0L
 
     init {
         if (file != null) load()
@@ -32,7 +34,10 @@ class LlmGuard(private val file: File?) {
             )
             while (crashes.size > 8) crashes.removeAt(0)
             val retry = backend != "cpu" && backend != "unknown"
-            if (retry) bad.add(key(backend, driverKey))
+            if (retry) sessionBad.add(key(backend, driverKey))
+            // One crash retries on CPU for this process only. A second crash on the same
+            // driver stays on CPU across launches, until Settings picks Auto or GPU.
+            recomputeBan()
             notice = if (retry) "cpu_fallback" else "cpu_failed"
             save()
             GuardDecision(retryOnCpu = retry, notice = notice)
@@ -41,25 +46,47 @@ class LlmGuard(private val file: File?) {
 
     fun isBad(backend: String, driverKey: String): Boolean {
         if (backend == "cpu") return false
-        return locked { key(backend, driverKey) in bad }
+        val id = key(backend, driverKey)
+        return locked { id in sessionBad || id in bad }
     }
+
+    fun vulkanStrikes(): Int = locked { strikes("vulkan") }
 
     fun clearBad(backend: String) {
         locked {
-            bad.removeAll { it.startsWith("$backend|") }
+            sessionBad.removeAll { it.startsWith("$backend|") }
+            val newest = crashes.maxOfOrNull { it.atMillis } ?: 0L
+            recoveredAt = maxOf(System.currentTimeMillis(), newest)
+            recomputeBan()
             if (notice == "cpu_fallback") notice = ""
             save()
         }
     }
 
+    fun acknowledge() {
+        locked {
+            if (notice.isNotBlank()) {
+                notice = ""
+                save()
+            }
+        }
+    }
+
     fun notice(lang: String): String {
-        val code = locked { notice }
+        val (code, stage, signal) = locked {
+            val last = crashes.lastOrNull { it.backend != "cpu" && it.backend != "unknown" && it.backend.isNotBlank() }
+            Triple(notice, last?.stage.orEmpty(), last?.signal.orEmpty())
+        }
         if (code.isBlank()) return ""
-        val zh = code == "cpu_fallback"
-        return if (lang == "en") {
-            if (zh) "Graphics backend failed, switched to CPU" else "Generation failed"
+        val fallback = code == "cpu_fallback"
+        val zh = lang != "en"
+        if (!fallback) return if (zh) "生成失败" else "Generation failed"
+        val where = stageName(stage, zh)
+        val how = signal.ifBlank { if (zh) "退出" else "exit" }
+        return if (zh) {
+            "图形后端异常（$where $how），这条已改用 CPU。设置里把图形后端改成「自动」可再试。"
         } else {
-            if (zh) "图形后端异常，已改用 CPU" else "生成失败"
+            "Graphics backend failed ($where $how). This reply used CPU. Set Graphics to Auto in Settings to try the GPU again."
         }
     }
 
@@ -103,11 +130,11 @@ class LlmGuard(private val file: File?) {
             return
         }
         notice = obj.optString("notice")
-        val badArr = obj.optJSONArray("bad")
-        if (badArr != null) {
-            for (i in 0 until badArr.length()) bad.add(badArr.getString(i))
+        recoveredAt = obj.optLong("recoveredAt")
+        val rows = obj.optJSONArray("crashes") ?: run {
+            recomputeBan()
+            return
         }
-        val rows = obj.optJSONArray("crashes") ?: return
         for (i in 0 until rows.length()) {
             val row = rows.getJSONObject(i)
             crashes.add(
@@ -120,6 +147,25 @@ class LlmGuard(private val file: File?) {
                     atMillis = row.optLong("at"),
                 ),
             )
+        }
+        recomputeBan()
+    }
+
+    private fun strikes(backend: String): Int {
+        return crashes.count { it.backend == backend && it.atMillis > recoveredAt }
+    }
+
+    private fun recomputeBan() {
+        bad.clear()
+        val counts = HashMap<String, Int>()
+        for (crash in crashes) {
+            if (crash.atMillis <= recoveredAt) continue
+            if (crash.backend == "cpu" || crash.backend == "unknown" || crash.backend.isBlank()) continue
+            val id = key(crash.backend, crash.driverKey)
+            counts[id] = (counts[id] ?: 0) + 1
+        }
+        for ((id, count) in counts) {
+            if (count >= 2) bad.add(id)
         }
     }
 
@@ -139,10 +185,25 @@ class LlmGuard(private val file: File?) {
         }
         val badArr = JSONArray()
         for (item in bad) badArr.put(item)
-        target.writeText(JSONObject().put("notice", notice).put("bad", badArr).put("crashes", rows).toString())
+        target.writeText(
+            JSONObject()
+                .put("notice", notice)
+                .put("recoveredAt", recoveredAt)
+                .put("bad", badArr)
+                .put("crashes", rows)
+                .toString(),
+        )
     }
 
     companion object {
+        fun stageName(stage: String, zh: Boolean): String = when (stage) {
+            "selftest" -> if (zh) "自检" else "self-test"
+            "answer" -> if (zh) "生成" else "generation"
+            "route" -> if (zh) "路由" else "routing"
+            "ensure", "bind" -> if (zh) "启动" else "startup"
+            else -> stage.ifBlank { if (zh) "未知" else "unknown" }
+        }
+
         private val processGate = Any()
 
         fun key(backend: String, driverKey: String) = "$backend|$driverKey"

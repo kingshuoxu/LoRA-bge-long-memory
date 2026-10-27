@@ -33,8 +33,12 @@ class LlmIsolationTest {
         assertTrue(rendered.contains("answer"))
         assertTrue(rendered.contains("vulkan"))
         assertTrue(rendered.contains(driver))
-        assertEquals("图形后端异常，已改用 CPU", guard.notice("zh"))
+        assertEquals(
+            "图形后端异常（生成 SIGSEGV），这条已改用 CPU。设置里把图形后端改成「自动」可再试。",
+            guard.notice("zh"),
+        )
         assertTrue(guard.notice("en").contains("CPU"))
+        assertTrue(guard.notice("en").contains("Auto"))
 
         val again = supervisor.call("answer", "vulkan", driver, "hi")
         assertEquals("ok:hi", again)
@@ -61,6 +65,32 @@ class LlmIsolationTest {
         assertEquals(1, opens.get())
         assertFalse(guard.isBad("cpu", "device|unknown"))
         assertTrue(guard.render().contains("SIGKILL"))
+    }
+
+    @Test
+    fun oneCrashDoesNotBanTheNextLaunch() {
+        val root = tempRoot()
+        val file = File(root, "crashes.json")
+        val first = LlmGuard(file)
+        first.onDeath("selftest", "vulkan", "Mali-G925|r47", "SIGSEGV", "probe child")
+        assertTrue(first.isBad("vulkan", "Mali-G925|r47"))
+        assertTrue(first.notice("zh").contains("自检"))
+        assertTrue(first.notice("zh").contains("SIGSEGV"))
+        first.acknowledge()
+        assertEquals("", first.notice("zh"))
+
+        val second = LlmGuard(file)
+        assertFalse(second.isBad("vulkan", "Mali-G925|r47"))
+        assertEquals(1, second.vulkanStrikes())
+        assertEquals("", second.notice("zh"))
+        second.onDeath("answer", "vulkan", "Mali-G925|r47", "SIGSEGV", "again")
+        val third = LlmGuard(file)
+        assertTrue(third.isBad("vulkan", "Mali-G925|r47"))
+        assertEquals(2, third.vulkanStrikes())
+        third.clearBad("vulkan")
+        val forgiven = LlmGuard(file)
+        assertFalse(forgiven.isBad("vulkan", "Mali-G925|r47"))
+        assertEquals(0, forgiven.vulkanStrikes())
     }
 
     @Test
