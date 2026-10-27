@@ -117,7 +117,7 @@ object EntityGround {
 
     internal fun askedKind(query: String): String? = when {
         query.contains("成立") || query.contains("哪一年") || query.contains("哪年") || query.contains("什么时候") -> "year"
-        query.contains("总部") || query.contains("住在") -> "place"
+        query.contains("总部") || query.contains("住在") || query.contains("位于") -> "place"
         query.contains("产品") || query.contains("旗舰") -> "product"
         query.contains("首席") || query.contains("CEO") || query.contains("总裁") -> "ceo"
         else -> null
@@ -125,7 +125,7 @@ object EntityGround {
 
     internal fun factKind(statement: String): String = when {
         statement.contains("成立") -> "year"
-        statement.contains("总部") || statement.contains("位于") -> "place"
+        statement.contains("总部") || statement.contains("位于") || statement.contains("住在") -> "place"
         statement.contains("产品") || statement.contains("旗舰") -> "product"
         statement.contains("首席") || statement.contains("执行官") || statement.contains("总裁") -> "ceo"
         else -> "other"

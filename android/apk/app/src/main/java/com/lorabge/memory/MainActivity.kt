@@ -297,8 +297,7 @@ private fun PhoneApp(
                 val full = store.loadConversation(conv.id) ?: continue
                 for (message in full.messages) {
                     if (message.role != "user") continue
-                    val drafted = FactNotice.draft(message.content) ?: continue
-                    noted.add(drafted.statement)
+                    for (drafted in FactNotice.drafts(message.content)) noted.add(drafted.statement)
                 }
             }
             pendingFactLines(noted, experts.flatMap { it.facts })
@@ -372,9 +371,10 @@ private fun PhoneApp(
                     }.start()
                     return@SkyFrame
                 }
-                val fact = FactNotice.draft(text)
-                val noticed = fact != null || FactNotice.noticed(text)
+                val facts = FactNotice.drafts(text)
+                val noticed = facts.isNotEmpty() || FactNotice.noticed(text)
                 if (noticed) {
+                    val fact = facts.firstOrNull()
                     if (fact != null) {
                         entity = fact.entity
                         attr = fact.attr
@@ -386,8 +386,8 @@ private fun PhoneApp(
                     } else if (looksLikeCorrection(text)) {
                         pending = guessCorrection(text)
                     }
-                    val reply = if (fact != null) {
-                        FactNotice.acknowledge(fact, langNow)
+                    val reply = if (facts.isNotEmpty()) {
+                        FactNotice.acknowledgeAll(facts, langNow)
                     } else if (langNow == "en") {
                         "Okay, I'll remember."
                     } else {

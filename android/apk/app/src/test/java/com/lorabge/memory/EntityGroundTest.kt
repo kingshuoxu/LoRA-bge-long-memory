@@ -59,6 +59,25 @@ class EntityGroundTest {
     }
 
     @Test
+    fun whereILiveAnswersFromTheStoredPlace() {
+        val home = StoredFact("expert_self", "我", "我住在上海。", "上海", listOf("我住在哪里？"), "居住地")
+        val reply = EntityGround.reply("我住在哪里？", listOf(home), "zh")
+        assertNotNull(reply)
+        assertTrue(reply!!.answer.contains("上海"))
+        assertFalse(reply.answer.contains("其余不在记忆里"))
+        assertEquals("entity", reply.reason)
+    }
+
+    @Test
+    fun myNameAnswersFromTheStoredFact() {
+        val me = StoredFact("expert_self", "我", "我是徐金朔。", "徐金朔", listOf("我叫什么？"), "名字")
+        val reply = EntityGround.reply("我叫什么名字？", listOf(me), "zh")
+        assertNotNull(reply)
+        assertTrue(reply!!.answer.contains("徐金朔"))
+        assertEquals("我", reply.entity)
+    }
+
+    @Test
     fun catQuestionUsesTheStoredName() {
         val cat = StoredFact("expert_cat", "我", "我的猫猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？"), "猫的名字")
         val reply = EntityGround.reply("我的猫叫什么名字？", listOf(cat), "zh")

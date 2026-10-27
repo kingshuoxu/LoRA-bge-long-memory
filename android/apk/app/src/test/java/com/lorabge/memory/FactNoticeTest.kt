@@ -25,6 +25,74 @@ class FactNoticeTest {
     }
 
     @Test
+    fun foundedFactIsAShortAck() {
+        val draft = FactNotice.draft("塔佐巴洛公司成立于1978年")
+        assertEquals("塔佐巴洛", draft?.entity)
+        assertEquals("成立年份", draft?.attr)
+        assertEquals("1978", draft?.value)
+        assertEquals("塔佐巴洛公司是哪一年成立的?", draft?.question)
+        assertEquals("塔佐巴洛公司成立于1978年。", draft?.statement)
+        assertEquals("好的，记住了。", FactNotice.acknowledge(draft!!, "zh"))
+        assertFalse(FactNotice.acknowledge(draft, "zh").contains("塔佐巴洛"))
+        assertEquals("Okay, I'll remember.", FactNotice.acknowledge(draft, "en"))
+    }
+
+    @Test
+    fun greetingNameIsTheSelfExpert() {
+        val draft = FactNotice.draft("你好，我是徐金朔")
+        assertEquals("我", draft?.entity)
+        assertEquals("名字", draft?.attr)
+        assertEquals("徐金朔", draft?.value)
+        assertEquals("我叫什么？", draft?.question)
+        assertEquals("我是徐金朔。", draft?.statement)
+        assertEquals("好的，记住了。", FactNotice.acknowledge(draft!!, "zh"))
+        assertEquals("徐金朔", FactNotice.draft("你好 我是徐金朔")?.value)
+        assertEquals("我", FactNotice.draft("请记住我是徐金朔")?.entity)
+    }
+
+    @Test
+    fun laterClauseKeepsTheCompany() {
+        val drafts = FactNotice.drafts("塔佐巴洛公司成立于1978年。总部在特希市。")
+        assertEquals(2, drafts.size)
+        assertEquals("塔佐巴洛", drafts[0].entity)
+        assertEquals("1978", drafts[0].value)
+        assertEquals("塔佐巴洛", drafts[1].entity)
+        assertEquals("特希市", drafts[1].value)
+        assertEquals("总部", drafts[1].attr)
+        assertEquals("好的，记住了。", FactNotice.acknowledgeAll(drafts, "zh"))
+        assertFalse(FactNotice.acknowledgeAll(drafts, "zh").contains("特希市"))
+    }
+
+    @Test
+    fun questionsChatAndChoresAreNotStored() {
+        assertNull(FactNotice.draft("塔佐巴洛公司是哪一年成立的?"))
+        assertFalse(FactNotice.noticed("塔佐巴洛公司是哪一年成立的?"))
+        assertNull(FactNotice.draft("hello"))
+        assertFalse(FactNotice.noticed("hello"))
+        assertNull(FactNotice.draft("告诉我佐雷公司相关信息"))
+        assertFalse(FactNotice.noticed("告诉我佐雷公司相关信息"))
+        assertNull(FactNotice.draft("帮我写一首关于星云的诗"))
+        assertFalse(FactNotice.noticed("我觉得这是太亮了"))
+        assertFalse(FactNotice.noticed("今天是晴天"))
+    }
+
+    @Test
+    fun correctionStaysOnTheCard() {
+        assertTrue(FactNotice.noticed("不对,总部是特希市"))
+        assertNull(FactNotice.draft("不对,总部是特希市"))
+        assertTrue(FactNotice.drafts("不对,总部是特希市").isEmpty())
+    }
+
+    @Test
+    fun whereILiveIsASelfFact() {
+        val draft = FactNotice.draft("我住在上海")
+        assertEquals("我", draft?.entity)
+        assertEquals("居住地", draft?.attr)
+        assertEquals("上海", draft?.value)
+        assertEquals("我住在上海。", draft?.statement)
+    }
+
+    @Test
     fun pendingLinesHideFactsAlreadyStored() {
         val pending = pendingFactLines(
             listOf("我的猫猫叫咪咪", "佐雷公司成立于1979年。"),
