@@ -1,13 +1,14 @@
 import * as THREE from "./vendor/three.module.js";
 import { classifyField } from "./nebula-pixels.js";
+import { clampZoomDistance } from "./nebula-zoom.js";
 
 const PALETTES = [
-  { core: [1.15, 0.28, 0.16], mid: [0.72, 0.14, 0.12], edge: [0.38, 0.07, 0.09], wisp: [0.98, 0.62, 0.18] },
-  { core: [0.14, 0.95, 0.82], mid: [0.06, 0.50, 0.52], edge: [0.04, 0.20, 0.30], wisp: [0.45, 0.72, 1.05] },
-  { core: [1.08, 0.74, 0.18], mid: [0.64, 0.34, 0.08], edge: [0.30, 0.12, 0.04], wisp: [0.95, 0.32, 0.16] },
-  { core: [0.58, 0.24, 1.08], mid: [0.30, 0.10, 0.64], edge: [0.12, 0.05, 0.30], wisp: [0.78, 0.38, 0.92] },
-  { core: [1.08, 0.34, 0.44], mid: [0.60, 0.14, 0.24], edge: [0.28, 0.06, 0.12], wisp: [1.00, 0.58, 0.42] },
-  { core: [0.24, 0.46, 1.08], mid: [0.10, 0.20, 0.64], edge: [0.05, 0.08, 0.28], wisp: [0.40, 0.78, 0.98] },
+  { core: [0.62, 0.16, 0.10], mid: [0.36, 0.08, 0.07], edge: [0.18, 0.04, 0.05], wisp: [0.55, 0.32, 0.10] },
+  { core: [0.08, 0.48, 0.42], mid: [0.04, 0.26, 0.28], edge: [0.02, 0.10, 0.16], wisp: [0.22, 0.38, 0.55] },
+  { core: [0.58, 0.38, 0.10], mid: [0.34, 0.18, 0.05], edge: [0.16, 0.06, 0.02], wisp: [0.52, 0.18, 0.08] },
+  { core: [0.32, 0.14, 0.58], mid: [0.16, 0.06, 0.34], edge: [0.06, 0.03, 0.16], wisp: [0.42, 0.20, 0.48] },
+  { core: [0.58, 0.18, 0.24], mid: [0.32, 0.08, 0.14], edge: [0.14, 0.03, 0.06], wisp: [0.55, 0.30, 0.22] },
+  { core: [0.14, 0.24, 0.58], mid: [0.06, 0.12, 0.34], edge: [0.03, 0.04, 0.16], wisp: [0.22, 0.40, 0.52] },
 ];
 
 const GAS_VERT = `
@@ -53,7 +54,7 @@ const CLOUD_FRAG = `
     float mask = pow(smoothstep(1.0, 0.0, r), 1.5);
     float gaussian = exp(-r * r * 3.6) * mask;
     float alpha = gaussian * vAlpha;
-    vec3 col = min(vColor, vec3(1.0)) * alpha * 2.4;
+    vec3 col = min(vColor, vec3(1.0)) * alpha * 1.15;
     gl_FragColor = vec4(min(col, vec3(1.0)), alpha);
   }
 `;
@@ -399,6 +400,9 @@ export function createNebula(canvas, hooks) {
   const look = new THREE.Vector3();
   const lookTarget = new THREE.Vector3();
   const camTarget = new THREE.Vector3(0, 0, 32);
+  const homeLook = new THREE.Vector3();
+  const homeCam = new THREE.Vector3(0, 0, 32);
+  let homeDistance = 32;
   camera.position.copy(camTarget);
 
   const gl = renderer.getContext();
@@ -1126,12 +1130,42 @@ export function createNebula(canvas, hooks) {
     // 竖屏按宽度取景，云团留在画面中部，四周留一圈边，不要为了铺满高度把相机拉远。
     const portrait = aspect < 1;
     const dist = portrait ? distX * 1.28 : Math.max(distY, distX) * 1.08;
-    camTarget.set(center.x, center.y, center.z + dist);
+    homeDistance = dist;
+    homeLook.copy(center);
+    homeCam.set(center.x, center.y, center.z + dist);
+    const far = Math.max(400, dist * 1.8);
+    if (camera.far !== far) {
+      camera.far = far;
+      camera.updateProjectionMatrix();
+    }
+    camTarget.copy(homeCam);
     if (immediate) {
       look.copy(lookTarget);
       camera.position.copy(camTarget);
       camera.lookAt(look);
     }
+  }
+
+  function restoreHome() {
+    userMoved = false;
+    lookTarget.copy(homeLook);
+    look.copy(homeLook);
+    camTarget.copy(homeCam);
+    camera.position.copy(homeCam);
+    camera.lookAt(look);
+  }
+
+  function zoomTo(distance) {
+    userMoved = true;
+    const next = clampZoomDistance(distance, homeDistance);
+    if (homeDistance > 6 && next >= homeDistance - 0.35) {
+      restoreHome();
+      return;
+    }
+    const offset = camTarget.clone().sub(lookTarget);
+    if (offset.length() < 0.1) offset.set(0, 0, 1);
+    offset.setLength(next);
+    camTarget.copy(lookTarget).add(offset);
   }
 
   function resize() {
@@ -1236,11 +1270,12 @@ export function createNebula(canvas, hooks) {
   const activePointers = new Map();
   let pinchDist = 0;
   let touches = 0;
+  let touchPinch = 0;
+  let touchDriving = false;
   function zoomBy(factor) {
-    userMoved = true;
-    const offset = camTarget.clone().sub(look);
-    offset.setLength(Math.min(90, Math.max(6, offset.length() * factor)));
-    camTarget.copy(look).add(offset);
+    const offset = camTarget.clone().sub(lookTarget);
+    const base = offset.length() < 0.1 ? homeDistance : offset.length();
+    zoomTo(base * factor);
   }
   canvas.addEventListener("pointerdown", (event) => {
     touches += 1;
@@ -1264,7 +1299,7 @@ export function createNebula(canvas, hooks) {
     if (activePointers.size >= 2) {
       const pts = [...activePointers.values()];
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
-      if (pinchDist > 0) zoomBy(pinchDist / dist);
+      if (!touchDriving && pinchDist > 0) zoomBy(pinchDist / dist);
       pinchDist = dist;
       dragging = false;
       return;
@@ -1276,20 +1311,46 @@ export function createNebula(canvas, hooks) {
       lastX = event.clientX;
       lastY = event.clientY;
       userMoved = true;
-      const offset = camTarget.clone().sub(look);
+      const offset = camTarget.clone().sub(lookTarget);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       spherical.theta -= dx * 0.005;
       spherical.phi = Math.min(Math.PI - 0.18, Math.max(0.18, spherical.phi + dy * 0.005));
       offset.setFromSpherical(spherical);
-      camTarget.copy(look).add(offset);
+      camTarget.copy(lookTarget).add(offset);
     }
     hover(event);
   });
   canvas.addEventListener("pointercancel", (event) => {
     activePointers.delete(event.pointerId);
-    pinchDist = 0;
+    if (activePointers.size < 2) pinchDist = 0;
     dragging = false;
   });
+  function touchPinchEvent(event) {
+    if (event.touches.length < 2) return;
+    event.preventDefault();
+    touchDriving = true;
+    const a = event.touches[0];
+    const b = event.touches[1];
+    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+    if (event.type === "touchstart") {
+      touchPinch = dist;
+      return;
+    }
+    if (touchPinch > 0) zoomBy(touchPinch / dist);
+    touchPinch = dist;
+  }
+  canvas.addEventListener("touchstart", touchPinchEvent, { passive: false });
+  canvas.addEventListener("touchmove", touchPinchEvent, { passive: false });
+  canvas.addEventListener("touchend", (event) => {
+    if (event.touches.length < 2) {
+      touchPinch = 0;
+      touchDriving = false;
+    }
+  }, { passive: false });
+  canvas.addEventListener("touchcancel", () => {
+    touchPinch = 0;
+    touchDriving = false;
+  }, { passive: false });
   canvas.addEventListener("pointerup", (event) => {
     const wasPinch = activePointers.size >= 2 || pinchDist > 0;
     activePointers.delete(event.pointerId);
@@ -1329,11 +1390,9 @@ export function createNebula(canvas, hooks) {
   });
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
-    userMoved = true;
-    const offset = camTarget.clone().sub(look);
-    const next = offset.length() * (event.deltaY > 0 ? 1.08 : 0.92);
-    offset.setLength(Math.min(90, Math.max(6, next)));
-    camTarget.copy(look).add(offset);
+    const offset = camTarget.clone().sub(lookTarget);
+    const base = offset.length() < 0.1 ? homeDistance : offset.length();
+    zoomTo(base * (event.deltaY > 0 ? 1.08 : 0.92));
   }, { passive: false });
 
   const clock = new THREE.Clock();
@@ -1612,6 +1671,7 @@ export function createNebula(canvas, hooks) {
       renderer: rendererName || String(gl.getParameter(gl.RENDERER) || ""),
       version: webgl2 ? "webgl2" : "webgl",
       zoom: offset.length(),
+      homeZoom: homeDistance,
       cameraZ: camTarget.z,
       cameraX: camTarget.x,
       dpr: window.devicePixelRatio || 1,

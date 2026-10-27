@@ -444,7 +444,7 @@ private fun PhoneApp(
                     sources = listOfNotNull(currentId),
                     selected = true,
                 )
-                TrainService.writeJob(store, "expert_" + System.currentTimeMillis().toString().takeLast(6), listOf(fact), force = true)
+                TrainService.writeReviewed(store, fact, force = true)
                 onTrain()
                 pending = null
                 tab = SkyTab.Consolidate
@@ -470,7 +470,7 @@ private fun PhoneApp(
                     attr = attr.trim(),
                     selected = true,
                 )
-                TrainService.writeJob(store, "expert_" + System.currentTimeMillis().toString().takeLast(6), listOf(fact), force)
+                TrainService.writeReviewed(store, fact, force)
                 onTrain()
                 tick++
             }

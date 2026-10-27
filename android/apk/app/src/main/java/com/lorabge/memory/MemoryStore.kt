@@ -102,6 +102,76 @@ class MemoryStore(val root: File) {
         )
         val all = listExperts().filter { it.expert != record.expert } + record
         writeRouter(all.sortedBy { it.batch })
+        if (record.expert == SELF_EXPERT) retireOtherSelfExperts()
+    }
+
+    fun readReviewedFacts(expert: String): List<ReviewedFact> {
+        val file = File(expertsDir, "$expert/fact_memory.json")
+        if (!file.exists()) return emptyList()
+        val text = file.readText().trim()
+        if (!text.startsWith("[")) return emptyList()
+        val arr = JSONArray(text)
+        val out = ArrayList<ReviewedFact>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            val questions = row.optJSONArray("questions")
+            val qa = ArrayList<Pair<String, String>>()
+            if (questions != null) {
+                for (j in 0 until questions.length()) {
+                    val question = questions.optString(j)
+                    if (question.isNotBlank()) qa.add(question to row.optString("value"))
+                }
+            }
+            val gatesArr = row.optJSONArray("gate_questions")
+            val gates = ArrayList<String>()
+            if (gatesArr != null) {
+                for (j in 0 until gatesArr.length()) gates.add(gatesArr.optString(j))
+            }
+            out.add(
+                ReviewedFact(
+                    entity = row.optString("entity"),
+                    statement = row.optString("statement"),
+                    value = row.optString("value"),
+                    qa = qa,
+                    sources = emptyList(),
+                    attr = row.optString("attr"),
+                    gateQuestions = gates,
+                ),
+            )
+        }
+        return out
+    }
+
+    fun expertNameFor(facts: List<ReviewedFact>, generated: String): String {
+        if (facts.isNotEmpty() && facts.all { isSelfEntity(it.entity) }) return SELF_EXPERT
+        return generated
+    }
+
+    fun factsForTrain(incoming: List<ReviewedFact>): List<ReviewedFact> {
+        if (incoming.isEmpty() || incoming.any { !isSelfEntity(it.entity) }) return incoming
+        val merged = LinkedHashMap<String, ReviewedFact>()
+        listExperts().forEach { record ->
+            val stored = readReviewedFacts(record.expert)
+            if (stored.isEmpty() || stored.any { !isSelfEntity(it.entity) }) return@forEach
+            stored.forEach { fact ->
+                val key = fact.statement.trim()
+                if (key.isNotEmpty()) merged.putIfAbsent(key, fact)
+            }
+        }
+        incoming.forEach { fact ->
+            val key = fact.statement.trim()
+            if (key.isNotEmpty()) merged[key] = fact
+        }
+        return merged.values.toList()
+    }
+
+    fun retireOtherSelfExperts() {
+        val names = listExperts().map { it.expert }
+        names.forEach { name ->
+            if (name == SELF_EXPERT) return@forEach
+            val stored = readReviewedFacts(name)
+            if (stored.isNotEmpty() && stored.all { isSelfEntity(it.entity) }) deleteExpert(name)
+        }
     }
 
     companion object {
@@ -278,3 +348,7 @@ data class ReviewedFact(
     val selected: Boolean = true,
     val gate: String = "",
 )
+
+internal const val SELF_EXPERT = "expert_self"
+
+internal fun isSelfEntity(entity: String) = entity.trim() == "我"

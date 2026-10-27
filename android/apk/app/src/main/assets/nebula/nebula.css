@@ -55,12 +55,13 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; margin: 0; background: #070910; color: var(--ink); font-family: var(--serif); overflow: hidden; }
-#sky { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; }
+html, body { height: 100%; margin: 0; background: #070910; color: var(--ink); font-family: var(--serif); overflow: hidden; touch-action: none; }
+#sky { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; touch-action: none; }
 #nebula-host {
   position: fixed;
   inset: 0;
   z-index: 1;
+  touch-action: none;
 }
 #nebula-canvas { width: 100%; height: 100%; display: block; background: transparent; touch-action: none; }
 .nebula-labels { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }

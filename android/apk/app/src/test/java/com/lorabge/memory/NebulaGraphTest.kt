@@ -109,6 +109,9 @@ class NebulaGraphTest {
     fun emptyExpertUsesMemoryNotRawId() {
         assertEquals("记忆", NebulaGraph.displayName(listOf("expert_0"), "zh"))
         assertEquals("Memory", NebulaGraph.displayName(emptyList(), "en"))
+        assertEquals("关于你", NebulaGraph.displayName(listOf("我"), "zh"))
+        assertEquals("About you", NebulaGraph.displayName(listOf("我", "我"), "en"))
+        assertEquals("我、佐雷", NebulaGraph.displayName(listOf("我", "佐雷"), "zh"))
     }
 
     @Test

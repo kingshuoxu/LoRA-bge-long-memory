@@ -9,6 +9,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.json.JSONObject
 import org.junit.Assert.assertFalse
@@ -116,9 +117,9 @@ class NebulaGestureTest {
         Thread.sleep(400)
         val before = waitStatus(4_000) { it.optInt("frames") >= 1 }
         val beforeZoom = before.optDouble("zoom")
-        nebula.pinchOpen(0.6f, 18)
-        device.waitForIdle()
-        val zoomed = waitStatus(12_000) { abs(it.optDouble("zoom") - beforeZoom) > 0.15 }
+        val zoomed = pinchUntil(nebula, open = true) { abs(it.optDouble("zoom") - beforeZoom) > 0.15 }
+        val zoomedValue = zoomed.optDouble("zoom")
+        val inward = zoomedValue < beforeZoom
         Thread.sleep(900)
         val beforeZ = zoomed.optDouble("cameraZ")
         val beforeX = zoomed.optDouble("cameraX")
@@ -136,6 +137,10 @@ class NebulaGestureTest {
         val pixelDiff = meanAbsDiff(idleAgain, afterStill, afterArea)
         idleAgain.recycle()
         afterStill.recycle()
+        val restored = pinchUntil(nebula, open = false) { status ->
+            val zoom = status.optDouble("zoom")
+            if (inward) zoom > zoomedValue + 0.15 else zoom < zoomedValue - 0.15
+        }
         val view = device.findObject(By.desc("nebula")) ?: nebula
         val hit = waitStatus(4_000) { it.optDouble("hitX") > 1.0 }
         val dpr = hit.optDouble("dpr", 1.0).coerceAtLeast(1.0)
@@ -179,6 +184,10 @@ class NebulaGestureTest {
             abs(zoomed.optDouble("zoom") - beforeZoom) > 0.15,
         )
         assertTrue(
+            "pinch did not zoom back out from $zoomedValue toward $beforeZoom\n$restored",
+            if (inward) restored.optDouble("zoom") > zoomedValue + 0.15 else restored.optDouble("zoom") < zoomedValue - 0.15,
+        )
+        assertTrue(
             "pan did not move the camera from z=$beforeZ x=$beforeX\n$moved",
             abs(moved.optDouble("cameraZ") - beforeZ) > 0.15 || abs(moved.optDouble("cameraX") - beforeX) > 0.05,
         )
@@ -220,6 +229,18 @@ class NebulaGestureTest {
             stop.set(true)
             grabber.join(4_000)
         }
+    }
+
+    private fun pinchUntil(view: UiObject2, open: Boolean, accept: (JSONObject) -> Boolean): JSONObject {
+        var last = waitStatus(2_000) { it.optInt("frames") >= 1 }
+        repeat(3) {
+            if (open) view.pinchOpen(0.55f, 22) else view.pinchClose(0.55f, 22)
+            device.waitForIdle()
+            val hit = waitStatusOrNull(8_000, accept)
+            if (hit != null) return hit
+            last = readStatus() ?: last
+        }
+        return waitStatus(4_000, accept)
     }
 
     private fun renderPath(status: JSONObject): String {

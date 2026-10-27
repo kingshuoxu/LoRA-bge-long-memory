@@ -15,6 +15,7 @@ internal object NebulaGraph {
     fun displayName(entities: List<String>, lang: String): String {
         val names = entities.map { it.trim() }.filter { it.isNotEmpty() && !expertId.matches(it) }.distinct()
         if (names.isEmpty()) return if (lang == "en") "Memory" else "记忆"
+        if (names.all { isSelfEntity(it) }) return if (lang == "en") "About you" else "关于你"
         val head = names.take(2).joinToString(if (lang == "en") ", " else "、")
         if (names.size <= 2) return head
         return if (lang == "en") "$head…" else "${head}等"

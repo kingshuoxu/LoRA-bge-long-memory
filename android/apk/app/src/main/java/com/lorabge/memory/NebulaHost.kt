@@ -53,9 +53,10 @@ internal fun NebulaHost(
             web.contentDescription = "nebula"
             web.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             web.setOnTouchListener { view, event ->
-                if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
-                    view.parent?.requestDisallowInterceptTouchEvent(true)
-                }
+                val pinch = event.pointerCount >= 2 ||
+                    event.actionMasked == MotionEvent.ACTION_POINTER_DOWN ||
+                    event.actionMasked == MotionEvent.ACTION_DOWN
+                if (pinch) view.parent?.requestDisallowInterceptTouchEvent(true)
                 false
             }
             val bridge = NebulaBridge(context.applicationContext, onOpenConversation, onGl)

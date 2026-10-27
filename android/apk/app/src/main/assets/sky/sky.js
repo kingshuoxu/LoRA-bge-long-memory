@@ -131,11 +131,11 @@ export function startSky() {
       vec3 teal = vec3(0.04, 0.22, 0.24);
       vec3 gold = vec3(0.55, 0.38, 0.14);
       vec3 col = indigo;
-      col += violet * gasA * 0.42;
-      col += teal * gasB * 0.28;
-      col += gold * band * (0.55 + lanes * 0.35);
-      col += vec3(0.92, 0.9, 0.82) * core * (0.28 + lanes * 0.16);
-      col += violet * band * 0.12;
+      col += violet * gasA * 0.18;
+      col += teal * gasB * 0.12;
+      col += gold * band * (0.24 + lanes * 0.14);
+      col += vec3(0.78, 0.74, 0.64) * core * (0.10 + lanes * 0.05);
+      col += violet * band * 0.04;
       float dust = smoothstep(0.46, 0.72, fbm(bandUv * 3.4 + vec2(1.7, 0.2)));
       float dust2 = smoothstep(0.55, 0.82, fbm(bandUv * 6.2 - vec2(0.4, 1.4)));
       float lane = smoothstep(0.08, 0.0, abs(bandUv.y + 0.045 * sin(bandUv.x * 3.0)));
@@ -146,8 +146,8 @@ export function startSky() {
       float s2 = stars(uv + vec2(-t * 0.004, t * 0.001), 90.0, 0.12, 2.0);
       float s3 = stars(uv, 160.0, 0.08, 5.0);
       vec3 starCol = mix(vec3(0.75, 0.84, 1.0), vec3(1.0, 0.86, 0.62), step(0.72, hash(floor(uv * 40.0))));
-      col += starCol * (s1 * 0.9 + s2 * 0.7 + s3 * 0.45);
-      float vig = smoothstep(1.55, 0.2, length(uv));
+      col += starCol * (s1 * 0.48 + s2 * 0.32 + s3 * 0.18);
+      float vig = smoothstep(1.02, 0.08, length(uv));
       col *= vig;
       float grain = (hash(gl_FragCoord.xy * 0.35) - 0.5) * 0.012;
       col += grain;
@@ -345,9 +345,9 @@ function mountSoftwareSky(target, reason) {
     });
   }
   const clouds = [
-    { x: 0.32, y: 0.42, rx: 0.55, ry: 0.18, color: "120, 86, 42", alpha: 0.42 },
-    { x: 0.58, y: 0.48, rx: 0.42, ry: 0.16, color: "92, 48, 130", alpha: 0.34 },
-    { x: 0.46, y: 0.4, rx: 0.28, ry: 0.1, color: "40, 90, 110", alpha: 0.28 },
+    { x: 0.32, y: 0.42, rx: 0.55, ry: 0.18, color: "120, 86, 42", alpha: 0.20 },
+    { x: 0.58, y: 0.48, rx: 0.42, ry: 0.16, color: "92, 48, 130", alpha: 0.16 },
+    { x: 0.46, y: 0.4, rx: 0.28, ry: 0.1, color: "40, 90, 110", alpha: 0.12 },
   ];
   let live = true;
   let posted = false;

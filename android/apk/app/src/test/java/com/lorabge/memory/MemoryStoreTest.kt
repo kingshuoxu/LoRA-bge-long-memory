@@ -47,6 +47,34 @@ class MemoryStoreTest {
     }
 
     @Test
+    fun selfFactsAccumulateUnderOneExpert() {
+        val root = Files.createTempDirectory("memory-self").toFile()
+        val store = MemoryStore(root)
+        val cat = ReviewedFact("我", "我的猫猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？" to "咪咪"), emptyList(), attr = "猫的名字")
+        val city = ReviewedFact("我", "我住在上海", "上海", emptyList(), emptyList(), attr = "城市")
+        store.registerExpert(
+            ExpertRecord("expert_968112", 3, 1, 32, "experts/expert_968112/router_key.f32", "experts/expert_968112/adapter.gguf"),
+            listOf(cat),
+        )
+        store.registerExpert(
+            ExpertRecord("expert_company", 4, 1, 32, "experts/expert_company/router_key.f32", "experts/expert_company/adapter.gguf"),
+            listOf(ReviewedFact("佐雷", "佐雷公司成立于1979年。", "1979", emptyList(), emptyList())),
+        )
+        assertEquals(SELF_EXPERT, store.expertNameFor(listOf(city), "expert_111111"))
+        assertEquals("expert_111111", store.expertNameFor(listOf(ReviewedFact("佐雷", "佐雷公司成立于1979年。", "1979", emptyList(), emptyList())), "expert_111111"))
+        val merged = store.factsForTrain(listOf(city))
+        assertEquals(listOf("我的猫猫叫咪咪", "我住在上海"), merged.map { it.statement })
+        assertTrue(merged.all { it.entity == "我" })
+        store.registerExpert(
+            ExpertRecord(SELF_EXPERT, 5, merged.size, 32, "experts/$SELF_EXPERT/router_key.f32", "experts/$SELF_EXPERT/adapter.gguf"),
+            merged,
+        )
+        val names = store.listExperts().map { it.expert }.sorted()
+        assertEquals(listOf("expert_company", SELF_EXPERT), names)
+        assertEquals("关于你", NebulaGraph.displayName(listOf("我"), "zh"))
+    }
+
+    @Test
     fun trainingJsonlIsAssistantTurns() {
         val fact = ReviewedFact("甲", "甲公司成立于2000年。", "2000", listOf("甲哪年成立?" to "2000"), emptyList())
         val text = MemoryStore.trainingJsonl(listOf(fact))

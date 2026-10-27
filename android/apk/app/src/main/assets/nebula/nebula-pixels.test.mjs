@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { classifyField } from "./nebula-pixels.js";
+import { clampZoomDistance, farZoom } from "./nebula-zoom.js";
 
 function field(width, height, paint) {
   const lumas = new Float32Array(width * height);
@@ -120,3 +121,12 @@ const softReport = classifyField(soft, w, h);
 assert.equal(softReport.lattice, false);
 assert.ok(softReport.rough < 11, `soft nebula rough ${softReport.rough} is too close to the lattice cut`);
 console.log("nebula pixel classifier ok");
+
+assert.equal(farZoom(244), 244);
+assert.equal(clampZoomDistance(400, 244), 244);
+assert.equal(clampZoomDistance(90, 244), 90);
+assert.equal(clampZoomDistance(22, 244), 22);
+assert.equal(clampZoomDistance(2, 244), 6);
+assert.equal(clampZoomDistance(100, 70), 90);
+assert.equal(clampZoomDistance(400, 180), 180);
+console.log("nebula zoom clamp ok");
