@@ -1,6 +1,6 @@
 import * as THREE from "./vendor/three.module.js";
 import { classifyField } from "./nebula-pixels.js";
-import { clampZoomDistance } from "./nebula-zoom.js";
+import { clampZoomDistance, particleKeep, spriteFit, starFit } from "./nebula-zoom.js";
 
 const PALETTES = [
   { core: [0.62, 0.16, 0.10], mid: [0.36, 0.08, 0.07], edge: [0.18, 0.04, 0.05], wisp: [0.55, 0.32, 0.10] },
@@ -31,12 +31,14 @@ const CLOUD_VERT = `
   uniform vec2 uResolution;
   uniform float uDim;
   uniform float uBoost;
+  uniform float uFit;
+  uniform float uExposure;
   void main() {
     vUv = uv;
     vColor = aColor;
-    vAlpha = aAlpha * uDim * uBoost;
+    vAlpha = aAlpha * uDim * uBoost * uExposure;
     vec4 clip = projectionMatrix * modelViewMatrix * vec4(iOffset, 1.0);
-    float pixel = clamp(aSize * uPixelRatio, 3.0, 112.0);
+    float pixel = clamp(aSize * uPixelRatio * uFit, 1.5, 112.0);
     vec2 span = max(uResolution, vec2(1.0));
     clip.xy += position.xy * (pixel / span) * 2.0 * clip.w;
     gl_Position = clip;
@@ -47,14 +49,17 @@ const CLOUD_FRAG = `
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
+  uniform float uExposure;
   void main() {
     vec2 p = vUv * 2.0 - 1.0;
     float r = length(p);
     if (r > 1.0) discard;
     float mask = pow(smoothstep(1.0, 0.0, r), 1.5);
-    float gaussian = exp(-r * r * 3.6) * mask;
+    float tight = mix(6.2, 3.6, clamp(uExposure, 0.0, 1.0));
+    float gaussian = exp(-r * r * tight) * mask;
     float alpha = gaussian * vAlpha;
-    vec3 col = min(vColor, vec3(1.0)) * alpha * 1.15;
+    float gain = mix(0.7, 1.15, clamp(uExposure, 0.0, 1.0));
+    vec3 col = min(vColor, vec3(1.0)) * alpha * gain;
     gl_FragColor = vec4(min(col, vec3(1.0)), alpha);
   }
 `;
@@ -70,12 +75,14 @@ const STAR_VERT = `
   varying vec3 vTint;
   uniform float uPixelRatio;
   uniform vec2 uResolution;
+  uniform float uFit;
+  uniform float uExposure;
   void main() {
     vUv = uv;
-    vBright = aBright;
+    vBright = aBright * uExposure;
     vTint = aTint;
     vec4 clip = projectionMatrix * modelViewMatrix * vec4(iOffset, 1.0);
-    float pixel = clamp(aSize * aFlare * uPixelRatio, 8.0, 96.0);
+    float pixel = clamp(aSize * aFlare * uPixelRatio * uFit, 1.6, 96.0);
     vec2 span = max(uResolution, vec2(1.0));
     clip.xy += position.xy * (pixel / span) * 2.0 * clip.w;
     gl_Position = clip;
@@ -86,18 +93,22 @@ const STAR_FRAG = `
   varying vec2 vUv;
   varying float vBright;
   varying vec3 vTint;
+  uniform float uExposure;
   void main() {
     vec2 p = vUv * 2.0 - 1.0;
     float r = length(p);
     if (r > 1.0) discard;
+    float open = clamp(uExposure, 0.0, 1.0);
+    float spikeGain = mix(0.12, 1.0, open);
+    float coreGain = mix(0.05, 1.0, open);
     float core = pow(smoothstep(0.16, 0.0, r), 1.35);
     float axis = exp(-pow(abs(p.y) * 22.0, 2.0)) * smoothstep(1.0, 0.12, abs(p.x));
     axis += exp(-pow(abs(p.x) * 22.0, 2.0)) * smoothstep(1.0, 0.12, abs(p.y));
     float diag = min(abs(p.x - p.y), abs(p.x + p.y));
     float shortSpike = exp(-pow(diag * 18.0, 2.0)) * smoothstep(0.48, 0.05, r) * 0.42;
     float halo = exp(-r * r * 4.4) * 0.2;
-    float spikes = (axis * 0.82 + shortSpike) * vBright;
-    float alpha = clamp(core + spikes + halo * vBright, 0.0, 1.0);
+    float spikes = (axis * 0.82 + shortSpike) * vBright * spikeGain;
+    float alpha = clamp(core * coreGain + spikes + halo * vBright, 0.0, 1.0);
     vec3 col = mix(vTint, vec3(1.0, 0.98, 0.94), clamp(core * 1.4 + axis * 0.35, 0.0, 1.0));
     gl_FragColor = vec4(col * alpha, alpha);
   }
@@ -495,6 +506,7 @@ export function createNebula(canvas, hooks) {
       geometry.setAttribute(name, new THREE.InstancedBufferAttribute(extras[name].array, extras[name].size));
     });
     geometry.instanceCount = offsets.length / 3;
+    geometry.userData.fullCount = geometry.instanceCount;
     return geometry;
   }
 
@@ -515,6 +527,8 @@ export function createNebula(canvas, hooks) {
         uResolution: { value: resolution },
         uDim: { value: 1 },
         uBoost: { value: 1 },
+        uFit: { value: 1 },
+        uExposure: { value: 1 },
       },
       vertexShader: CLOUD_VERT,
       fragmentShader: CLOUD_FRAG,
@@ -881,6 +895,8 @@ export function createNebula(canvas, hooks) {
       uniforms: {
         uPixelRatio: { value: renderer.getPixelRatio() },
         uResolution: { value: resolution },
+        uFit: { value: 1 },
+        uExposure: { value: 1 },
       },
       vertexShader: STAR_VERT,
       fragmentShader: STAR_FRAG,
@@ -1558,10 +1574,16 @@ export function createNebula(canvas, hooks) {
     const t = reduce ? 0 : clock.getElapsedTime();
     const dim = 1;
     const ratio = renderer.getPixelRatio();
+    const viewDistance = Math.max(1, camera.position.distanceTo(look));
+    const fit = spriteFit(viewDistance, homeDistance);
+    const stars = starFit(viewDistance, homeDistance);
+    const keep = particleKeep(viewDistance, homeDistance);
     const pulse = 0.86 + 0.14 * Math.sin((recall ? performance.now() - recall.started : 0) / 240);
     gasMats.forEach((material) => {
       material.uniforms.uDim.value = dim;
       material.uniforms.uPixelRatio.value = ratio;
+      material.uniforms.uFit.value = fit.scale;
+      material.uniforms.uExposure.value = fit.exposure;
     });
     expertClouds.forEach((group) => {
       if (!reduce) group.rotation.y = (group.userData.spin || 0) + t * 0.045;
@@ -1569,6 +1591,12 @@ export function createNebula(canvas, hooks) {
       if (recall) boost = group.userData.expertName === recall.expertName ? 1.78 : 0.52;
       else if (group.userData.fresh) boost = reduce ? 1.1 : 0.9 + 0.22 * (0.5 + 0.5 * Math.sin(t * 1.15 + (group.userData.spin || 0)));
       if (group.userData.material) group.userData.material.uniforms.uBoost.value = boost;
+      const cloudMesh = group.children[0];
+      const fullCount = cloudMesh && cloudMesh.geometry && cloudMesh.geometry.userData.fullCount;
+      if (fullCount) {
+        const nextCount = Math.max(32, Math.round(fullCount * keep));
+        if (cloudMesh.geometry.instanceCount !== nextCount) cloudMesh.geometry.instanceCount = nextCount;
+      }
     });
     if (starPoints) {
       const flareAttr = starPoints.geometry.getAttribute("aFlare");
@@ -1590,6 +1618,8 @@ export function createNebula(canvas, hooks) {
       flareAttr.needsUpdate = true;
       brightAttr.needsUpdate = true;
       starPoints.material.uniforms.uPixelRatio.value = ratio;
+      starPoints.material.uniforms.uFit.value = stars.scale;
+      starPoints.material.uniforms.uExposure.value = stars.exposure;
     }
     if (sparkPoints) {
       const attr = sparkPoints.geometry.getAttribute("iOffset");
@@ -1610,11 +1640,15 @@ export function createNebula(canvas, hooks) {
       });
       attr.needsUpdate = true;
       sparkPoints.material.uniforms.uPixelRatio.value = ratio;
+      sparkPoints.material.uniforms.uFit.value = fit.scale;
+      sparkPoints.material.uniforms.uExposure.value = fit.exposure;
     }
     overlay.children.forEach((child) => {
-      if (child.material && child.material.uniforms && child.material.uniforms.uPixelRatio) {
-        child.material.uniforms.uPixelRatio.value = ratio;
-      }
+      const uniforms = child.material && child.material.uniforms;
+      if (!uniforms || !uniforms.uPixelRatio) return;
+      uniforms.uPixelRatio.value = ratio;
+      if (uniforms.uFit) uniforms.uFit.value = fit.scale;
+      if (uniforms.uExposure) uniforms.uExposure.value = fit.exposure;
     });
     filaments.forEach((filament) => {
       const hot = Boolean(filament.hot);
@@ -1672,6 +1706,10 @@ export function createNebula(canvas, hooks) {
       version: webgl2 ? "webgl2" : "webgl",
       zoom: offset.length(),
       homeZoom: homeDistance,
+      cameraDistance: Math.max(1, camera.position.distanceTo(look)),
+      fitScale: spriteFit(Math.max(1, camera.position.distanceTo(look)), homeDistance).scale,
+      fitExposure: spriteFit(Math.max(1, camera.position.distanceTo(look)), homeDistance).exposure,
+      starExposure: starFit(Math.max(1, camera.position.distanceTo(look)), homeDistance).exposure,
       cameraZ: camTarget.z,
       cameraX: camTarget.x,
       dpr: window.devicePixelRatio || 1,

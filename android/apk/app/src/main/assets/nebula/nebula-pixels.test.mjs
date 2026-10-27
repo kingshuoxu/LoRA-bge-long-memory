@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { classifyField } from "./nebula-pixels.js";
-import { clampZoomDistance, farZoom } from "./nebula-zoom.js";
+import { clampZoomDistance, farZoom, particleKeep, spriteFit, starFit } from "./nebula-zoom.js";
 
 function field(width, height, paint) {
   const lumas = new Float32Array(width * height);
@@ -130,3 +130,23 @@ assert.equal(clampZoomDistance(2, 244), 6);
 assert.equal(clampZoomDistance(100, 70), 90);
 assert.equal(clampZoomDistance(400, 180), 180);
 console.log("nebula zoom clamp ok");
+
+const homeFit = spriteFit(244, 244);
+const midFit = spriteFit(76, 244);
+const closeFit = spriteFit(28, 244);
+const homeStars = starFit(244, 244);
+assert.ok(homeFit.scale > 0.58 && homeFit.scale < 0.66, `home scale ${homeFit.scale}`);
+assert.ok(homeFit.exposure > 0.54 && homeFit.exposure < 0.62, `home exposure ${homeFit.exposure}`);
+assert.ok(particleKeep(244, 244) > 0.74 && particleKeep(244, 244) < 0.82, `keep ${particleKeep(244, 244)}`);
+assert.ok(homeStars.exposure > 0.08 && homeStars.exposure < 0.16, `star exposure ${homeStars.exposure}`);
+assert.ok(homeStars.scale > 0.45 && homeStars.scale < 0.55, `star scale ${homeStars.scale}`);
+assert.ok(midFit.scale > 0.96, `mid scale ${midFit.scale}`);
+assert.ok(midFit.exposure > 0.96, `mid exposure ${midFit.exposure}`);
+assert.ok(particleKeep(76, 244) > 0.96);
+assert.ok(starFit(76, 244).exposure > 0.96);
+assert.equal(closeFit.scale, 1);
+assert.equal(closeFit.exposure, 1);
+assert.equal(particleKeep(28, 244), 1);
+assert.equal(starFit(28, 244).exposure, 1);
+assert.equal(starFit(28, 244).scale, 1);
+console.log("nebula sprite fit ok");
