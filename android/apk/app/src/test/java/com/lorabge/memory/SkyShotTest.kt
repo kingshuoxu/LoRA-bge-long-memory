@@ -79,6 +79,20 @@ class SkyShotTest {
     }
 
     @Test
+    fun libraryZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    tab = SkyTab.Library,
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    pendingFacts = listOf("我的猫猫叫咪咪"),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun nebula() {
         paparazzi.snapshot { SkyFrame(nebulaSample("zh", recall = false)) {} }
     }
@@ -174,7 +188,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.3",
+        versionName = "0.1.16",
     )
 
     private fun consolidateSample(lang: String) = sample().copy(

@@ -238,7 +238,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.15"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.16"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
