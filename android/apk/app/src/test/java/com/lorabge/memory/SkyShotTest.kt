@@ -39,6 +39,11 @@ class SkyShotTest {
     }
 
     @Test
+    fun selfIntroZh() {
+        paparazzi.snapshot { SkyFrame(selfIntroSample()) {} }
+    }
+
+    @Test
     fun settingsZh() {
         paparazzi.snapshot { SkyFrame(settingsSample("zh")) {} }
     }
@@ -141,6 +146,19 @@ class SkyShotTest {
             ),
         )
     }
+
+    private fun selfIntroSample() = SkyState(
+        lang = "zh",
+        tab = SkyTab.Chat,
+        statusTop = 36.dp,
+        navBottom = 24.dp,
+        currentTitle = "你好 我是徐金朔",
+        messages = listOf(
+            SkyMessage("user", "你好 我是徐金朔"),
+            SkyMessage("assistant", "好的，记住了，你是徐金朔。", noticed = true),
+        ),
+        toast = "图形后端异常，已改用 CPU",
+    )
 
     private fun settingsSample(lang: String) = SkyState(
         lang = lang,

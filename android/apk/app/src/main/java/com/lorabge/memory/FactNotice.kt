@@ -33,6 +33,10 @@ object FactNotice {
             return if (lang == "en") "Okay, I'll remember. Your cat is named ${draft.value}."
             else "好的，记住了，你的猫叫${draft.value}。"
         }
+        if (draft.entity == "我" && draft.attr == "名字") {
+            return if (lang == "en") "Okay, I'll remember. You're ${draft.value}."
+            else "好的，记住了，你是${draft.value}。"
+        }
         return if (lang == "en") "Okay, I'll remember." else "好的，记住了。"
     }
 

@@ -45,8 +45,15 @@ class FactNoticeTest {
         assertEquals("徐金朔", draft?.value)
         assertEquals("我叫什么？", draft?.question)
         assertEquals("我是徐金朔。", draft?.statement)
-        assertEquals("好的，记住了。", FactNotice.acknowledge(draft!!, "zh"))
-        assertEquals("徐金朔", FactNotice.draft("你好 我是徐金朔")?.value)
+        assertEquals("好的，记住了，你是徐金朔。", FactNotice.acknowledge(draft!!, "zh"))
+        assertFalse(FactNotice.acknowledge(draft, "zh").contains("我是"))
+        val spaced = FactNotice.draft("你好 我是徐金朔")
+        assertEquals("我", spaced?.entity)
+        assertEquals("徐金朔", spaced?.value)
+        assertTrue(FactNotice.noticed("你好 我是徐金朔"))
+        val ack = FactNotice.acknowledge(spaced!!, "zh")
+        assertEquals("好的，记住了，你是徐金朔。", ack)
+        assertFalse(ack.contains("我是徐金朔"))
         assertEquals("我", FactNotice.draft("请记住我是徐金朔")?.entity)
     }
 

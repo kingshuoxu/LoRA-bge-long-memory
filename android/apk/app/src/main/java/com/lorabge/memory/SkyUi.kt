@@ -906,10 +906,11 @@ private fun Bubble(lang: String, message: SkyMessage, streaming: Boolean, waitSe
                 )
             }
             if (!user && !streaming) {
-                val tag = if (!message.expert.isNullOrBlank()) skyText(lang, "memoryUsed") else skyText(lang, "memoryNone")
-                Text(tag, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
                 if (message.noticed) {
-                    Text(skyText(lang, "noticed"), color = Gold, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 4.dp))
+                    Text(skyText(lang, "noticed"), color = Gold, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
+                } else {
+                    val tag = if (!message.expert.isNullOrBlank()) skyText(lang, "memoryUsed") else skyText(lang, "memoryNone")
+                    Text(tag, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(start = 12.dp, top = 8.dp))
                 }
             }
         }
