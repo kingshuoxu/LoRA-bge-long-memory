@@ -323,9 +323,22 @@ class Engine(private val context: Context, private val store: MemoryStore) {
         )
     }
 
+    fun needsGpuProbe(): Boolean {
+        val stamp = DeviceTune.probeStamp(appVersion())
+        val strikes = LlmGuard(crashFile()).vulkanStrikes()
+        return DeviceTune.shouldReprobe(backendRecord(), stamp, strikes)
+    }
+
     fun disarmUnprovenMali() {
         val stamp = DeviceTune.probeStamp(appVersion())
-        val record = backendRecord()
+        var record = backendRecord()
+        if (record.mode == "auto" && LlmGuard(crashFile()).vulkanStrikes() < 2) {
+            val restored = DeviceTune.restoreFasterGpu(record)
+            if (restored != null) {
+                writeBackend(restored.copy(version = stamp))
+                record = backendRecord()
+            }
+        }
         if (record.mode != "auto") return
         val suspect = DeviceTune.suspectMali(
             PhoneFacts.socName(),

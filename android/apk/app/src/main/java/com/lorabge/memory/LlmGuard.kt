@@ -34,11 +34,17 @@ class LlmGuard(private val file: File?) {
             )
             while (crashes.size > 8) crashes.removeAt(0)
             val retry = backend != "cpu" && backend != "unknown"
-            if (retry) sessionBad.add(key(backend, driverKey))
-            // One crash retries on CPU for this process only. A second crash on the same
-            // driver stays on CPU across launches, until Settings picks Auto or GPU.
+            val counts = countsTowardBan(crashes.last().stage, crashes.last().signal)
+            // A real crash pins this process to CPU. Two of those stay on CPU until
+            // Settings picks Auto or GPU. ensure/bind dying with no native signal
+            // (the :llm process vanished) does not retire a GPU that already won the benchmark.
+            if (retry && counts) sessionBad.add(key(backend, driverKey))
             recomputeBan()
-            notice = if (retry) "cpu_fallback" else "cpu_failed"
+            notice = when {
+                !retry -> "cpu_failed"
+                !counts -> "ensure_lost"
+                else -> "cpu_fallback"
+            }
             save()
             GuardDecision(retryOnCpu = retry, notice = notice)
         }
@@ -78,11 +84,18 @@ class LlmGuard(private val file: File?) {
             Triple(notice, last?.stage.orEmpty(), last?.signal.orEmpty())
         }
         if (code.isBlank()) return ""
-        val fallback = code == "cpu_fallback"
         val zh = lang != "en"
-        if (!fallback) return if (zh) "生成失败" else "Generation failed"
         val where = stageName(stage, zh)
         val how = signal.ifBlank { if (zh) "退出" else "exit" }
+        if (code == "ensure_lost") {
+            val raw = stage.ifBlank { "ensure" }
+            return if (zh) {
+                "图形后端在启动时退出（stage=$raw，$how）。这一次改用 CPU，没有停用 GPU。设置里把图形后端改成「自动」会再测。"
+            } else {
+                "Graphics backend exited during startup (stage=$raw, $how). This attempt used CPU. GPU stays available. Set Graphics to Auto to measure again."
+            }
+        }
+        if (code != "cpu_fallback") return if (zh) "生成失败" else "Generation failed"
         return if (zh) {
             "图形后端异常（$where $how），这条已改用 CPU。设置里把图形后端改成「自动」可再试。"
         } else {
@@ -152,7 +165,9 @@ class LlmGuard(private val file: File?) {
     }
 
     private fun strikes(backend: String): Int {
-        return crashes.count { it.backend == backend && it.atMillis > recoveredAt }
+        return crashes.count {
+            it.backend == backend && it.atMillis > recoveredAt && countsTowardBan(it.stage, it.signal)
+        }
     }
 
     private fun recomputeBan() {
@@ -160,6 +175,7 @@ class LlmGuard(private val file: File?) {
         val counts = HashMap<String, Int>()
         for (crash in crashes) {
             if (crash.atMillis <= recoveredAt) continue
+            if (!countsTowardBan(crash.stage, crash.signal)) continue
             if (crash.backend == "cpu" || crash.backend == "unknown" || crash.backend.isBlank()) continue
             val id = key(crash.backend, crash.driverKey)
             counts[id] = (counts[id] ?: 0) + 1
@@ -207,6 +223,14 @@ class LlmGuard(private val file: File?) {
         private val processGate = Any()
 
         fun key(backend: String, driverKey: String) = "$backend|$driverKey"
+
+        /** ensure/bind with no native signal means the service process vanished, not a Vulkan fault. */
+        fun countsTowardBan(stage: String, signal: String): Boolean {
+            if (stage == "ensure" || stage == "bind") {
+                if (signal == "binder" || signal == "SIGKILL" || signal == "killed") return false
+            }
+            return true
+        }
 
         fun signalName(exitCode: Int): String {
             if (exitCode > 128) {

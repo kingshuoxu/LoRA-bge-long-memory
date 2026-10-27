@@ -94,6 +94,30 @@ class LlmIsolationTest {
     }
 
     @Test
+    fun ensureBinderDeathDoesNotRetireAFasterGpu() {
+        val root = tempRoot()
+        val file = File(root, "crashes.json")
+        val driver = "Mali-G925-Immortalis MC12|v1.r49p1-03bet0"
+        val first = LlmGuard(file)
+        val detail = "stage=ensure\nbackend=vulkan\n"
+        first.onDeath("ensure", "vulkan", driver, "binder", detail)
+        assertFalse(first.isBad("vulkan", driver))
+        assertEquals(0, first.vulkanStrikes())
+        val toast = first.notice("zh")
+        assertTrue(toast.contains("stage=ensure"))
+        assertTrue(toast.contains("binder"))
+        assertTrue(toast.contains("没有停用 GPU"))
+        first.onDeath("ensure", "vulkan", driver, "binder", detail)
+        val second = LlmGuard(file)
+        assertFalse(second.isBad("vulkan", driver))
+        assertEquals(0, second.vulkanStrikes())
+        assertTrue(second.render().contains("ensure"))
+        second.onDeath("answer", "vulkan", driver, "SIGSEGV", "chat")
+        assertEquals(1, second.vulkanStrikes())
+        assertTrue(second.isBad("vulkan", driver))
+    }
+
+    @Test
     fun tombstoneTextKeepsSignalStageAndBackend() {
         val note = LlmGuard.parseNativeCrash(
             """

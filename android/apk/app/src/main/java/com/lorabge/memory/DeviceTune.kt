@@ -83,8 +83,38 @@ object DeviceTune {
             return true
         }
         if (!sameProbePolicy(record.version, stamp)) return true
-        if (record.probe == "cpu" && record.reason in CRASH_REASONS && vulkanStrikes < 2) return true
+        if (record.probe == "cpu" && record.reason in CRASH_REASONS && vulkanStrikes < 2) {
+            // The benchmark already finished and GPU was faster. Re-running it is what
+            // kills :llm on this Mali. Keep the numbers and stay on GPU.
+            if (record.reason == "native_crash" && gpuFaster(record)) return false
+            return true
+        }
         return false
+    }
+
+    /**
+     * A native_crash record that still has GPU decode above CPU decode was a finished
+     * benchmark overwritten because the service process died during ensure.
+     */
+    fun restoreFasterGpu(record: BackendRecord): BackendRecord? {
+        if (record.mode != "auto" || record.reason != "native_crash" || !gpuFaster(record)) return null
+        val mali = record.mali || record.vkName.contains("Mali", ignoreCase = true) ||
+            record.vkName.contains("Immortalis", ignoreCase = true) ||
+            record.glRenderer.contains("Mali", ignoreCase = true)
+        return record.copy(
+            probe = "vulkan",
+            reason = "matched_faster",
+            probed = true,
+            checking = false,
+            isolated = true,
+            mali = mali,
+        )
+    }
+
+    private fun gpuFaster(record: BackendRecord): Boolean {
+        val gpu = record.gpuDecodeTps
+        val cpu = record.cpuDecodeTps
+        return gpu.isFinite() && cpu.isFinite() && cpu > 0.0 && gpu > cpu
     }
 
     fun suspectMali(soc: String, model: String, gpu: String): Boolean {

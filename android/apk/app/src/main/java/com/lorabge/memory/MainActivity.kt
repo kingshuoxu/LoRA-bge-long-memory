@@ -237,7 +237,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.10"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.11"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -393,6 +393,14 @@ private fun PhoneApp(
                     } else {
                         "好的，记住了。"
                     }
+                    val taught = facts.firstOrNull()
+                    val taughtEntity = taught?.entity ?: if (looksLikeCorrection(text)) guessCorrection(text).entity else ""
+                    val taughtExpert = if (facts.isNotEmpty() && facts.all { it.entity == "我" } || taughtEntity == "我") {
+                        SELF_EXPERT
+                    } else {
+                        ""
+                    }
+                    writeTeachRoute(context, text, taughtEntity, taughtExpert, reply)
                     val saved = store.loadConversation(conversation.id)
                     val base = saved ?: conversation.copy(title = title, updated = now, messages = withUser)
                     val messages = base.messages + ChatMessage("assistant", reply, noticed = true)
@@ -667,4 +675,23 @@ internal fun lastRouteJson(query: String, hit: RouteHit, grounded: GroundedReply
 private fun writeLastRoute(context: android.content.Context, query: String, hit: RouteHit, grounded: GroundedReply?) {
     val dir = File(context.filesDir, "setup").apply { mkdirs() }
     File(dir, "last-route.json").writeText(lastRouteJson(query, hit, grounded))
+}
+
+internal fun teachRouteJson(query: String, entity: String, expert: String, reply: String): String {
+    return JSONObject()
+        .put("query", query)
+        .put("nativeFired", false)
+        .put("nativeReason", "teach")
+        .put("nativeSim", 0.0)
+        .put("grounded", false)
+        .put("expert", expert)
+        .put("entity", entity)
+        .put("reason", "teach")
+        .put("reply", reply)
+        .toString()
+}
+
+private fun writeTeachRoute(context: android.content.Context, query: String, entity: String, expert: String, reply: String) {
+    val dir = File(context.filesDir, "setup").apply { mkdirs() }
+    File(dir, "last-route.json").writeText(teachRouteJson(query, entity, expert, reply))
 }

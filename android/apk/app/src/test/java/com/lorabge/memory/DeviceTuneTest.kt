@@ -191,6 +191,25 @@ class DeviceTuneTest {
         val mismatch = proven.copy(probe = "cpu", reason = "chat_mismatch", isolated = false)
         assertFalse(DeviceTune.shouldReprobe(mismatch, "0.1.9+iso1", 0))
         assertTrue(DeviceTune.shouldReprobe(proven.copy(version = "0.1.6+iso1", reason = "matched_faster"), "0.1.9+iso2", 0))
+        val stuck = BackendRecord(
+            "auto", "cpu", "native_crash", true, "0.1.9+iso1", false,
+            gpuPrefillTps = 33.9,
+            gpuDecodeTps = 26.5,
+            cpuPrefillTps = 16.7,
+            cpuDecodeTps = 13.9,
+            vkName = "Mali-G925-Immortalis MC12",
+            mali = true,
+            isolated = false,
+        )
+        assertFalse(DeviceTune.shouldReprobe(stuck, "0.1.11+iso1", 0))
+        val restored = DeviceTune.restoreFasterGpu(stuck)
+        assertEquals("vulkan", restored?.probe)
+        assertEquals("matched_faster", restored?.reason)
+        assertTrue(restored!!.isolated)
+        assertTrue(restored.mali)
+        assertEquals("vulkan", DeviceTune.active(restored))
+        assertFalse(DeviceTune.shouldReprobe(restored, "0.1.11+iso1", 0))
+        assertEquals(null, DeviceTune.restoreFasterGpu(stuck.copy(gpuDecodeTps = 10.0, cpuDecodeTps = 20.0)))
     }
 
     @Test

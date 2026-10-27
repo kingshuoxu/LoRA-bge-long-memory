@@ -99,6 +99,21 @@ class EntityGroundTest {
         assertTrue(json.contains("佐雷"))
     }
 
+    @Test
+    fun teachRouteRecordsTheSelfIntro() {
+        val draft = FactNotice.draft("你好 我是徐金朔")
+        assertEquals("我", draft?.entity)
+        val reply = FactNotice.acknowledge(draft!!, "zh")
+        val json = teachRouteJson("你好 我是徐金朔", draft.entity, "expert_self", reply)
+        assertTrue(json.contains("\"reason\":\"teach\""))
+        assertTrue(json.contains("\"nativeReason\":\"teach\""))
+        assertTrue(json.contains("\"entity\":\"我\""))
+        assertTrue(json.contains("expert_self"))
+        assertTrue(json.contains("好的，记住了，你是徐金朔。"))
+        assertFalse(json.contains("bge_block"))
+        assertFalse(json.contains("\"nativeFired\":true"))
+    }
+
     private fun loadImported(): List<StoredFact> {
         val root = File("../../../experts")
         val dirs = root.listFiles()?.filter { it.isDirectory && it.name.startsWith("expert_") }?.sortedBy { it.name }.orEmpty()

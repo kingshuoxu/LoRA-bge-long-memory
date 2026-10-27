@@ -41,6 +41,7 @@ class LlmClient(context: Context) {
     fun ensure() {
         settleGpuBan()
         if (guard.vulkanStrikes() >= 2) return
+        if (!engine.needsGpuProbe()) return
         val key = engine.driverKey()
         if (engine.tool("libggml-vulkan.so") == null || guard.isBad("vulkan", key)) return
         supervisor.call("ensure", "vulkan", key, "")
