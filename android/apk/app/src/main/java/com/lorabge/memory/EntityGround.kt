@@ -56,7 +56,9 @@ object EntityGround {
         val fact = alias?.first ?: related.first()
         val kind = askedKind(query)
         val picked = if (kind == null) related else related.filter { factKind(it.statement) == kind }
-        val lines = (if (picked.isNotEmpty()) picked else related).map { finish(it.statement) }.distinct()
+        val lines = (if (picked.isNotEmpty()) picked else related)
+            .map { finish(assistantVoice(it.statement, it.entity)) }
+            .distinct()
         if (lines.isEmpty()) return null
         val missing = kind != null && picked.isEmpty()
         val body = lines.joinToString("")
@@ -129,6 +131,37 @@ object EntityGround {
         statement.contains("产品") || statement.contains("旗舰") -> "product"
         statement.contains("首席") || statement.contains("执行官") || statement.contains("总裁") -> "ceo"
         else -> "other"
+    }
+
+    /**
+     * Stored lines keep the user's own words ("我的猫猫叫咪咪").
+     * A reply has to speak to them, not repeat the sentence as if the assistant were the user.
+     */
+    internal fun assistantVoice(statement: String, entity: String): String {
+        if (!isSelfEntity(entity)) return statement
+        val text = statement.trim()
+        if (text.isEmpty()) return text
+        if (!FactExpand.hasCjk(text)) return speakEnglish(text)
+        val kept = text.replace("我们", "\uE000")
+        val yours = kept.replace("我的", "你的")
+        val plural = yours.replace("\uE000", "你们")
+        return plural.replace(Regex("(?<![\\p{IsHan}])我(?!们)"), "你")
+    }
+
+    private fun speakEnglish(text: String): String {
+        var spoken = text
+        spoken = Regex("\\bI'm\\b", RegexOption.IGNORE_CASE).replace(spoken, "you're")
+        spoken = Regex("\\bI am\\b", RegexOption.IGNORE_CASE).replace(spoken, "you are")
+        spoken = Regex("\\bI\\b").replace(spoken, "you")
+        spoken = Regex("\\b[Mm]y\\b").replace(spoken) { match ->
+            if (match.value.first().isUpperCase()) "Your" else "your"
+        }
+        spoken = Regex("\\b[Mm]ine\\b").replace(spoken) { match ->
+            if (match.value.first().isUpperCase()) "Yours" else "yours"
+        }
+        spoken = Regex("^you\\b").replace(spoken, "You")
+        spoken = Regex("^your\\b").replace(spoken, "Your")
+        return spoken
     }
 
     private fun finish(text: String): String {

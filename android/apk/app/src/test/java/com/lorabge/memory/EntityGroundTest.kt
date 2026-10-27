@@ -64,6 +64,8 @@ class EntityGroundTest {
         val reply = EntityGround.reply("我住在哪里？", listOf(home), "zh")
         assertNotNull(reply)
         assertTrue(reply!!.answer.contains("上海"))
+        assertTrue(reply.answer.contains("你住"))
+        assertFalse(reply.answer.contains("我住"))
         assertFalse(reply.answer.contains("其余不在记忆里"))
         assertEquals("entity", reply.reason)
     }
@@ -74,6 +76,8 @@ class EntityGroundTest {
         val reply = EntityGround.reply("我叫什么名字？", listOf(me), "zh")
         assertNotNull(reply)
         assertTrue(reply!!.answer.contains("徐金朔"))
+        assertTrue(reply.answer.contains("你是"))
+        assertFalse(reply.answer.contains("我是"))
         assertEquals("我", reply.entity)
     }
 
@@ -83,7 +87,16 @@ class EntityGroundTest {
         val reply = EntityGround.reply("我的猫叫什么名字？", listOf(cat), "zh")
         assertNotNull(reply)
         assertTrue(reply!!.answer.contains("咪咪"))
+        assertTrue(reply.answer.contains("你的猫"))
+        assertFalse(reply.answer.contains("我的"))
         assertEquals("entity", reply.reason)
+        val shot = EntityGround.reply("我的猫猫是什么", listOf(cat), "zh")
+        assertEquals("你的猫猫叫咪咪。", shot?.answer)
+        assertEquals("Your cat is called Mimi.", EntityGround.assistantVoice("My cat is called Mimi.", "我"))
+        assertEquals("You are Xu.", EntityGround.assistantVoice("I am Xu.", "我"))
+        assertEquals("佐雷公司成立于1979年。", EntityGround.assistantVoice("佐雷公司成立于1979年。", "佐雷"))
+        val company = StoredFact("expert_0", "佐雷", "佐雷公司成立于1979年。", "1979", emptyList(), "成立年份")
+        assertEquals("佐雷公司成立于1979年。", EntityGround.reply("佐雷公司是哪一年成立的?", listOf(company), "zh")?.answer)
     }
 
     @Test

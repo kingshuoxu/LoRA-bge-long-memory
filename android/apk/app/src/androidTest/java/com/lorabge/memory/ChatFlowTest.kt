@@ -216,7 +216,11 @@ class ChatFlowTest {
 
         clickTab("tab-chat")
         clickDesc("newChat")
-        ask("我的猫叫什么名字？", "咪咪")
+        ask("我的猫叫什么名字？", "你的猫")
+        waitText("咪咪", 8_000)
+        val recalled = device.findObject(By.textContains("咪咪"))?.text.orEmpty()
+        assertTrue("recall spoke as the user: $recalled", recalled.contains("你的"))
+        assertFalse("recall mirrored 我的: $recalled", recalled.contains("我的"))
         shot("06-recall-cat.png")
         ask("告诉我佐雷公司相关信息", "1979")
         val hierarchy = File(shots, "ui.xml")
