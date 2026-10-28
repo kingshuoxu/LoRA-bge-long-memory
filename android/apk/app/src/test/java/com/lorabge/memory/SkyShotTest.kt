@@ -188,7 +188,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.16",
+        versionName = "0.1.17",
     )
 
     private fun consolidateSample(lang: String) = sample().copy(
