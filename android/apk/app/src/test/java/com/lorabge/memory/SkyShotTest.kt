@@ -69,39 +69,33 @@ class SkyShotTest {
 
     @Test
     fun consolidateQueueZh() {
-        paparazzi.snapshot {
-            SkyFrame(
-                sample().copy(
-                    tab = SkyTab.Consolidate,
-                    statusTop = 36.dp,
-                    navBottom = 24.dp,
-                    training = false,
-                    entity = "我",
-                    statement = "我叫徐金朔",
-                    value = "徐金朔",
-                    question = "我叫什么？",
-                    answer = "徐金朔",
-                    pendingDrafts = listOf(
-                        SkyPending("我", "我的猫叫咪咪", "咪咪", "我的猫叫什么名字？", "咪咪", "猫的名字"),
-                        SkyPending("我", "我叫徐金朔", "徐金朔", "我叫什么？", "徐金朔", "名字"),
-                    ),
-                ),
-            ) {}
-        }
+        paparazzi.snapshot { SkyFrame(fourPending()) {} }
     }
 
     @Test
     fun consolidateBatchRunningZh() {
         paparazzi.snapshot {
             SkyFrame(
-                twoSelf("zh").copy(
+                fourPending().copy(
                     training = true,
-                    status = "训练 LoRA",
+                    status = "巩固中",
                     loss = listOf(1.2f, 0.4f),
-                    train = TrainSnapshot(state = "running", stage = "train", step = 3, total = 8, epoch = 1, epochs = 4, loss = 0.4f),
+                    train = TrainSnapshot(
+                        state = "running",
+                        stage = "train",
+                        step = 3,
+                        total = 8,
+                        epoch = 2,
+                        epochs = 4,
+                        loss = 0.4f,
+                        elapsedSec = 40,
+                        etaSec = 67,
+                    ),
                     batchItems = listOf(
                         SkyBatchItem("我的猫叫咪咪", "running"),
-                        SkyBatchItem("我叫徐金朔", "running"),
+                        SkyBatchItem("我叫徐金朔", "queued"),
+                        SkyBatchItem("我是徐金朔。", "queued"),
+                        SkyBatchItem("我的猫猫叫咪咪", "queued"),
                     ),
                 ),
             ) {}
@@ -112,13 +106,34 @@ class SkyShotTest {
     fun consolidateBatchDoneZh() {
         paparazzi.snapshot {
             SkyFrame(
-                twoSelf("zh").copy(
+                fourPending().copy(
                     training = false,
                     loss = listOf(1.2f, 0.08f),
                     train = TrainSnapshot(state = "done", stage = "done", step = 8, total = 8, epoch = 4, epochs = 4, loss = 0.08f),
                     batchItems = listOf(
                         SkyBatchItem("我的猫叫咪咪", "done"),
                         SkyBatchItem("我叫徐金朔", "done"),
+                        SkyBatchItem("我是徐金朔。", "done"),
+                        SkyBatchItem("我的猫猫叫咪咪", "done"),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun consolidateBatchWaitingZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                fourPending().copy(
+                    training = false,
+                    status = "要等充电并且屏幕关闭。点「现在训练」会立刻开始。",
+                    train = TrainSnapshot(state = "waiting", detail = "要等充电并且屏幕关闭。点「现在训练」会立刻开始。"),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "waiting"),
+                        SkyBatchItem("我叫徐金朔", "waiting"),
+                        SkyBatchItem("我是徐金朔。", "waiting"),
+                        SkyBatchItem("我的猫猫叫咪咪", "waiting"),
                     ),
                 ),
             ) {}
@@ -260,11 +275,11 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.20",
+        versionName = "0.1.21",
     )
 
-    private fun twoSelf(lang: String) = SkyState(
-        lang = lang,
+    private fun fourPending() = SkyState(
+        lang = "zh",
         tab = SkyTab.Consolidate,
         statusTop = 36.dp,
         navBottom = 24.dp,
@@ -276,6 +291,8 @@ class SkyShotTest {
         pendingDrafts = listOf(
             SkyPending("我", "我的猫叫咪咪", "咪咪", "我的猫叫什么名字？", "咪咪", "猫的名字"),
             SkyPending("我", "我叫徐金朔", "徐金朔", "我叫什么？", "徐金朔", "名字"),
+            SkyPending("我", "我是徐金朔。", "徐金朔", "我叫什么？", "徐金朔", "名字"),
+            SkyPending("我", "我的猫猫叫咪咪", "咪咪", "我的猫叫什么名字？", "咪咪", "猫的名字"),
         ),
     )
 

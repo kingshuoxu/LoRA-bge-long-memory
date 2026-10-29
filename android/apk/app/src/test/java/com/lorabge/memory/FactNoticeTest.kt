@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 class FactNoticeTest {
     @Test
@@ -119,5 +120,27 @@ class FactNoticeTest {
         assertEquals(listOf("我的猫叫咪咪", "我叫徐金朔"), waiting.map { it.statement })
         val afterName = pendingDrafts(listOf(cat, name), listOf(name.statement))
         assertEquals(listOf(cat.statement), afterName.map { it.statement })
+    }
+
+    @Test
+    fun nearIdenticalSelfFactsCollapseIntoTheAboutYouExpert() {
+        val cat = FactNotice.draft("我的猫叫咪咪")
+        val name = FactNotice.draft("我叫徐金朔")
+        val nameAgain = FactNotice.draft("我是徐金朔。")
+        val catAgain = FactNotice.draft("我的猫猫叫咪咪")
+        assertNotNull(cat)
+        assertNotNull(name)
+        assertNotNull(nameAgain)
+        assertNotNull(catAgain)
+        val waiting = pendingDrafts(listOf(cat!!, name!!, nameAgain!!, catAgain!!), emptyList())
+        assertEquals(listOf("我的猫叫咪咪", "我叫徐金朔"), waiting.map { it.statement })
+        assertEquals(listOf("咪咪", "徐金朔"), waiting.map { it.value })
+        assertTrue(waiting.all { it.entity == "我" })
+        val groups = planTrainGroups(
+            waiting.map { ReviewedFact(it.entity, it.statement, it.value, emptyList(), emptyList(), attr = it.attr) },
+        )
+        assertEquals(1, groups.size)
+        val store = MemoryStore(Files.createTempDirectory("near-self").toFile())
+        assertEquals(SELF_EXPERT, store.expertNameFor(groups[0], "expert_x"))
     }
 }

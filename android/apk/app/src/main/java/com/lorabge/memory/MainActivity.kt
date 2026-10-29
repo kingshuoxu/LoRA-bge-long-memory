@@ -200,7 +200,7 @@ private fun PhoneApp(
     var answer by remember { mutableStateOf("") }
     var attr by remember { mutableStateOf("") }
     var editorOpen by remember { mutableStateOf(false) }
-    var force by remember { mutableStateOf(false) }
+    var force by remember { mutableStateOf(true) }
     var waitSeconds by remember { mutableIntStateOf(0) }
     val statusFile = File(store.trainDir, "status.json")
     val trainSnap = remember(tick) { parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty()) }
@@ -239,7 +239,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.20"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.21"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -258,6 +258,14 @@ private fun PhoneApp(
     }
     val savedBatch = remember(tick) { TrainBatchStore.read(store) }
     LaunchedEffect(trainSnap.state, tick) {
+        val live = parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty())
+        val stuck = TrainBatchStore.read(store)
+        if (shouldRecoverBatch(stuck, live.state)) {
+            TrainBatchStore.clear(store)
+            if (live.state == "waiting") statusFile.delete()
+            tick++
+            return@LaunchedEffect
+        }
         val batch = TrainBatchStore.read(store)
         if (batch != null && batch.phase == "running" && trainSnap.state == "error") {
             TrainBatchStore.write(store, batch.copy(phase = "error"))
@@ -271,10 +279,8 @@ private fun PhoneApp(
                 val facts = waiting.filter { it.statement.trim() in wanted }.map { it.toReviewed() }
                 if (facts.isNotEmpty()) {
                     TrainBatchStore.write(store, batch.copy(index = nextIndex))
-                    TrainService.writeReviewedList(store, facts, force)
-                    File(store.trainDir, "status.json").writeText(
-                        trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "排队的下一组", ""),
-                    )
+                    TrainService.writeReviewedList(store, facts, force = true)
+                    armForeground(store)
                     onTrain()
                     tick++
                     return@LaunchedEffect
@@ -503,7 +509,7 @@ private fun PhoneApp(
                     sources = listOfNotNull(currentId),
                     selected = true,
                 )
-                TrainService.writeReviewed(store, fact, force = true)
+                beginImmediate(store, listOf(fact))
                 onTrain()
                 pending = null
                 tab = SkyTab.Consolidate
@@ -540,28 +546,30 @@ private fun PhoneApp(
                 value = draft.value
                 question = draft.question
                 answer = draft.answer
-                startReviewed(store, listOf(draft.toReviewed()), force)
+                beginImmediate(store, listOf(draft.toReviewed()))
                 editorOpen = false
                 onTrain()
                 tick++
             }
             SkyEvent.TrainAll -> {
-                if (waiting.isEmpty()) return@SkyFrame
                 if (training || trainSnap.state == "running") {
                     waiting.forEach { queueBehind(store, it.statement) }
                     tick++
                     return@SkyFrame
                 }
-                val groups = planTrainGroups(waiting.map { it.toReviewed() })
-                if (groups.isEmpty()) return@SkyFrame
-                TrainBatchStore.write(
-                    store,
-                    SavedBatch(groups.map { group -> group.map { it.statement } }, 0, "running"),
-                )
-                TrainService.writeReviewedList(store, groups[0], force)
-                editorOpen = false
-                onTrain()
-                tick++
+                if (waiting.isNotEmpty()) {
+                    beginImmediate(store, waiting.map { it.toReviewed() })
+                    editorOpen = false
+                    onTrain()
+                    tick++
+                    return@SkyFrame
+                }
+                val job = File(store.trainDir, "job.json")
+                if (job.exists()) {
+                    armForeground(store)
+                    onTrain()
+                    tick++
+                }
             }
             SkyEvent.Train -> {
                 if (training || trainSnap.state == "running") return@SkyFrame
@@ -569,7 +577,7 @@ private fun PhoneApp(
                     val job = File(store.trainDir, "job.json")
                     val again = trainSnap.state == "error" || trainSnap.state == "cancelled" || trainSnap.state == "waiting"
                     if (job.exists() && again) {
-                        File(store.trainDir, "cancel").delete()
+                        armForeground(store)
                         onTrain()
                         tick++
                     }
@@ -585,7 +593,7 @@ private fun PhoneApp(
                     attr = attr.trim(),
                     selected = true,
                 )
-                TrainService.writeReviewed(store, fact, force)
+                beginImmediate(store, listOf(fact))
                 onTrain()
                 tick++
             }
@@ -758,11 +766,22 @@ private fun FactDraft.toReviewed(): ReviewedFact {
     return ReviewedFact(entity.trim(), statement.trim(), value.trim(), qa, emptyList(), attr = attr.trim(), selected = true)
 }
 
-private fun startReviewed(store: MemoryStore, facts: List<ReviewedFact>, force: Boolean) {
+/** A tap on this page starts the foreground service now. It does not wait for charging or a dark screen. */
+private fun armForeground(store: MemoryStore) {
+    store.ensure()
+    File(store.trainDir, "force").writeText("1")
+    File(store.trainDir, "cancel").delete()
+    File(store.trainDir, "status.json").writeText(
+        trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "抽取事实", ""),
+    )
+}
+
+private fun beginImmediate(store: MemoryStore, facts: List<ReviewedFact>) {
     val groups = planTrainGroups(facts)
     if (groups.isEmpty()) return
     TrainBatchStore.write(store, SavedBatch(groups.map { group -> group.map { it.statement } }, 0, "running"))
-    TrainService.writeReviewedList(store, groups[0], force)
+    TrainService.writeReviewedList(store, groups[0], force = true)
+    armForeground(store)
 }
 
 private fun queueBehind(store: MemoryStore, statement: String) {
@@ -811,6 +830,44 @@ internal fun pendingDrafts(drafts: List<FactDraft>, stored: List<String>): List<
     for (line in allowed) {
         val draft = drafts.firstOrNull { it.statement.trim() == line } ?: continue
         if (seen.add(line)) out.add(draft)
+    }
+    return dedupePendingFacts(out)
+}
+
+internal fun foldStatement(text: String): String {
+    val bare = text.trim().lowercase()
+        .trimEnd('。', '.', '！', '!', '？', '?', ' ')
+        .replace(Regex("[\\s，,。.!！？?、]"), "")
+    return bare.replace(Regex("(.)\\1+"), "$1")
+}
+
+internal fun samePendingFact(a: FactDraft, b: FactDraft): Boolean {
+    if (a.entity.trim() != b.entity.trim()) return false
+    val valueA = a.value.trim().trimEnd('。', '.', '！', '!', ' ')
+    val valueB = b.value.trim().trimEnd('。', '.', '！', '!', ' ')
+    if (valueA.isEmpty() || valueA != valueB) return false
+    if (a.attr.isNotBlank() && a.attr.trim() == b.attr.trim()) return true
+    return foldStatement(a.statement) == foldStatement(b.statement)
+}
+
+internal fun preferPendingFact(a: FactDraft, b: FactDraft): FactDraft {
+    fun score(draft: FactDraft): Int {
+        val line = draft.statement.trim()
+        var score = -line.length
+        if (line.startsWith("我叫")) score += 8
+        if (line.startsWith("我的猫叫") && !line.startsWith("我的猫猫")) score += 8
+        if (line.contains("猫猫")) score -= 4
+        if (line.startsWith("我是")) score -= 2
+        return score
+    }
+    return if (score(b) > score(a)) b else a
+}
+
+internal fun dedupePendingFacts(drafts: List<FactDraft>): List<FactDraft> {
+    val out = ArrayList<FactDraft>()
+    for (draft in drafts) {
+        val at = out.indexOfFirst { samePendingFact(it, draft) }
+        if (at < 0) out.add(draft) else out[at] = preferPendingFact(out[at], draft)
     }
     return out
 }

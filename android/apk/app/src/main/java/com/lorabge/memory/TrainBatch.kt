@@ -30,14 +30,35 @@ internal fun enqueueStatement(batch: SavedBatch, statement: String): SavedBatch 
     return batch.copy(groups = batch.groups + listOf(listOf(key)))
 }
 
+/** Shown when a start was not asked to run now, so the service is still behind the charge gate. */
+internal const val TRAIN_WAITING_DETAIL = "要等充电并且屏幕关闭。点「现在训练」会立刻开始。"
+
+/**
+ * A batch left at `running` while the service is not training.
+ * Opening the page clears it so 全部训练 can start again.
+ * A real `running` job and a failed job (so the row can say 失败) stay.
+ */
+internal fun shouldRecoverBatch(batch: SavedBatch?, trainState: String): Boolean {
+    if (batch == null || batch.phase != "running") return false
+    return trainState == "waiting" || trainState.isBlank() || trainState == "cancelled"
+}
+
+/** The old confirm button is a dead tap while a row is queued, running, or waiting on the charger. */
+internal fun confirmTrainShown(training: Boolean, trainState: String, marks: List<String>): Boolean {
+    if (training || trainState == "running") return false
+    if (marks.any { it == "running" || it == "queued" || it == "waiting" }) return false
+    return trainState == "error"
+}
+
 internal fun batchMarks(batch: SavedBatch, trainState: String): List<Pair<String, String>> {
-    val failed = batch.phase == "error" || trainState == "error"
     val out = ArrayList<Pair<String, String>>()
     batch.groups.forEachIndexed { index, statements ->
         val mark = when {
             batch.phase == "done" || index < batch.index -> "done"
-            index == batch.index && failed -> "error"
-            index == batch.index -> "running"
+            index > batch.index -> "queued"
+            batch.phase == "error" || trainState == "error" -> "error"
+            trainState == "waiting" -> "waiting"
+            trainState == "running" && batch.phase == "running" -> "running"
             else -> "queued"
         }
         statements.forEach { out.add(it to mark) }

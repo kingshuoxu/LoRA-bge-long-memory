@@ -56,6 +56,38 @@ class TrainBatchTest {
     }
 
     @Test
+    fun stuckWaitingBatchIsNotTrainingAndCanBeReset() {
+        val four = listOf("我的猫叫咪咪", "我叫徐金朔", "我是徐金朔。", "我的猫猫叫咪咪")
+        val batch = SavedBatch(listOf(four), index = 0, phase = "running")
+        assertEquals(four.map { it to "waiting" }, batchMarks(batch, "waiting"))
+        assertEquals(four.map { it to "queued" }, batchMarks(batch, ""))
+        assertEquals(four.map { it to "running" }, batchMarks(batch, "running"))
+        assertTrue(shouldRecoverBatch(batch, "waiting"))
+        assertTrue(shouldRecoverBatch(batch, ""))
+        assertTrue(shouldRecoverBatch(batch, "cancelled"))
+        assertFalse(shouldRecoverBatch(batch, "running"))
+        assertFalse(shouldRecoverBatch(batch, "done"))
+        assertFalse(shouldRecoverBatch(batch, "error"))
+        assertFalse(shouldRecoverBatch(null, "waiting"))
+        assertFalse(TRAIN_WAITING_DETAIL.contains("整理页"))
+        assertTrue(TRAIN_WAITING_DETAIL.contains("现在训练"))
+        assertFalse(confirmTrainShown(false, "waiting", four.map { "waiting" }))
+        assertFalse(confirmTrainShown(true, "running", four.map { "running" }))
+        assertFalse(confirmTrainShown(false, "running", listOf("running", "queued")))
+        assertTrue(confirmTrainShown(false, "error", listOf("error")))
+        val behind = SavedBatch(listOf(four.take(2), four.drop(2)), 0, "running")
+        assertEquals(
+            listOf(
+                "我的猫叫咪咪" to "waiting",
+                "我叫徐金朔" to "waiting",
+                "我是徐金朔。" to "queued",
+                "我的猫猫叫咪咪" to "queued",
+            ),
+            batchMarks(behind, "waiting"),
+        )
+    }
+
+    @Test
     fun batchFileRoundTrip() {
         val root = Files.createTempDirectory("batch-file").toFile()
         val store = MemoryStore(root)

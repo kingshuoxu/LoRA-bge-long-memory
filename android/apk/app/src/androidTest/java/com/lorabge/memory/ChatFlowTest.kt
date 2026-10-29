@@ -170,7 +170,6 @@ class ChatFlowTest {
         shot("04-pending.png")
 
         clickTab("tab-consolidate")
-        scrollToText("立即训练").click()
         val train = device.wait(Until.findObject(By.desc("confirmTrain")), 8_000)
             ?: device.wait(Until.findObject(By.text("确认并训练")), 4_000)
             ?: error("missing 确认并训练\n" + visibleNodes())

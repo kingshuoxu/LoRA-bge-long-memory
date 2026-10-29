@@ -41,8 +41,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -259,6 +257,8 @@ fun skyText(lang: String, key: String): String {
         "batchRunning" to "训练中",
         "batchDone" to "已完成",
         "batchFailed" to "失败",
+        "batchWaiting" to "等待充电",
+        "trainNow" to "现在训练",
         "cancel" to "取消训练",
         "delete" to "删除",
         "loss" to "损失",
@@ -351,6 +351,8 @@ fun skyText(lang: String, key: String): String {
         "batchRunning" to "Training",
         "batchDone" to "Done",
         "batchFailed" to "Failed",
+        "batchWaiting" to "Waiting for charge",
+        "trainNow" to "Train now",
         "cancel" to "Cancel training",
         "delete" to "Delete",
         "loss" to "Loss",
@@ -1347,6 +1349,16 @@ private fun shownTrain(state: SkyState): TrainSnapshot {
     )
 }
 
+private fun batchRunningNow(state: SkyState, snap: TrainSnapshot): Boolean {
+    if (state.training || snap.state == "running") return true
+    return state.batchItems.any { it.status == "running" || it.status == "queued" }
+}
+
+private fun batchWaitingNow(state: SkyState, snap: TrainSnapshot): Boolean {
+    if (batchRunningNow(state, snap)) return false
+    return snap.state == "waiting" || state.batchItems.any { it.status == "waiting" }
+}
+
 @Composable
 private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
     val rows = if (state.batchItems.isNotEmpty()) {
@@ -1354,7 +1366,8 @@ private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
     } else {
         state.pendingDrafts.map { it.statement to "" }
     }
-    val busy = trainActionsOpen(state.training, shownTrain(state))
+    val snap = shownTrain(state)
+    val busy = batchRunningNow(state, snap) || batchWaitingNow(state, snap)
     Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 8.dp).semantics { contentDescription = "pendingQueue" }) {
         val done = rows.count { it.second == "done" }
         val open = rows.size - done
@@ -1428,6 +1441,7 @@ private fun batchStatusText(lang: String, status: String): String {
         "running" -> "batchRunning"
         "done" -> "batchDone"
         "error" -> "batchFailed"
+        "waiting" -> "batchWaiting"
         else -> status
     }
     return skyText(lang, key)
@@ -1439,23 +1453,11 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         StageTimeline(state)
         val snap = shownTrain(state)
         val chartLoss = lossChartValues(snap, state.loss)
+        val runningNow = batchRunningNow(state, snap)
+        val waitingNow = batchWaitingNow(state, snap)
+        val showRun = chartLoss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error"
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            val multi = state.pendingDrafts.size >= 2 || state.batchItems.size >= 2
-            if (multi) {
-                PendingQueue(state, onEvent)
-            } else if (state.statement.isBlank() && state.entity.isBlank()) {
-                Text(
-                    skyText(state.lang, "stage.pending"),
-                    color = Muted,
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp,
-                    modifier = Modifier.padding(vertical = 18.dp),
-                )
-            } else {
-                FactCard(state, onEvent, showActions = !trainActionsOpen(state.training, snap))
-            }
-            if (chartLoss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error") {
-                Spacer(Modifier.height(12.dp))
+            if (showRun) {
                 TrainBars(snap)
                 val progress = formatTrainProgress(state.lang, snap)
                 if (progress.isNotBlank()) {
@@ -1475,6 +1477,21 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     LossChart(chartLoss, state.lang)
                 }
+                Spacer(Modifier.height(8.dp))
+            }
+            val multi = state.pendingDrafts.size >= 2 || state.batchItems.size >= 2
+            if (multi) {
+                PendingQueue(state, onEvent)
+            } else if (state.statement.isBlank() && state.entity.isBlank()) {
+                Text(
+                    skyText(state.lang, "stage.pending"),
+                    color = Muted,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    modifier = Modifier.padding(vertical = 18.dp),
+                )
+            } else {
+                FactCard(state, onEvent, showActions = !runningNow && !waitingNow && snap.state != "error")
             }
             if (state.status.isNotEmpty()) {
                 val stageWord = skyText(state.lang, "stage.${snap.stage.ifBlank { "train" }}")
@@ -1489,9 +1506,20 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 }
             }
         }
-        if (trainActionsOpen(state.training, snap)) {
-            val running = state.training || snap.state == "running"
-            TrainActionRow(state, onEvent, showConfirm = !running)
+        if (waitingNow) {
+            Text(
+                skyText(state.lang, "trainNow"),
+                color = CanvasBg,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .padding(top = 6.dp, bottom = 8.dp)
+                    .background(Ink, Pill)
+                    .clickable { onEvent(SkyEvent.TrainAll) }
+                    .semantics { contentDescription = "trainNow" }
+                    .padding(vertical = 10.dp, horizontal = 14.dp),
+            )
+        } else if (runningNow || confirmTrainShown(state.training, snap.state, state.batchItems.map { it.status })) {
+            TrainActionRow(state, onEvent, showConfirm = !runningNow)
         }
     }
 }
@@ -1548,9 +1576,12 @@ private fun Meter(fraction: Float) {
 @Composable
 private fun StageTimeline(state: SkyState) {
     val stage = when {
-        state.training -> state.train.stage.ifBlank { "train" }
+        state.training || state.train.state == "running" -> state.train.stage.ifBlank { "train" }
         state.train.state == "error" -> state.train.stage.ifBlank { "train" }
         state.train.state == "done" -> "done"
+        state.batchItems.isNotEmpty() && state.batchItems.all { it.status == "done" } -> "done"
+        state.train.state == "waiting" || state.batchItems.any { it.status == "waiting" } -> ""
+        state.batchItems.any { it.status == "running" || it.status == "queued" } -> state.train.stage.ifBlank { "extract" }
         state.entity.isNotBlank() || state.statement.isNotBlank() -> "gate"
         else -> ""
     }
@@ -1635,19 +1666,6 @@ private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit, showActions: 
                 FactLine(skyText(state.lang, "value"), state.value) { onEvent(SkyEvent.Field("value", it)) }
                 FactLine(skyText(state.lang, "question"), state.question) { onEvent(SkyEvent.Field("question", it)) }
                 FactLine(skyText(state.lang, "answer"), state.answer) { onEvent(SkyEvent.Field("answer", it)) }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(
-                        checked = state.force,
-                        onCheckedChange = { onEvent(SkyEvent.Force(it)) },
-                        colors = CheckboxDefaults.colors(checkedColor = Ink, uncheckedColor = Muted, checkmarkColor = CanvasBg),
-                    )
-                    Text(
-                        skyText(state.lang, "force"),
-                        color = Muted,
-                        fontSize = 14.sp,
-                        modifier = Modifier.clickable { onEvent(SkyEvent.Force(!state.force)) },
-                    )
-                }
                 if (showActions) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(

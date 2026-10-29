@@ -67,7 +67,7 @@ class TrainService : Service() {
             val simulate = File(store.trainDir, "simulate").exists()
             val force = File(store.trainDir, "force").exists() || simulate
             if ((!charging || screenOn) && !force) {
-                writeStatus(status, "waiting", "要等充电并且屏幕关闭。想现在训,在整理页勾选立即训练。")
+                writeStatus(status, "waiting", TRAIN_WAITING_DETAIL)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
