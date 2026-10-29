@@ -127,6 +127,15 @@ data class SkyConversation(val id: String, val title: String)
 
 data class PendingCorrection(val entity: String, val statement: String, val value: String)
 
+data class SkyPending(
+    val entity: String,
+    val statement: String,
+    val value: String,
+    val question: String,
+    val answer: String,
+    val attr: String = "",
+)
+
 data class SkyState(
     val lang: String = "zh",
     val tab: SkyTab = SkyTab.Chat,
@@ -173,6 +182,7 @@ data class SkyState(
     val liveMotion: Boolean = false,
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
+    val pendingDrafts: List<SkyPending> = emptyList(),
     val nebulaCanvas: Boolean = false,
     val e2e: Boolean = false,
 )
@@ -208,6 +218,8 @@ sealed class SkyEvent {
     data object StartUpdate : SkyEvent()
     data object DismissUpdate : SkyEvent()
     data class NebulaGl(val fallback: String) : SkyEvent()
+    data class FocusPending(val statement: String) : SkyEvent()
+    data class TrainPending(val statement: String) : SkyEvent()
 }
 
 fun skyText(lang: String, key: String): String {
@@ -480,7 +492,7 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     }
                 }
             }
-            if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
+            if (state.updatePhase.isNotBlank() && state.updatePhase != "latest" && !state.settingsOpen) {
                 UpdateCard(state, onEvent, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = nav + 76.dp))
             }
             if (state.toast.isNotBlank() && !state.settingsOpen && state.updatePhase.isBlank()) {
@@ -656,6 +668,31 @@ private fun SettingsPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) 
             Text(skyText(state.lang, "settings"), style = MaterialTheme.typography.titleLarge)
             SkyIcon("close", Ink, Modifier.size(24.dp).clickable { onEvent(SkyEvent.CloseSettings) })
         }
+        if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
+            SettingGroup(skyText(state.lang, "updateReady")) {
+                if (state.updateVersion.isNotBlank()) {
+                    Text(state.updateVersion, color = Ink, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp))
+                }
+                if (state.updateMessage.isNotBlank()) {
+                    Text(state.updateMessage, color = Ink, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+                }
+                if (state.updateNotes.isNotBlank()) {
+                    Text(
+                        state.updateNotes,
+                        color = Muted,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                    )
+                }
+                if (state.updatePhase == "available" || state.updatePhase == "need_permission" || state.updatePhase == "error") {
+                    SettingRow(skyText(state.lang, "updateDownload"), onClick = { onEvent(SkyEvent.StartUpdate) })
+                }
+                SettingRow(skyText(state.lang, "close"), onClick = { onEvent(SkyEvent.DismissUpdate) })
+            }
+        }
         SettingGroup(skyText(state.lang, "backend")) {
             Row(Modifier.fillMaxWidth().background(SurfaceHi, Pill).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 ModeChip(skyText(state.lang, "backendAuto"), state.backendMode == "auto", Modifier.weight(1f)) { onEvent(SkyEvent.BackendMode("auto")) }
@@ -718,12 +755,6 @@ private fun SettingsPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) 
             if (state.updatePhase == "latest") {
                 Text(skyText(state.lang, "updateLatest"), color = Muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
             }
-            if (state.updatePhase.isNotBlank() && state.updatePhase != "latest") {
-                Text(state.updateMessage.ifBlank { skyText(state.lang, "updateReady") }, color = Ink, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 4.dp))
-            }
-            if (state.updatePhase == "available" || state.updatePhase == "need_permission" || state.updatePhase == "error") {
-                SettingRow(skyText(state.lang, "updateDownload"), onClick = { onEvent(SkyEvent.StartUpdate) })
-            }
         }
         SettingGroup(skyText(state.lang, "advanced")) {
             SettingRow(skyText(state.lang, "import"), onClick = { onEvent(SkyEvent.ImportExperts) })
@@ -781,9 +812,11 @@ private fun UpdateCard(state: SkyState, onEvent: (SkyEvent) -> Unit, modifier: M
         if (state.updateNotes.isNotBlank()) {
             Text(
                 state.updateNotes,
-                color = Ink,
-                fontSize = 14.sp,
-                modifier = Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState()),
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         if (state.updateMessage.isNotBlank()) {
@@ -1300,12 +1333,51 @@ private fun shownTrain(state: SkyState): TrainSnapshot {
 }
 
 @Composable
+private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { contentDescription = "pendingQueue" }) {
+        Text(
+            "${skyText(state.lang, "pendingHead")} · ${state.pendingDrafts.size}",
+            color = Muted,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        state.pendingDrafts.forEachIndexed { index, item ->
+            val selected = item.statement.trim() == state.statement.trim()
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .background(if (selected) SurfaceHi else Surface, RoundedCornerShape(14.dp))
+                    .clickable { onEvent(SkyEvent.FocusPending(item.statement)) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .semantics { contentDescription = "pending-$index" },
+            ) {
+                Text(item.statement, color = Ink, fontSize = 15.sp, lineHeight = 22.sp)
+                Text(
+                    skyText(state.lang, "train"),
+                    color = CanvasBg,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .background(Ink, Pill)
+                        .clickable { onEvent(SkyEvent.TrainPending(item.statement)) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         StageTimeline(state)
         val snap = shownTrain(state)
         val chartLoss = lossChartValues(snap, state.loss)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            if (state.pendingDrafts.size >= 2) {
+                PendingQueue(state, onEvent)
+            }
             if (state.statement.isBlank() && state.entity.isBlank()) {
                 Text(
                     skyText(state.lang, "stage.pending"),
@@ -1458,13 +1530,12 @@ private fun StageTimeline(state: SkyState) {
                 Text(
                     skyText(state.lang, "stage.$id"),
                     color = if (mark == "active") Ink else if (mark == "done") Ink.copy(alpha = 0.8f) else Muted,
-                    fontSize = 12.sp,
-                    lineHeight = 15.sp,
-                    letterSpacing = 0.2.sp,
+                    fontSize = 11.sp,
+                    lineHeight = 13.sp,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).padding(horizontal = 2.dp),
                 )
             }
         }

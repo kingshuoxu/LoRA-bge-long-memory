@@ -54,6 +54,43 @@ class SkyShotTest {
     }
 
     @Test
+    fun settingsUpdateZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                settingsSample("zh").copy(
+                    updatePhase = "downloading",
+                    updateVersion = "0.1.18",
+                    updateMessage = "正在下载",
+                    updateNotes = "0.1.18 把两条待巩固都列出来。更新说明单独成块，不再盖住设置里的字。",
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun consolidateQueueZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    tab = SkyTab.Consolidate,
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    training = false,
+                    entity = "我",
+                    statement = "我叫徐金朔",
+                    value = "徐金朔",
+                    question = "我叫什么？",
+                    answer = "徐金朔",
+                    pendingDrafts = listOf(
+                        SkyPending("我", "我的猫叫咪咪", "咪咪", "我的猫叫什么名字？", "咪咪", "猫的名字"),
+                        SkyPending("我", "我叫徐金朔", "徐金朔", "我叫什么？", "徐金朔", "名字"),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun downloadZh() {
         paparazzi.snapshot { SetupFrame(downloadSample("zh")) }
     }
@@ -188,7 +225,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.17",
+        versionName = "0.1.18",
     )
 
     private fun consolidateSample(lang: String) = sample().copy(

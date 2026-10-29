@@ -2,6 +2,7 @@ package com.lorabge.memory
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -106,5 +107,17 @@ class FactNoticeTest {
             listOf("佐雷公司成立于1979年。"),
         )
         assertEquals(listOf("我的猫猫叫咪咪"), pending)
+    }
+
+    @Test
+    fun twoTaughtFactsBothStayUntilEachIsStored() {
+        val cat = FactNotice.draft("我的猫叫咪咪")
+        val name = FactNotice.draft("我叫徐金朔")
+        assertNotNull(cat)
+        assertNotNull(name)
+        val waiting = pendingDrafts(listOf(cat!!, name!!), emptyList())
+        assertEquals(listOf("我的猫叫咪咪", "我叫徐金朔"), waiting.map { it.statement })
+        val afterName = pendingDrafts(listOf(cat, name), listOf(name.statement))
+        assertEquals(listOf(cat.statement), afterName.map { it.statement })
     }
 }

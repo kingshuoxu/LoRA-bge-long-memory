@@ -238,7 +238,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.17"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.18"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -247,6 +247,26 @@ private fun PhoneApp(
     }
     val freshExperts = remember(tick, sessionGate) { NebulaGraph.sessionNew(store) }
     val nebulaJson = remember(tick, lang, freshExperts) { NebulaGraph.build(store, lang, freshExperts) }
+    val waiting = remember(tick, statement, entity, value, question, answer, attr, experts) {
+        val form = if (statement.isBlank()) {
+            null
+        } else {
+            FactDraft(entity, attr, statement, value, question, answer)
+        }
+        gatherPendingDrafts(store, experts.flatMap { it.facts }, form)
+    }
+    LaunchedEffect(trainSnap.state, tick) {
+        if (trainSnap.state != "done" || statement.isBlank()) return@LaunchedEffect
+        val stored = experts.flatMap { it.facts }
+        if (pendingFactLines(listOf(statement), stored).isNotEmpty()) return@LaunchedEffect
+        val next = waiting.firstOrNull { pendingFactLines(listOf(it.statement), stored).isNotEmpty() } ?: return@LaunchedEffect
+        entity = next.entity
+        attr = next.attr
+        statement = next.statement
+        value = next.value
+        question = next.question
+        answer = next.answer
+    }
     val state = SkyState(
         lang = lang,
         tab = tab,
@@ -291,17 +311,9 @@ private fun PhoneApp(
         train = trainSnap,
         nebulaCanvas = nebulaCanvas,
         e2e = e2e,
-        pendingFacts = remember(tick, statement, experts) {
-            val noted = ArrayList<String>()
-            if (statement.isNotBlank()) noted.add(statement)
-            for (conv in store.listConversations()) {
-                val full = store.loadConversation(conv.id) ?: continue
-                for (message in full.messages) {
-                    if (message.role != "user") continue
-                    for (drafted in FactNotice.drafts(message.content)) noted.add(drafted.statement)
-                }
-            }
-            pendingFactLines(noted, experts.flatMap { it.facts })
+        pendingFacts = waiting.map { it.statement },
+        pendingDrafts = waiting.map {
+            SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr)
         },
     )
     SkyFrame(state) { event ->
@@ -473,6 +485,32 @@ private fun PhoneApp(
                 "answer" -> answer = event.text
             }
             is SkyEvent.Force -> force = event.on
+            is SkyEvent.FocusPending -> {
+                val draft = waiting.firstOrNull { it.statement == event.statement } ?: return@SkyFrame
+                entity = draft.entity
+                attr = draft.attr
+                statement = draft.statement
+                value = draft.value
+                question = draft.question
+                answer = draft.answer
+            }
+            is SkyEvent.TrainPending -> {
+                val draft = waiting.firstOrNull { it.statement == event.statement } ?: return@SkyFrame
+                entity = draft.entity
+                attr = draft.attr
+                statement = draft.statement
+                value = draft.value
+                question = draft.question
+                answer = draft.answer
+                val qa = if (draft.question.isBlank()) emptyList() else listOf(draft.question to draft.answer.ifBlank { draft.value })
+                TrainService.writeReviewed(
+                    store,
+                    ReviewedFact(draft.entity.trim(), draft.statement.trim(), draft.value.trim(), qa, emptyList(), attr = draft.attr.trim(), selected = true),
+                    force,
+                )
+                onTrain()
+                tick++
+            }
             SkyEvent.Train -> {
                 if (entity.isBlank() || statement.isBlank() || value.isBlank()) {
                     val job = File(store.trainDir, "job.json")
@@ -667,6 +705,30 @@ internal fun pendingFactLines(noted: List<String>, stored: List<String>): List<S
             other == bare || other.contains(bare) || bare.contains(other)
         }
     }
+}
+
+internal fun pendingDrafts(drafts: List<FactDraft>, stored: List<String>): List<FactDraft> {
+    val allowed = pendingFactLines(drafts.map { it.statement }, stored)
+    val seen = HashSet<String>()
+    val out = ArrayList<FactDraft>()
+    for (line in allowed) {
+        val draft = drafts.firstOrNull { it.statement.trim() == line } ?: continue
+        if (seen.add(line)) out.add(draft)
+    }
+    return out
+}
+
+internal fun gatherPendingDrafts(store: MemoryStore, stored: List<String>, form: FactDraft?): List<FactDraft> {
+    val noted = ArrayList<FactDraft>()
+    for (conv in store.listConversations()) {
+        val full = store.loadConversation(conv.id) ?: continue
+        for (message in full.messages) {
+            if (message.role != "user") continue
+            noted.addAll(FactNotice.drafts(message.content))
+        }
+    }
+    if (form != null && form.statement.isNotBlank()) noted.add(form)
+    return pendingDrafts(noted, stored)
 }
 
 internal fun lastRouteJson(query: String, hit: RouteHit, grounded: GroundedReply?): String {
