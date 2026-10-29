@@ -186,6 +186,7 @@ data class SkyState(
     val pendingFacts: List<String> = emptyList(),
     val pendingDrafts: List<SkyPending> = emptyList(),
     val batchItems: List<SkyBatchItem> = emptyList(),
+    val editorOpen: Boolean = false,
     val nebulaCanvas: Boolean = false,
     val e2e: Boolean = false,
 )
@@ -1354,9 +1355,16 @@ private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         state.pendingDrafts.map { it.statement to "" }
     }
     val busy = trainActionsOpen(state.training, shownTrain(state))
-    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { contentDescription = "pendingQueue" }) {
+    Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 8.dp).semantics { contentDescription = "pendingQueue" }) {
+        val done = rows.count { it.second == "done" }
+        val open = rows.size - done
+        val heading = if (rows.isNotEmpty() && open == 0) {
+            "${skyText(state.lang, "batchDone")} · $done"
+        } else {
+            "${skyText(state.lang, "pendingHead")} · ${if (state.batchItems.isEmpty()) state.pendingDrafts.size else open}"
+        }
         Text(
-            "${skyText(state.lang, "pendingHead")} · ${rows.size}",
+            heading,
             color = Muted,
             fontSize = 13.sp,
             modifier = Modifier.padding(bottom = 8.dp),
@@ -1376,19 +1384,25 @@ private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         }
         rows.forEachIndexed { index, (statement, status) ->
             val selected = statement.trim() == state.statement.trim()
+            val expanded = state.editorOpen && selected && !busy && status != "done"
             Column(
                 Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
-                    .background(if (selected) SurfaceHi else Surface, RoundedCornerShape(14.dp))
-                    .clickable { onEvent(SkyEvent.FocusPending(statement)) }
+                    .background(if (selected && expanded) SurfaceHi else Surface, RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
                     .semantics { contentDescription = "pending-$index" },
             ) {
-                Text(statement, color = Ink, fontSize = 15.sp, lineHeight = 22.sp)
+                Text(
+                    statement,
+                    color = Ink,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    modifier = Modifier.clickable { onEvent(SkyEvent.FocusPending(statement)) },
+                )
                 if (status.isNotBlank()) {
                     Text(batchStatusText(state.lang, status), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-                } else if (!busy) {
+                } else if (!busy && !expanded) {
                     Text(
                         skyText(state.lang, "train"),
                         color = CanvasBg,
@@ -1399,6 +1413,9 @@ private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                             .clickable { onEvent(SkyEvent.TrainPending(statement)) }
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
+                }
+                if (expanded) {
+                    FactCard(state, onEvent, showActions = true, embedded = true)
                 }
             }
         }
@@ -1423,10 +1440,10 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         val snap = shownTrain(state)
         val chartLoss = lossChartValues(snap, state.loss)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            if (state.pendingDrafts.size >= 2 || state.batchItems.isNotEmpty()) {
+            val multi = state.pendingDrafts.size >= 2 || state.batchItems.size >= 2
+            if (multi) {
                 PendingQueue(state, onEvent)
-            }
-            if (state.statement.isBlank() && state.entity.isBlank()) {
+            } else if (state.statement.isBlank() && state.entity.isBlank()) {
                 Text(
                     skyText(state.lang, "stage.pending"),
                     color = Muted,
@@ -1473,27 +1490,30 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             }
         }
         if (trainActionsOpen(state.training, snap)) {
-            TrainActionRow(state, onEvent)
+            val running = state.training || snap.state == "running"
+            TrainActionRow(state, onEvent, showConfirm = !running)
         }
     }
 }
 
 @Composable
-private fun TrainActionRow(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+private fun TrainActionRow(state: SkyState, onEvent: (SkyEvent) -> Unit, showConfirm: Boolean) {
     Row(
         Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(
-            skyText(state.lang, "train"),
-            color = CanvasBg,
-            fontSize = 15.sp,
-            modifier = Modifier
-                .background(Ink, Pill)
-                .clickable { onEvent(SkyEvent.Train) }
-                .semantics { contentDescription = "confirmTrain" }
-                .padding(vertical = 10.dp, horizontal = 14.dp),
-        )
+        if (showConfirm) {
+            Text(
+                skyText(state.lang, "train"),
+                color = CanvasBg,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .background(Ink, Pill)
+                    .clickable { onEvent(SkyEvent.Train) }
+                    .semantics { contentDescription = "confirmTrain" }
+                    .padding(vertical = 10.dp, horizontal = 14.dp),
+            )
+        }
         Text(
             skyText(state.lang, "cancel"),
             color = Ink,
@@ -1591,13 +1611,16 @@ private fun StageTimeline(state: SkyState) {
 }
 
 @Composable
-private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit, showActions: Boolean) {
-    Column(
+private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit, showActions: Boolean, embedded: Boolean = false) {
+    val frame = if (embedded) {
+        Modifier.fillMaxWidth().padding(top = 12.dp)
+    } else {
         Modifier.fillMaxWidth().padding(top = 8.dp)
             .height(IntrinsicSize.Min)
             .background(Surface, RoundedCornerShape(16.dp))
-            .border(1.dp, Color(0x2EC6D6EE), RoundedCornerShape(16.dp)),
-    ) {
+            .border(1.dp, Color(0x2EC6D6EE), RoundedCornerShape(16.dp))
+    }
+    Column(frame) {
         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             Box(Modifier.width(2.dp).fillMaxHeight().background(Hair))
             Column(Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

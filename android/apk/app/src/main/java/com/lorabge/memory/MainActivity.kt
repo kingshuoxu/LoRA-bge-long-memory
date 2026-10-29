@@ -199,6 +199,7 @@ private fun PhoneApp(
     var question by remember { mutableStateOf("") }
     var answer by remember { mutableStateOf("") }
     var attr by remember { mutableStateOf("") }
+    var editorOpen by remember { mutableStateOf(false) }
     var force by remember { mutableStateOf(false) }
     var waitSeconds by remember { mutableIntStateOf(0) }
     val statusFile = File(store.trainDir, "status.json")
@@ -345,6 +346,7 @@ private fun PhoneApp(
         batchItems = (savedBatch?.let { batchMarks(it, trainSnap.state) } ?: emptyList()).map { (line, mark) ->
             SkyBatchItem(line, mark)
         },
+        editorOpen = editorOpen,
     )
     SkyFrame(state) { event ->
         when (event) {
@@ -523,6 +525,7 @@ private fun PhoneApp(
                 value = draft.value
                 question = draft.question
                 answer = draft.answer
+                editorOpen = true
             }
             is SkyEvent.TrainPending -> {
                 val draft = waiting.firstOrNull { it.statement == event.statement } ?: return@SkyFrame
@@ -538,6 +541,7 @@ private fun PhoneApp(
                 question = draft.question
                 answer = draft.answer
                 startReviewed(store, listOf(draft.toReviewed()), force)
+                editorOpen = false
                 onTrain()
                 tick++
             }
@@ -555,6 +559,7 @@ private fun PhoneApp(
                     SavedBatch(groups.map { group -> group.map { it.statement } }, 0, "running"),
                 )
                 TrainService.writeReviewedList(store, groups[0], force)
+                editorOpen = false
                 onTrain()
                 tick++
             }
