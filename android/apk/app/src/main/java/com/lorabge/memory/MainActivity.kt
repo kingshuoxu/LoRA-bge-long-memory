@@ -266,6 +266,14 @@ private fun PhoneApp(
             tick++
             return@LaunchedEffect
         }
+        if (stuck != null && live.state != "running") {
+            val collapsed = collapseSavedBatch(stuck)
+            if (collapsed.groups != stuck.groups) {
+                TrainBatchStore.write(store, collapsed)
+                tick++
+                return@LaunchedEffect
+            }
+        }
         val batch = TrainBatchStore.read(store)
         if (batch != null && batch.phase == "running" && trainSnap.state == "error") {
             TrainBatchStore.write(store, batch.copy(phase = "error"))
@@ -347,7 +355,7 @@ private fun PhoneApp(
         e2e = e2e,
         pendingFacts = waiting.map { it.statement },
         pendingDrafts = waiting.map {
-            SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr)
+            SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr, it.merged)
         },
         batchItems = (savedBatch?.let { batchMarks(it, trainSnap.state) } ?: emptyList()).map { (line, mark) ->
             SkyBatchItem(line, mark)
@@ -867,9 +875,69 @@ internal fun dedupePendingFacts(drafts: List<FactDraft>): List<FactDraft> {
     val out = ArrayList<FactDraft>()
     for (draft in drafts) {
         val at = out.indexOfFirst { samePendingFact(it, draft) }
-        if (at < 0) out.add(draft) else out[at] = preferPendingFact(out[at], draft)
+        if (at < 0) {
+            out.add(draft.copy(merged = draft.merged.coerceAtLeast(1)))
+        } else {
+            val kept = preferPendingFact(out[at], draft)
+            val count = out[at].merged.coerceAtLeast(1) + draft.merged.coerceAtLeast(1)
+            out[at] = kept.copy(merged = count)
+        }
     }
     return out
+}
+
+internal fun strongerBatchStatus(first: String, second: String): String {
+    val rank = mapOf("" to 0, "done" to 1, "queued" to 2, "error" to 3, "waiting" to 4, "running" to 5)
+    return if ((rank[second] ?: 0) > (rank[first] ?: 0)) second else first
+}
+
+internal fun mergedCaption(lang: String, count: Int): String {
+    if (count <= 1) return ""
+    return if (lang == "en") "Merged $count" else "已合并 $count 条"
+}
+
+/** The queue on screen. Raw rows from an older batch still collapse here. */
+internal fun collapseShownPending(rows: List<SkyPending>): List<SkyPending> {
+    val drafts = rows.map {
+        FactDraft(it.entity, it.attr, it.statement, it.value, it.question, it.answer, it.merged.coerceAtLeast(1))
+    }
+    return dedupePendingFacts(drafts).map {
+        SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr, it.merged)
+    }
+}
+
+internal fun collapseShownBatch(items: List<SkyBatchItem>): List<SkyBatchItem> {
+    val drafts = ArrayList<FactDraft>()
+    val status = ArrayList<String>()
+    for (item in items) {
+        val parsed = FactNotice.draft(item.statement.trim())
+        val draft = (parsed ?: FactDraft("", "", item.statement.trim(), item.statement.trim(), "", ""))
+            .copy(merged = item.merged.coerceAtLeast(1))
+        val at = drafts.indexOfFirst { samePendingFact(it, draft) }
+        if (at < 0) {
+            drafts.add(draft)
+            status.add(item.status)
+        } else {
+            val kept = preferPendingFact(drafts[at], draft)
+            val count = drafts[at].merged.coerceAtLeast(1) + draft.merged.coerceAtLeast(1)
+            drafts[at] = kept.copy(merged = count)
+            status[at] = strongerBatchStatus(status[at], item.status)
+        }
+    }
+    return drafts.mapIndexed { index, draft -> SkyBatchItem(draft.statement, status[index], draft.merged) }
+}
+
+internal fun collapseStatementGroup(lines: List<String>): List<String> {
+    val drafts = lines.map { line ->
+        FactNotice.draft(line.trim()) ?: FactDraft("", "", line.trim(), line.trim(), "", "")
+    }
+    return dedupePendingFacts(drafts).map { it.statement }
+}
+
+internal fun collapseSavedBatch(batch: SavedBatch): SavedBatch {
+    val groups = batch.groups.map { collapseStatementGroup(it) }.filter { it.isNotEmpty() }
+    if (groups.isEmpty()) return batch
+    return batch.copy(groups = groups, index = batch.index.coerceIn(0, groups.lastIndex))
 }
 
 internal fun gatherPendingDrafts(store: MemoryStore, stored: List<String>, form: FactDraft?): List<FactDraft> {
@@ -881,7 +949,7 @@ internal fun gatherPendingDrafts(store: MemoryStore, stored: List<String>, form:
             noted.addAll(FactNotice.drafts(message.content))
         }
     }
-    if (form != null && form.statement.isNotBlank()) noted.add(form)
+    if (form != null && form.statement.isNotBlank() && noted.none { samePendingFact(it, form) }) noted.add(form)
     return pendingDrafts(noted, stored)
 }
 

@@ -7,6 +7,7 @@ data class FactDraft(
     val value: String,
     val question: String,
     val answer: String,
+    val merged: Int = 1,
 )
 
 /** 一句新事实只在回复下面留一行小字,巩固页再去训练。问句和回答由这句话自己填上。 */

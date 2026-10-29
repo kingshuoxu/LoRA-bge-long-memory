@@ -132,9 +132,10 @@ data class SkyPending(
     val question: String,
     val answer: String,
     val attr: String = "",
+    val merged: Int = 1,
 )
 
-data class SkyBatchItem(val statement: String, val status: String)
+data class SkyBatchItem(val statement: String, val status: String, val merged: Int = 1)
 
 data class SkyState(
     val lang: String = "zh",
@@ -1360,21 +1361,16 @@ private fun batchWaitingNow(state: SkyState, snap: TrainSnapshot): Boolean {
 }
 
 @Composable
-private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
-    val rows = if (state.batchItems.isNotEmpty()) {
-        state.batchItems.map { it.statement to it.status }
-    } else {
-        state.pendingDrafts.map { it.statement to "" }
-    }
+private fun PendingQueue(state: SkyState, rows: List<SkyBatchItem>, onEvent: (SkyEvent) -> Unit) {
     val snap = shownTrain(state)
     val busy = batchRunningNow(state, snap) || batchWaitingNow(state, snap)
     Column(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 8.dp).semantics { contentDescription = "pendingQueue" }) {
-        val done = rows.count { it.second == "done" }
+        val done = rows.count { it.status == "done" }
         val open = rows.size - done
         val heading = if (rows.isNotEmpty() && open == 0) {
             "${skyText(state.lang, "batchDone")} · $done"
         } else {
-            "${skyText(state.lang, "pendingHead")} · ${if (state.batchItems.isEmpty()) state.pendingDrafts.size else open}"
+            "${skyText(state.lang, "pendingHead")} · $open"
         }
         Text(
             heading,
@@ -1382,53 +1378,24 @@ private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             fontSize = 13.sp,
             modifier = Modifier.padding(bottom = 8.dp),
         )
-        if (!busy && state.pendingDrafts.size >= 2 && state.batchItems.isEmpty()) {
-            Text(
-                "${skyText(state.lang, "trainAll")} (${state.pendingDrafts.size})",
-                color = CanvasBg,
-                fontSize = 15.sp,
-                modifier = Modifier
-                    .padding(bottom = 10.dp)
-                    .background(Ink, Pill)
-                    .clickable { onEvent(SkyEvent.TrainAll) }
-                    .semantics { contentDescription = "trainAll" }
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            )
-        }
-        rows.forEachIndexed { index, (statement, status) ->
-            val selected = statement.trim() == state.statement.trim()
-            val expanded = state.editorOpen && selected && !busy && status != "done"
+        rows.forEachIndexed { index, row ->
+            val canTrain = !busy && row.status.isBlank()
             Column(
                 Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
-                    .background(if (selected && expanded) SurfaceHi else Surface, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .background(Surface, RoundedCornerShape(14.dp))
+                    .clickable(enabled = canTrain) { onEvent(SkyEvent.TrainPending(row.statement)) }
+                    .padding(horizontal = 12.dp, vertical = 12.dp)
                     .semantics { contentDescription = "pending-$index" },
             ) {
-                Text(
-                    statement,
-                    color = Ink,
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp,
-                    modifier = Modifier.clickable { onEvent(SkyEvent.FocusPending(statement)) },
-                )
-                if (status.isNotBlank()) {
-                    Text(batchStatusText(state.lang, status), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-                } else if (!busy && !expanded) {
-                    Text(
-                        skyText(state.lang, "train"),
-                        color = CanvasBg,
-                        fontSize = 14.sp,
-                        modifier = Modifier
-                            .padding(top = 8.dp)
-                            .background(Ink, Pill)
-                            .clickable { onEvent(SkyEvent.TrainPending(statement)) }
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
+                Text(row.statement, color = Ink, fontSize = 15.sp, lineHeight = 22.sp)
+                val merged = mergedCaption(state.lang, row.merged)
+                if (merged.isNotEmpty()) {
+                    Text(merged, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 }
-                if (expanded) {
-                    FactCard(state, onEvent, showActions = true, embedded = true)
+                if (row.status.isNotBlank()) {
+                    Text(batchStatusText(state.lang, row.status), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                 }
             }
         }
@@ -1455,6 +1422,14 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         val chartLoss = lossChartValues(snap, state.loss)
         val runningNow = batchRunningNow(state, snap)
         val waitingNow = batchWaitingNow(state, snap)
+        val shownPending = collapseShownPending(state.pendingDrafts)
+        val shownBatch = collapseShownBatch(state.batchItems)
+        val queueRows = if (shownBatch.isNotEmpty()) {
+            shownBatch
+        } else {
+            shownPending.map { SkyBatchItem(it.statement, "", it.merged) }
+        }
+        val showTrainAll = !runningNow && !waitingNow && shownBatch.isEmpty() && shownPending.size >= 2 && snap.state != "error"
         val showRun = chartLoss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error"
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             if (showRun) {
@@ -1479,9 +1454,9 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 }
                 Spacer(Modifier.height(8.dp))
             }
-            val multi = state.pendingDrafts.size >= 2 || state.batchItems.size >= 2
+            val multi = queueRows.size >= 2
             if (multi) {
-                PendingQueue(state, onEvent)
+                PendingQueue(state, queueRows, onEvent)
             } else if (state.statement.isBlank() && state.entity.isBlank()) {
                 Text(
                     skyText(state.lang, "stage.pending"),
@@ -1505,8 +1480,21 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     )
                 }
             }
+            Spacer(Modifier.height(24.dp))
         }
-        if (waitingNow) {
+        if (showTrainAll) {
+            Text(
+                "${skyText(state.lang, "trainAll")} (${shownPending.size})",
+                color = CanvasBg,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 8.dp)
+                    .background(Ink, Pill)
+                    .clickable { onEvent(SkyEvent.TrainAll) }
+                    .semantics { contentDescription = "trainAll" }
+                    .padding(vertical = 10.dp, horizontal = 14.dp),
+            )
+        } else if (waitingNow) {
             Text(
                 skyText(state.lang, "trainNow"),
                 color = CanvasBg,

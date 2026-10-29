@@ -78,7 +78,6 @@ class SkyShotTest {
             SkyFrame(
                 fourPending().copy(
                     training = true,
-                    status = "巩固中",
                     loss = listOf(1.2f, 0.4f),
                     train = TrainSnapshot(
                         state = "running",

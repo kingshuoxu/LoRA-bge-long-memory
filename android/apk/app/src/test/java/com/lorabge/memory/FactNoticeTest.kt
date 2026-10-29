@@ -134,6 +134,7 @@ class FactNoticeTest {
         assertNotNull(catAgain)
         val waiting = pendingDrafts(listOf(cat!!, name!!, nameAgain!!, catAgain!!), emptyList())
         assertEquals(listOf("我的猫叫咪咪", "我叫徐金朔"), waiting.map { it.statement })
+        assertEquals(listOf(2, 2), waiting.map { it.merged })
         assertEquals(listOf("咪咪", "徐金朔"), waiting.map { it.value })
         assertTrue(waiting.all { it.entity == "我" })
         val groups = planTrainGroups(
@@ -142,5 +143,66 @@ class FactNoticeTest {
         assertEquals(1, groups.size)
         val store = MemoryStore(Files.createTempDirectory("near-self").toFile())
         assertEquals(SELF_EXPERT, store.expertNameFor(groups[0], "expert_x"))
+    }
+
+    @Test
+    fun factsAlreadySavedOnThePhoneCollapseToo() {
+        val store = MemoryStore(Files.createTempDirectory("saved-near").toFile())
+        val now = "2026-10-29T00:00:00Z"
+        store.saveConversation(
+            Conversation(
+                "c1",
+                "猫",
+                now,
+                now,
+                listOf(
+                    ChatMessage("user", "我的猫叫咪咪"),
+                    ChatMessage("assistant", "好的，记住了，你的猫叫咪咪。"),
+                    ChatMessage("user", "我叫徐金朔"),
+                ),
+            ),
+        )
+        store.saveConversation(
+            Conversation(
+                "c2",
+                "又说一遍",
+                now,
+                now,
+                listOf(
+                    ChatMessage("user", "我是徐金朔。"),
+                    ChatMessage("user", "我的猫猫叫咪咪"),
+                ),
+            ),
+        )
+        val waiting = gatherPendingDrafts(store, emptyList(), FactDraft("我", "名字", "我叫徐金朔", "徐金朔", "我叫什么？", "徐金朔"))
+        assertEquals(setOf("我的猫叫咪咪", "我叫徐金朔"), waiting.map { it.statement }.toSet())
+        assertEquals(2, waiting.size)
+        assertTrue(waiting.all { it.merged == 2 })
+        val shown = collapseShownPending(
+            waiting.map { SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr, it.merged) },
+        )
+        assertEquals(setOf("我的猫叫咪咪", "我叫徐金朔"), shown.map { it.statement }.toSet())
+        assertEquals(listOf(2, 2), shown.map { it.merged })
+        val batch = collapseShownBatch(
+            listOf(
+                SkyBatchItem("我的猫叫咪咪", "running"),
+                SkyBatchItem("我叫徐金朔", "queued"),
+                SkyBatchItem("我是徐金朔。", "queued"),
+                SkyBatchItem("我的猫猫叫咪咪", "queued"),
+            ),
+        )
+        assertEquals(listOf("我的猫叫咪咪" to "running", "我叫徐金朔" to "queued"), batch.map { it.statement to it.status })
+        assertEquals(listOf(2, 2), batch.map { it.merged })
+        val saved = SavedBatch(
+            listOf(listOf("我的猫叫咪咪", "我叫徐金朔", "我是徐金朔。", "我的猫猫叫咪咪")),
+            0,
+            "done",
+        )
+        assertEquals(
+            listOf(listOf("我的猫叫咪咪", "我叫徐金朔")),
+            collapseSavedBatch(saved).groups,
+        )
+        assertEquals("", mergedCaption("zh", 1))
+        assertEquals("已合并 2 条", mergedCaption("zh", 2))
     }
 }
