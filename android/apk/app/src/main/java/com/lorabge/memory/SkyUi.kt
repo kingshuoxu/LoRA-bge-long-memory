@@ -55,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -658,7 +659,7 @@ private fun Drawer(state: SkyState, top: Dp, onEvent: (SkyEvent) -> Unit) {
                 Text(skyText(state.lang, "emptyConv"), color = Muted)
             }
             LazyColumn {
-                items(state.conversations) { conversation ->
+                items(state.conversations, key = { it.id }) { conversation ->
                     val title = conversation.title.ifBlank { skyText(state.lang, "newChat") }.let {
                         if (it == "新对话") skyText(state.lang, "newChat") else it
                     }
@@ -998,8 +999,8 @@ internal fun SkyIcon(kind: String, tint: Color, modifier: Modifier = Modifier) {
 @Composable
 internal fun MilkyWay(paused: Boolean, rich: Boolean = false) {
     var phase by remember { mutableFloatStateOf(0.4f) }
-    LaunchedEffect(paused) {
-        if (paused) return@LaunchedEffect
+    LaunchedEffect(paused, rich) {
+        if (paused || !rich) return@LaunchedEffect
         while (true) {
             kotlinx.coroutines.delay(48)
             phase += 0.004f
@@ -1384,6 +1385,7 @@ private fun PendingQueue(state: SkyState, rows: List<SkyBatchItem>, onEvent: (Sk
         )
         rows.forEachIndexed { index, row ->
             val canTrain = !busy && row.status.isBlank()
+            key(row.statement) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -1401,6 +1403,7 @@ private fun PendingQueue(state: SkyState, rows: List<SkyBatchItem>, onEvent: (Sk
                 if (row.status.isNotBlank()) {
                     Text(batchStatusText(state.lang, row.status), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                 }
+            }
             }
         }
     }
@@ -1837,7 +1840,7 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             Spacer(Modifier.height(8.dp))
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(state.experts) { expert ->
+            items(state.experts, key = { it.name }) { expert ->
                 Row(
                     Modifier
                         .fillMaxWidth()

@@ -15,7 +15,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  #include <thread>
  
  #include "finetune_ops/core/tokenizer_bpe.h"
-@@ -27,16 +31,21 @@
+@@ -27,16 +31,22 @@
      std::string jsonl_train;
      std::string jsonl_valid;
      std::string jsonl_test;
@@ -23,6 +23,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +    std::string output_gguf; // llama.cpp LoRA adapter written next to the bin
 +    std::string check_text;  // encode this string and exit, for tokenizer parity checks
      int seq_len = 1024;
++    int seq_cap = 0; // 0 keeps each fact; a positive cap keeps the answer and drops prompt tokens
      int batch_size = 1;
      int grad_accum_steps = 1; // gradient accumulation steps
      int max_steps = -1; // -1 means auto-run one epoch
@@ -50,7 +51,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
      std::string dump_first_batch_json;
      bool dump_only = false;
      std::string base_weight_storage = "auto"; // auto/native: preserve F16/BF16 frozen base weights; fp32: promote all
-@@ -63,10 +78,14 @@
+@@ -63,10 +79,15 @@
          else if (k == "--jsonl_train") args.jsonl_train = get("--jsonl_train");
          else if (k == "--jsonl_valid") args.jsonl_valid = get("--jsonl_valid");
          else if (k == "--jsonl_test") args.jsonl_test = get("--jsonl_test");
@@ -58,6 +59,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +        else if (k == "--output_gguf") args.output_gguf = get("--output_gguf");
 +        else if (k == "--check_text") args.check_text = get("--check_text");
          else if (k == "--seq_len") args.seq_len = std::stoi(get("--seq_len"));
++        else if (k == "--seq_cap") args.seq_cap = std::stoi(get("--seq_cap"));
          else if (k == "--batch_size") args.batch_size = std::stoi(get("--batch_size"));
          else if (k == "--grad_accum_steps") args.grad_accum_steps = std::stoi(get("--grad_accum_steps"));
          else if (k == "--max_steps") args.max_steps = std::stoi(get("--max_steps"));
@@ -193,7 +195,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  }
  
  static void dump_batch_json(const Batch& batch, const std::string& path) {
-@@ -209,6 +333,284 @@
+@@ -209,6 +333,289 @@
      out << "\n}\n";
  }
  
@@ -408,7 +410,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +}
 +
 +static int write_fact_ids_jsonl(QwenBPETokenizer& tokenizer, const std::string& facts_path,
-+                                const std::string& out_path) {
++                                const std::string& out_path, int seq_cap) {
 +    std::ifstream in(facts_path);
 +    if (!in.is_open()) throw std::runtime_error("failed to open facts jsonl: " + facts_path);
 +    std::ofstream out(out_path);
@@ -416,7 +418,12 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +    int longest = 0;
 +    int rows = 0;
 +    std::string line;
-+    auto dump = [&](const std::vector<int>& ids, const std::vector<int>& mask) {
++    auto dump = [&](std::vector<int> ids, std::vector<int> mask) {
++        if (seq_cap > 0 && static_cast<int>(ids.size()) > seq_cap) {
++            const int drop = static_cast<int>(ids.size()) - seq_cap;
++            ids.erase(ids.begin(), ids.begin() + drop);
++            mask.erase(mask.begin(), mask.begin() + drop);
++        }
 +        out << "{\"ids\":[";
 +        for (size_t i = 0; i < ids.size(); ++i) {
 +            if (i) out << ",";
@@ -470,7 +477,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +            cursor = ak + 3;
 +        }
 +    }
-+    std::cout << "[facts] rows=" << rows << " max_len=" << longest << std::endl;
++    std::cout << "[facts] rows=" << rows << " max_len=" << longest << " seq_cap=" << seq_cap << std::endl;
 +    std::cout << "[load] model" << std::endl;
 +    return longest;
 +}
@@ -507,7 +514,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +            QwenBPETokenizer tokenizer(tok_cfg);
 +            tokenizer.load();
 +            const std::string tokenized = args.output_dir + "/train_ids.jsonl";
-+            const int longest = write_fact_ids_jsonl(tokenizer, args.facts_jsonl, tokenized);
++            const int longest = write_fact_ids_jsonl(tokenizer, args.facts_jsonl, tokenized, args.seq_cap);
 +            if (longest <= 0 || longest > 256) {
 +                throw std::runtime_error("fact sequences must be 1..256 tokens, got " + std::to_string(longest));
 +            }
@@ -582,6 +589,18 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
              // Forward. The streaming loss is mathematically equivalent to
              // dense LM CE over all non-ignore shifted labels. In full_streaming
              // mode those labels cover every shifted token; in selected mode
+@@ -474,6 +474,11 @@
+             // Backward (with gradient accumulation)
+             loss->backward();
++            // `loss` owns the tape. force_cleanup at the optimizer step cannot
++            // free it, so micro 4 was still holding every forward when the
++            // process was killed. Drop the graph before the next sample.
++            loss.reset();
++            MemoryManager::instance().force_cleanup();
+ 
+             accum_counter++;
+             
+             // Update parameters once accumulation target is met
 @@ -538,6 +980,15 @@
                  MemoryManager::instance().force_cleanup();
                  if (((step + 1) % 20) == 0) MemoryManager::instance().clear_unused_memory();

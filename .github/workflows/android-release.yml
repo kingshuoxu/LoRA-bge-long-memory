@@ -76,7 +76,7 @@ jobs:
       - name: Write the update manifest
         run: |
           set -eu
-          TAG=android-v0.1.24
+          TAG=android-v0.1.25
           STAGE=android/out/release
           mkdir -p "$STAGE"
           APK=android/apk/app/build/outputs/apk/debug/app-debug.apk
@@ -232,7 +232,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          TAG=android-v0.1.24
+          TAG=android-v0.1.25
           STAGE=android/out/release
           python3 - << 'PY'
           import hashlib, json, pathlib
@@ -240,14 +240,16 @@ jobs:
           meta = json.loads((stage / "update.json").read_text())
           apk = (stage / "app-debug.apk").read_bytes()
           digest = hashlib.sha256(apk).hexdigest()
-          assert meta["versionName"] == "0.1.24"
-          assert meta["versionCode"] == 1024
+          assert meta["versionName"] == "0.1.25"
+          assert meta["versionCode"] == 1025
           assert meta["sha256"] == digest
           assert meta["size"] == len(apk)
           sums = (stage / "SHA256SUMS").read_text().split()
           assert sums[0] == digest and sums[1] == "app-debug.apk"
           PY
           NOTES=$(cat << EOF
+          0.1.25 修 vivo 上巩固页一直闪。失败已经写在屏幕上时，状态文件每 350 毫秒被重写或读到半截，整页就暗一下再画回同一句「失败」。现在同一张失败卡不再重组。训练进程停住是因为每条样本的计算图没有放开，内存把训练进程杀掉了，页面只能写成「训练进程已经停住」。现在每条样本都放开计算图。1 个线程仍停住时，再改成每条都更新、句子最多 64、秩 8。
+
           0.1.24 把训练失败写成人话。不再出现训练程序的原文。失败时下面的按钮是「放弃」，不是「取消训练」。
 
           0.1.23 修巩固卡在「第 1/12 步 · 微批 4/8」。训练在 CPU 上，这一微批的原生计算没有返回，界面却一直写着训练中。现在 45 秒没有新的微批就改用 1 个 CPU 线程重试，再不行就显示失败和「重试」。关掉应用再打开，停住的训练进程会被清掉。
@@ -302,7 +304,7 @@ jobs:
 
           0.1.5 也修了巩固停在「这一步还在计算」。vivo X200 Pro 上这一步停了大约 41 分钟，页面只剩 Dataset 那一行（epochs=4 max_steps=8），步数和 loss 都没有。训练进程已经把数据集行打出来了，卡住的是后面第一次矩阵乘：OpenBLAS 交叉编译时按 Linux 打开了绑核，在手机上 sched_setaffinity 会把工作线程停住。这一版编译关掉绑核，每个微批开始就写出「第 1/8 步 · 微批 1/8」。超过 3 分钟没有新输出就记成失败，可以点「确认并训练」重试，或点「取消训练」。
 
-          从 0.1.4 起，安装包用同一把测试钥匙签名。0.1.24 的「检查更新」读 android-v* 发布和 update.json，不读 releases/latest。GitHub 失败再试上面的镜像；发布列表拿不到就按更新的标签读 update.json。下载可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。已经装了 0.1.4 的手机，这一次用浏览器安装，不要指望 0.1.4 自己检查更新。已经装了 0.1.6、0.1.7、0.1.8、0.1.9、0.1.10、0.1.11、0.1.12、0.1.13、0.1.14、0.1.15、0.1.16、0.1.17、0.1.18、0.1.19、0.1.20、0.1.21、0.1.22 或 0.1.23 的手机用应用里的检查更新即可。
+          从 0.1.4 起，安装包用同一把测试钥匙签名。0.1.25 的「检查更新」读 android-v* 发布和 update.json，不读 releases/latest。GitHub 失败再试上面的镜像；发布列表拿不到就按更新的标签读 update.json。下载可以续传并核对 SHA256，然后用系统安装器覆盖安装。模型和对话留在原地；清单里 SHA256 没变的模型文件不会重新下载。已经装了 0.1.4 的手机，这一次用浏览器安装，不要指望 0.1.4 自己检查更新。已经装了 0.1.6、0.1.7、0.1.8、0.1.9、0.1.10、0.1.11、0.1.12、0.1.13、0.1.14、0.1.15、0.1.16、0.1.17、0.1.18、0.1.19、0.1.20、0.1.21、0.1.22、0.1.23 或 0.1.24 的手机用应用里的检查更新即可。
 
           0.1.2、更早的包，以及标签上那份旧的 0.1.3，都是每次 CI 一把新的调试钥匙，签不上这一版。已经装过那些包的手机要先卸一次。卸载会清掉应用私有目录和 Android/data 里的模型、专家、对话和设置，下次打开会按 0.1.0 的清单重新下载。卸完装上这一版之后，以后的版本可以在应用里直接更新，不用再卸。
 
@@ -322,5 +324,5 @@ jobs:
           EOF
           )
           gh release delete "$TAG" --yes --cleanup-tag || true
-          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.24" --notes "$NOTES"
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.25" --notes "$NOTES"
           gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS" --clobber

@@ -165,10 +165,7 @@ private fun PhoneApp(
                 running.set(false)
             }
         }.start()
-        while (running.get()) {
-            delay(700)
-            tick++
-        }
+        while (running.get()) delay(200)
         tick++
     }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -203,7 +200,9 @@ private fun PhoneApp(
     var force by remember { mutableStateOf(true) }
     var waitSeconds by remember { mutableIntStateOf(0) }
     val statusFile = File(store.trainDir, "status.json")
-    val trainSnap = remember(tick) { parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty()) }
+    var trainSnap by remember {
+        mutableStateOf(parseTrainSnapshot(runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")))
+    }
     val training = trainSnap.state == "running"
     LaunchedEffect(generating, streaming) {
         if (!generating || streaming.isNotBlank()) {
@@ -218,17 +217,15 @@ private fun PhoneApp(
             waitSeconds = waited
         }
     }
-    // 训练在 :train 进程里写 status.json。点「确认并训练」时文件通常还没落盘，
-    // 只在已经是 running 时再 tick 会永远看不到步数。
+    // 训练在 :train 进程里写 status.json。空读和同一张失败卡不再整页重组。
     LaunchedEffect(statusFile.absolutePath) {
-        var seen = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+        var held = trainSnap
         while (true) {
             delay(350)
-            val raw = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault(seen)
-            if (raw != seen) {
-                seen = raw
-                tick++
-            }
+            val raw = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+            val next = acceptTrainStatus(held, raw) ?: continue
+            held = next
+            trainSnap = next
         }
     }
     val conversations = remember(tick) { store.listConversations() }
@@ -239,7 +236,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.24"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.25"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -258,24 +255,31 @@ private fun PhoneApp(
     }
     val savedBatch = remember(tick) { TrainBatchStore.read(store) }
     LaunchedEffect(trainSnap.state) {
-        if (trainSnap.state != "running") return@LaunchedEffect
-        while (true) {
-            delay(3000)
-            if (trainRunIsStale(trainSnap.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))) {
-                TrainService.markDead(store)
-                tick++
-                return@LaunchedEffect
+        if (trainSnap.state == "running") {
+            while (true) {
+                delay(3000)
+                val raw = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+                val now = parseTrainSnapshot(raw)
+                // A cut-off read is not a new state, and it must not kill the trainer.
+                if (now.state.isEmpty()) continue
+                if (shouldRemarkFailedTrain(now.state) &&
+                    trainRunIsStale(now.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))
+                ) {
+                    TrainService.markDead(store)
+                }
+                val after = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+                val afterSnap = parseTrainSnapshot(after)
+                if (afterSnap.state.isEmpty()) continue
+                val next = acceptTrainStatus(trainSnap, after)
+                if (next != null && next.state != "running") {
+                    trainSnap = next
+                    return@LaunchedEffect
+                }
+                if (!shouldRemarkFailedTrain(afterSnap.state)) return@LaunchedEffect
             }
         }
-    }
-    LaunchedEffect(trainSnap.state, tick) {
-        val live = parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty())
+        val live = trainSnap
         val stuck = TrainBatchStore.read(store)
-        if (trainRunIsStale(live.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))) {
-            TrainService.markDead(store)
-            tick++
-            return@LaunchedEffect
-        }
         if (shouldRecoverBatch(stuck, live.state)) {
             TrainBatchStore.clear(store)
             if (live.state == "waiting") statusFile.delete()
@@ -802,7 +806,8 @@ private fun armForeground(store: MemoryStore) {
     store.ensure()
     File(store.trainDir, "force").writeText("1")
     File(store.trainDir, "cancel").delete()
-    File(store.trainDir, "status.json").writeText(
+    writeTextAtomic(
+        File(store.trainDir, "status.json"),
         trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "抽取事实", ""),
     )
 }

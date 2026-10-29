@@ -143,8 +143,23 @@ class TrainProgressTest {
         assertFalse(microStalled(1_000, 1_000 + MICRO_STALL_MS, seenMicro = false))
         val second = lighterTrainRecipe(first)
         assertEquals(TrainRecipe(1, 2, 1), second)
-        assertEquals(null, lighterTrainRecipe(second!!))
+        val third = lighterTrainRecipe(second!!)
+        assertEquals(TrainRecipe(1, 1, 2, rank = 8, seqCap = 64), third)
+        assertEquals(null, lighterTrainRecipe(third!!))
         assertEquals("这一微批超过 45 秒没有新输出，改用 1 个 CPU 线程重试", trainRetryDetail(1))
+        assertEquals(trainRetryDetail(1), trainRetryDetail(second))
+        assertTrue(trainRetryDetail(third).contains("句子收到 64"))
+        assertTrue(trainRetryDetail(third).contains("秩 8"))
+        assertTrue(trainRetryDetail(third).contains("计算图"))
+        val args = mutableListOf("--grad_accum_steps", "4", "--lora_r", "32", "--lora_alpha", "64")
+        applyTrainRecipe(args, third, 32)
+        assertEquals("1", args[args.indexOf("--grad_accum_steps") + 1])
+        assertEquals("8", args[args.indexOf("--lora_r") + 1])
+        assertEquals("16", args[args.indexOf("--lora_alpha") + 1])
+        assertEquals("64", args[args.indexOf("--seq_cap") + 1])
+        applyTrainRecipe(args, second, 32)
+        assertFalse(args.contains("--seq_cap"))
+        assertEquals("32", args[args.indexOf("--lora_r") + 1])
         assertFalse(trainRunIsStale("running", pidAlive = true, heartbeatAgeMs = 2_000))
         assertTrue(trainRunIsStale("running", pidAlive = false, heartbeatAgeMs = 0))
         assertTrue(trainRunIsStale("running", pidAlive = true, heartbeatAgeMs = TRAIN_HEARTBEAT_STALE_MS))
@@ -238,5 +253,54 @@ class TrainProgressTest {
         assertTrue(trainActionsOpen(false, TrainSnapshot(state = "error")))
         assertTrue(trainActionsOpen(true, TrainSnapshot()))
         assertFalse(trainActionsOpen(false, TrainSnapshot(state = "cancelled")))
+    }
+
+    @Test
+    fun failedStateEmitsNoRecompositionsOverFiveSeconds() {
+        val detail = trainDeadDetail()
+        val first = trainSnapshotJson("error", "train", 0, 0, 0, null, 0, detail, "")
+        var shown = acceptTrainStatus(TrainSnapshot(), first)!!
+        assertEquals("error", shown.state)
+        assertTrue(isSettledFailure(first))
+        assertFalse(shouldRemarkFailedTrain("error"))
+        assertTrue(shouldRemarkFailedTrain("running"))
+        var flips = 0
+        // The page polls every 350ms. Fifteen polls is a little over five seconds.
+        // Each poll is a torn read plus a rewrite that only moves the clock.
+        val polls = 15
+        for (i in 0 until polls) {
+            val samples = listOf(
+                "",
+                "{",
+                "{\"state\":\"err",
+                trainSnapshotJson(
+                    "error", "train", 0, 0, 0, null, i.toLong(), detail, "",
+                    microElapsedSec = i.toLong(),
+                ),
+                trainSnapshotJson("running", "train", 0, 0, 0, null, i.toLong(), "", ""),
+            )
+            for (raw in samples) {
+                val next = acceptTrainStatus(shown, raw)
+                if (next != null) {
+                    flips += 1
+                    shown = next
+                }
+            }
+        }
+        assertEquals(0, flips)
+        assertEquals("error", shown.state)
+        assertTrue(formatTrainProgress("zh", shown).contains("训练进程已经停住"))
+        val retry = trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "抽取事实", "")
+        val started = acceptTrainStatus(shown, retry)
+        assertEquals("running", started!!.state)
+        val later = trainSnapshotJson("running", "train", 0, 0, 4, null, 3, "抽取事实", "")
+        assertEquals(3L, acceptTrainStatus(started, later)!!.elapsedSec)
+        val dir = java.nio.file.Files.createTempDirectory("train-status").toFile()
+        val file = File(dir, "status.json")
+        writeTextAtomic(file, first)
+        assertEquals(first, file.readText())
+        assertFalse(File(dir, "status.json.tmp").exists())
+        writeTextAtomic(file, first)
+        assertEquals(first, file.readText())
     }
 }

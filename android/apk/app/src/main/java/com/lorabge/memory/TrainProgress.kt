@@ -1,6 +1,7 @@
 package com.lorabge.memory
 
 import org.json.JSONObject
+import java.io.File
 
 data class TrainSnapshot(
     val state: String = "",
@@ -104,17 +105,31 @@ const val MICRO_STALL_MS = 45_000L
 /** The service writes this file every couple of seconds. A frozen process stops. */
 const val TRAIN_HEARTBEAT_STALE_MS = 20_000L
 
-data class TrainRecipe(val threads: Int, val gradAccum: Int, val attempt: Int)
+data class TrainRecipe(
+    val threads: Int,
+    val gradAccum: Int,
+    val attempt: Int,
+    val rank: Int = 0,
+    val seqCap: Int = 0,
+)
 
-/** First try is already CPU. Two threads and a shorter accumulation so the tape cannot grow through micro 4. */
+/** First try is already CPU. Two threads, and the trainer drops the tape after every sample. */
 fun initialTrainRecipe(performanceThreads: Int): TrainRecipe {
     return TrainRecipe(threads = performanceThreads.coerceIn(1, 2), gradAccum = 4, attempt = 0)
 }
 
-/** A hung GEMM retries on a single CPU thread and frees the graph every two samples. */
+/**
+ * A hung step retries on one CPU thread. If that still dies, the next attempt
+ * updates every sample, caps the sequence, and shrinks the rank.
+ */
 fun lighterTrainRecipe(current: TrainRecipe): TrainRecipe? {
-    if (current.threads <= 1 && current.gradAccum <= 2) return null
-    return TrainRecipe(threads = 1, gradAccum = 2, attempt = current.attempt + 1)
+    if (current.threads > 1 || current.gradAccum > 2) {
+        return TrainRecipe(threads = 1, gradAccum = 2, attempt = current.attempt + 1)
+    }
+    if (current.gradAccum > 1 || current.seqCap <= 0) {
+        return TrainRecipe(threads = 1, gradAccum = 1, attempt = current.attempt + 1, rank = 8, seqCap = 64)
+    }
+    return null
 }
 
 fun microStalled(lastMicroMs: Long, nowMs: Long, seenMicro: Boolean, stallMs: Long = MICRO_STALL_MS): Boolean {
@@ -124,6 +139,106 @@ fun microStalled(lastMicroMs: Long, nowMs: Long, seenMicro: Boolean, stallMs: Lo
 
 fun trainRetryDetail(threads: Int): String {
     return "这一微批超过 45 秒没有新输出，改用 $threads 个 CPU 线程重试"
+}
+
+fun trainRetryDetail(recipe: TrainRecipe): String {
+    if (recipe.seqCap > 0 && recipe.gradAccum <= 1) {
+        return "这一微批还是没有往前走。改成 1 个线程，句子收到 ${recipe.seqCap}，秩 ${recipe.rank}，每条样本都放开计算图"
+    }
+    return trainRetryDetail(recipe.threads)
+}
+
+/** Replace flags in the trainer argv. rank 0 and seqCap 0 keep the job's own values. */
+fun applyTrainRecipe(args: MutableList<String>, recipe: TrainRecipe, jobRank: Int) {
+    fun setFlag(flag: String, value: String) {
+        val at = args.indexOf(flag)
+        if (at >= 0 && at + 1 < args.size) {
+            args[at + 1] = value
+        } else {
+            args.add(flag)
+            args.add(value)
+        }
+    }
+    fun clearFlag(flag: String) {
+        val at = args.indexOf(flag)
+        if (at >= 0 && at + 1 < args.size) {
+            args.removeAt(at + 1)
+            args.removeAt(at)
+        }
+    }
+    setFlag("--grad_accum_steps", recipe.gradAccum.toString())
+    val rank = if (recipe.rank > 0) recipe.rank else jobRank
+    setFlag("--lora_r", rank.toString())
+    setFlag("--lora_alpha", (rank * 2).toString())
+    if (recipe.seqCap > 0) setFlag("--seq_cap", recipe.seqCap.toString()) else clearFlag("--seq_cap")
+}
+
+/**
+ * status.json is replaced in place. A reader can see an empty or cut-off file.
+ * Write the temp file in the same directory, then rename, so a poll never
+ * observes the truncate.
+ */
+fun writeTextAtomic(file: File, text: String) {
+    val dir = file.parentFile ?: throw IllegalArgumentException(file.path)
+    dir.mkdirs()
+    val tmp = File(dir, file.name + ".tmp")
+    tmp.writeText(text)
+    if (file.exists()) file.delete()
+    if (!tmp.renameTo(file)) {
+        file.writeText(text)
+        tmp.delete()
+    }
+}
+
+/**
+ * What the consolidate page actually paints. A failure card does not show
+ * elapsed seconds, so a rewrite of those fields is not a new frame.
+ */
+fun trainFrameKey(snap: TrainSnapshot): String {
+    val live = snap.state == "running"
+    return listOf(
+        snap.state,
+        snap.stage,
+        snap.step.toString(),
+        snap.total.toString(),
+        snap.epoch.toString(),
+        snap.epochs.toString(),
+        snap.loss?.let { java.lang.Float.toString(it) } ?: "",
+        snap.detail,
+        snap.logTail,
+        snap.pendingStep.toString(),
+        snap.micro.toString(),
+        snap.microTotal.toString(),
+        (if (live) snap.elapsedSec else 0L).toString(),
+        (if (live) snap.etaSec else 0L).toString(),
+        (if (live) snap.microElapsedSec else 0L).toString(),
+    ).joinToString("\u0000")
+}
+
+/**
+ * One poll of status.json. Null means the page must not recompose: the read
+ * was empty or cut off, the visible frame is unchanged, or a blank "running"
+ * reset is trying to cover a failure the user is already looking at.
+ */
+fun acceptTrainStatus(previous: TrainSnapshot, raw: String): TrainSnapshot? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return null
+    if (runCatching { JSONObject(trimmed) }.isFailure) return null
+    val next = parseTrainSnapshot(trimmed)
+    if (next.state.isEmpty() && previous.state.isNotEmpty()) return null
+    if (previous.state == "error" && next.state == "running" && next.detail.isBlank() && next.step == 0 && next.micro == 0) {
+        return null
+    }
+    if (trainFrameKey(next) == trainFrameKey(previous)) return null
+    return next
+}
+
+/** The dead-trainer write runs once, while status still says the run is going. */
+fun shouldRemarkFailedTrain(state: String): Boolean = state == "running"
+
+fun isSettledFailure(raw: String): Boolean {
+    val snap = parseTrainSnapshot(raw)
+    return snap.state == "error" && snap.detail == trainDeadDetail()
 }
 
 fun trainDeadDetail(): String {
