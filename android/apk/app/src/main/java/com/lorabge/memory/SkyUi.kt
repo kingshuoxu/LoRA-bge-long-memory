@@ -260,6 +260,7 @@ fun skyText(lang: String, key: String): String {
         "batchFailed" to "失败",
         "batchWaiting" to "等待充电",
         "trainNow" to "现在训练",
+        "retry" to "重试",
         "cancel" to "取消训练",
         "delete" to "删除",
         "loss" to "损失",
@@ -354,6 +355,7 @@ fun skyText(lang: String, key: String): String {
         "batchFailed" to "Failed",
         "batchWaiting" to "Waiting for charge",
         "trainNow" to "Train now",
+        "retry" to "Retry",
         "cancel" to "Cancel training",
         "delete" to "Delete",
         "loss" to "Loss",
@@ -1520,13 +1522,13 @@ private fun TrainActionRow(state: SkyState, onEvent: (SkyEvent) -> Unit, showCon
     ) {
         if (showConfirm) {
             Text(
-                skyText(state.lang, "train"),
+                skyText(state.lang, if (state.train.state == "error") "retry" else "train"),
                 color = CanvasBg,
                 fontSize = 15.sp,
                 modifier = Modifier
                     .background(Ink, Pill)
                     .clickable { onEvent(SkyEvent.Train) }
-                    .semantics { contentDescription = "confirmTrain" }
+                    .semantics { contentDescription = if (state.train.state == "error") "retryTrain" else "confirmTrain" }
                     .padding(vertical = 10.dp, horizontal = 14.dp),
             )
         }

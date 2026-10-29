@@ -135,6 +135,43 @@ class TrainProgressTest {
     }
 
     @Test
+    fun microHangRetriesOnOneCpuThreadThenSurfaces() {
+        val first = initialTrainRecipe(4)
+        assertEquals(TrainRecipe(2, 4, 0), first)
+        assertFalse(microStalled(1_000, 1_000 + MICRO_STALL_MS - 1, seenMicro = true))
+        assertTrue(microStalled(1_000, 1_000 + MICRO_STALL_MS, seenMicro = true))
+        assertFalse(microStalled(1_000, 1_000 + MICRO_STALL_MS, seenMicro = false))
+        val second = lighterTrainRecipe(first)
+        assertEquals(TrainRecipe(1, 2, 1), second)
+        assertEquals(null, lighterTrainRecipe(second!!))
+        assertEquals("这一微批超过 45 秒没有新输出，改用 1 个 CPU 线程重试", trainRetryDetail(1))
+        assertFalse(trainRunIsStale("running", pidAlive = true, heartbeatAgeMs = 2_000))
+        assertTrue(trainRunIsStale("running", pidAlive = false, heartbeatAgeMs = 0))
+        assertTrue(trainRunIsStale("running", pidAlive = true, heartbeatAgeMs = TRAIN_HEARTBEAT_STALE_MS))
+        assertFalse(trainRunIsStale("done", pidAlive = false, heartbeatAgeMs = 60_000))
+        assertEquals(3, finishedMicros(0, 4, 8))
+        assertEquals(90L * 93 / 3, etaFromMicros(90, 3, 96))
+        val text = formatTrainProgress(
+            "zh",
+            TrainSnapshot(
+                state = "running",
+                stage = "train",
+                total = 12,
+                elapsedSec = 179,
+                etaSec = etaFromMicros(179, 3, 96),
+                pendingStep = 1,
+                micro = 4,
+                microTotal = 8,
+                microElapsedSec = 45,
+            ),
+        )
+        assertTrue(text.contains("第 1/12 步"))
+        assertTrue(text.contains("微批 4/8"))
+        assertTrue(text.contains("这一微批 45 秒"))
+        assertTrue(text.contains("剩余"))
+    }
+
+    @Test
     fun quietTrainerBecomesARetryableFailure() {
         assertFalse(trainQuietTooLong(1_000, 1_000 + TRAIN_STALL_MS - 1))
         assertTrue(trainQuietTooLong(1_000, 1_000 + TRAIN_STALL_MS))
@@ -144,8 +181,7 @@ class TrainProgressTest {
         assertFalse(trainStillExpected(8, 8))
         assertEquals(180_000L, TRAIN_STALL_MS)
         val detail = trainStallDetail("[Dataset] epochs=4 max_steps=8")
-        assertTrue(detail.contains("3 分钟"))
-        assertTrue(detail.contains("确认并训练"))
+        assertTrue(detail.contains("重试"))
         assertTrue(detail.contains("取消训练"))
         assertTrue(detail.contains("[Dataset] epochs=4 max_steps=8"))
         val runningLast = formatTrainProgress(
@@ -163,7 +199,7 @@ class TrainProgressTest {
         assertTrue(finished.contains("已登记"))
         val shown = formatTrainProgress("zh", TrainSnapshot(state = "error", detail = detail))
         assertTrue(shown.contains("失败"))
-        assertTrue(shown.contains("确认并训练"))
+        assertTrue(shown.contains("重试"))
         assertFalse(shown.contains("这一步还在计算"))
     }
 

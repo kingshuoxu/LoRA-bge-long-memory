@@ -17,6 +17,7 @@ data class TrainSnapshot(
     val pendingStep: Int = 0,
     val micro: Int = 0,
     val microTotal: Int = 0,
+    val microElapsedSec: Long = 0,
 )
 
 fun parseStepLine(line: String): Triple<Int, Int, Float>? {
@@ -95,8 +96,63 @@ fun trainQuietTooLong(lastAdvanceMs: Long, nowMs: Long, stallMs: Long = TRAIN_ST
 /** After the last logged step the process writes the adapter and may be quiet. */
 fun trainStillExpected(step: Int, total: Int): Boolean = total <= 0 || step < total
 
+/**
+ * One microbatch printed `[micro]` and then the native forward never returned.
+ * 45s is long enough for a real 0.5B step on two big cores, and short enough
+ * that a deadlock is not left on screen for the old 3-minute stall.
+ */
+const val MICRO_STALL_MS = 45_000L
+
+/** The service writes this file every couple of seconds. A frozen process stops. */
+const val TRAIN_HEARTBEAT_STALE_MS = 20_000L
+
+data class TrainRecipe(val threads: Int, val gradAccum: Int, val attempt: Int)
+
+/** First try is already CPU. Two threads and a shorter accumulation so the tape cannot grow through micro 4. */
+fun initialTrainRecipe(performanceThreads: Int): TrainRecipe {
+    return TrainRecipe(threads = performanceThreads.coerceIn(1, 2), gradAccum = 4, attempt = 0)
+}
+
+/** A hung GEMM retries on a single CPU thread and frees the graph every two samples. */
+fun lighterTrainRecipe(current: TrainRecipe): TrainRecipe? {
+    if (current.threads <= 1 && current.gradAccum <= 2) return null
+    return TrainRecipe(threads = 1, gradAccum = 2, attempt = current.attempt + 1)
+}
+
+fun microStalled(lastMicroMs: Long, nowMs: Long, seenMicro: Boolean, stallMs: Long = MICRO_STALL_MS): Boolean {
+    if (!seenMicro || lastMicroMs < 0 || nowMs < lastMicroMs) return false
+    return nowMs - lastMicroMs >= stallMs
+}
+
+fun trainRetryDetail(threads: Int): String {
+    return "这一微批超过 45 秒没有新输出，改用 $threads 个 CPU 线程重试"
+}
+
+fun trainDeadDetail(): String {
+    return "训练进程已经停住，界面还停在上一次的微批。点「重试」再开始，或点「取消训练」。"
+}
+
+/** Running in the status file is not proof the trainer is alive. */
+fun trainRunIsStale(state: String, pidAlive: Boolean, heartbeatAgeMs: Long, limitMs: Long = TRAIN_HEARTBEAT_STALE_MS): Boolean {
+    if (state != "running") return false
+    if (!pidAlive) return true
+    if (heartbeatAgeMs < 0) return false
+    return heartbeatAgeMs >= limitMs
+}
+
+fun finishedMicros(completedSteps: Int, microIndex: Int, microTotal: Int): Int {
+    if (microTotal <= 0) return completedSteps.coerceAtLeast(0)
+    val into = (microIndex - 1).coerceAtLeast(0)
+    return completedSteps.coerceAtLeast(0) * microTotal + into
+}
+
+fun etaFromMicros(elapsedSec: Long, finished: Int, totalMicros: Int): Long {
+    if (elapsedSec <= 0 || finished <= 0 || totalMicros <= finished) return 0
+    return elapsedSec * (totalMicros - finished) / finished
+}
+
 fun trainStallDetail(lastLine: String): String {
-    val head = "超过 3 分钟没有新的训练输出，这一步没有打出 loss。点「确认并训练」重试，或点「取消训练」。"
+    val head = "这一微批没有再往前走。点「重试」从 CPU 再训一次，或点「取消训练」。"
     val where = lastLine.trim().take(180)
     return if (where.isEmpty()) head else "$head\n停在: $where"
 }
@@ -124,6 +180,21 @@ fun epochOf(step: Int, total: Int, epochs: Int): Int {
     return ((step - 1) / per + 1).coerceAtMost(epochs)
 }
 
+private fun liveMicro(snap: TrainSnapshot): Boolean {
+    return snap.pendingStep > snap.step && snap.micro > 0 && snap.microTotal > 0
+}
+
+fun etaPhrase(lang: String, etaSec: Long): String {
+    return when {
+        etaSec <= 0 -> ""
+        etaSec < 60 -> if (lang == "en") " · ETA ${etaSec}s" else " · 剩余 ${etaSec} 秒"
+        else -> {
+            val minutes = (etaSec + 59) / 60
+            if (lang == "en") " · ETA ${minutes} min" else " · 剩余 ${minutes} 分"
+        }
+    }
+}
+
 fun etaSeconds(elapsedSec: Long, step: Int, total: Int): Long {
     if (elapsedSec < 0 || step <= 0 || total <= step) return 0
     return elapsedSec * (total - step) / step
@@ -142,9 +213,12 @@ fun trainSnapshotJson(
     pendingStep: Int = 0,
     micro: Int = 0,
     microTotal: Int = 0,
+    microElapsedSec: Long = 0,
 ): String {
     val epoch = epochOf(step, total, epochs)
-    val eta = etaSeconds(elapsedSec, step, total)
+    val finished = finishedMicros((pendingStep - 1).coerceAtLeast(0), micro, microTotal)
+    val totalMicros = if (total > 0 && microTotal > 0) total * microTotal else 0
+    val eta = if (totalMicros > 0) etaFromMicros(elapsedSec, finished, totalMicros) else etaSeconds(elapsedSec, step, total)
     return JSONObject()
         .put("state", state)
         .put("stage", stage)
@@ -159,6 +233,7 @@ fun trainSnapshotJson(
         .put("pendingStep", pendingStep)
         .put("micro", micro)
         .put("microTotal", microTotal)
+        .put("microElapsedSec", microElapsedSec)
         .apply { if (loss != null) put("loss", loss.toDouble()) }
         .toString()
 }
@@ -183,6 +258,7 @@ fun parseTrainSnapshot(raw: String): TrainSnapshot {
         pendingStep = obj.optInt("pendingStep"),
         micro = obj.optInt("micro"),
         microTotal = obj.optInt("microTotal"),
+        microElapsedSec = obj.optLong("microElapsedSec"),
     )
 }
 
@@ -210,12 +286,18 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
                 if (lang == "en") "Step ${snap.pendingStep}" else "第 ${snap.pendingStep} 步"
             }
             val micro = if (lang == "en") " · micro ${snap.micro}/${snap.microTotal}" else " · 微批 ${snap.micro}/${snap.microTotal}"
+            val microAge = if (snap.microElapsedSec > 0) {
+                if (lang == "en") " · this micro ${snap.microElapsedSec}s" else " · 这一微批 ${snap.microElapsedSec} 秒"
+            } else {
+                ""
+            }
             val elapsed = if (snap.elapsedSec > 0) {
                 if (lang == "en") " · ${snap.elapsedSec}s" else " · 已过 ${snap.elapsedSec} 秒"
             } else {
                 ""
             }
-            return steps + micro + elapsed
+            val eta = etaPhrase(lang, snap.etaSec)
+            return steps + micro + microAge + elapsed + eta
         }
         if (snap.state == "running") {
             return if (lang == "en") "Still computing this step · ${snap.elapsedSec}s" else "这一步还在计算 · 已过 ${snap.elapsedSec} 秒"
@@ -223,13 +305,11 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
         return snap.detail
     }
     val loss = snap.loss?.let { " · loss ${"%.2f".format(it)}" }.orEmpty()
-    val eta = when {
-        snap.etaSec <= 0 -> ""
-        snap.etaSec < 60 -> if (lang == "en") " · ETA ${snap.etaSec}s" else " · 剩余 ${snap.etaSec} 秒"
-        else -> {
-            val minutes = (snap.etaSec + 59) / 60
-            if (lang == "en") " · ETA ${minutes} min" else " · 剩余 ${minutes} 分"
-        }
+    val eta = etaPhrase(lang, snap.etaSec)
+    val microAge = if (liveMicro(snap) && snap.microElapsedSec > 0) {
+        if (lang == "en") " · this micro ${snap.microElapsedSec}s" else " · 这一微批 ${snap.microElapsedSec} 秒"
+    } else {
+        ""
     }
     val elapsed = if (snap.elapsedSec > 0) {
         if (lang == "en") " · ${snap.elapsedSec}s" else " · 已过 ${snap.elapsedSec} 秒"
@@ -255,5 +335,5 @@ fun formatTrainProgress(lang: String, snap: TrainSnapshot): String {
     } else {
         ""
     }
-    return steps + micro + epoch + loss + elapsed + eta
+    return steps + micro + microAge + epoch + loss + elapsed + eta
 }

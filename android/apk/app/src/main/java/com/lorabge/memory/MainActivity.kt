@@ -239,7 +239,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.22"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.23"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -257,9 +257,25 @@ private fun PhoneApp(
         gatherPendingDrafts(store, experts.flatMap { it.facts }, form)
     }
     val savedBatch = remember(tick) { TrainBatchStore.read(store) }
+    LaunchedEffect(trainSnap.state) {
+        if (trainSnap.state != "running") return@LaunchedEffect
+        while (true) {
+            delay(3000)
+            if (trainRunIsStale(trainSnap.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))) {
+                TrainService.markDead(store)
+                tick++
+                return@LaunchedEffect
+            }
+        }
+    }
     LaunchedEffect(trainSnap.state, tick) {
         val live = parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty())
         val stuck = TrainBatchStore.read(store)
+        if (trainRunIsStale(live.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))) {
+            TrainService.markDead(store)
+            tick++
+            return@LaunchedEffect
+        }
         if (shouldRecoverBatch(stuck, live.state)) {
             TrainBatchStore.clear(store)
             if (live.state == "waiting") statusFile.delete()

@@ -112,6 +112,7 @@ class TrainService : Service() {
             val outDir = File(store.trainDir, "mft").apply { mkdirs() }
             val adapter = File(store.trainDir, "$expert.gguf")
             val rank = job.optInt("rank", 32)
+            var recipe = initialTrainRecipe(PhoneFacts.threads())
             val cmd = mutableListOf(
                 bin.absolutePath,
                 "--model_dir", base.absolutePath,
@@ -121,7 +122,7 @@ class TrainService : Service() {
                 "--epochs", job.optInt("epochs", 4).toString(),
                 "--batch_size", "1",
                 // 8 次微批再更新一次,等效 batch 8。batch 1 直接更新时第 1 个 epoch 是 0/50,答案塌成重复字符。
-                "--grad_accum_steps", "8",
+                "--grad_accum_steps", recipe.gradAccum.toString(),
                 "--lr", job.optString("lr", "5e-4"),
                 "--max_grad_norm", "1.0",
                 "--lora_r", rank.toString(),
@@ -137,14 +138,33 @@ class TrainService : Service() {
             log.writeText("")
             val telemetry = File(store.trainDir, "telemetry.tsv")
             telemetry.writeText("wall_s\trss_kb\tthermal\tbattery\n")
-            val threads = PhoneFacts.threads()
+            val heartbeat = File(store.trainDir, "heartbeat")
+            val beater = Thread {
+                while (!Thread.currentThread().isInterrupted) {
+                    runCatching { heartbeat.writeText(System.currentTimeMillis().toString()) }
+                    Thread.sleep(2000)
+                }
+            }
+            beater.isDaemon = true
+            beater.start()
+            val wake = (getSystemService(POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "lorabge:train")
+            wake.acquire(20 * 60 * 1000L)
+            var restart = true
+            var stalled = false
+            try {
+            while (restart) {
+            restart = false
+            val accumAt = cmd.indexOf("--grad_accum_steps") + 1
+            cmd[accumAt] = recipe.gradAccum.toString()
             val proc = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .apply {
                     environment()["LD_LIBRARY_PATH"] = applicationInfo.nativeLibraryDir
                     // 只占超大核和大核。天玑 9400 的 1+3+4 是 4 线程，小米 15 两档 Oryon 仍是 8。
                     // 绑核在 OpenBLAS 编译时关掉。运行时再设线程数，避免按小核把 GEMM 拖死。
-                    environment()["OPENBLAS_NUM_THREADS"] = threads.toString()
+                    environment()["OPENBLAS_NUM_THREADS"] = recipe.threads.toString()
+                    environment()["GOTO_NUM_THREADS"] = recipe.threads.toString()
                     environment()["OMP_NUM_THREADS"] = "1"
                 }
                 .start()
@@ -168,9 +188,10 @@ class TrainService : Service() {
             var microTotal = 0
             var lastLine = "开始训练 ${expanded.size} 条事实"
             var lastAdvance = System.currentTimeMillis()
+            var lastMicroAt = lastAdvance
+            var seenMicro = false
             var lastRssKb = 0L
             var lastRssMove = lastAdvance
-            var stalled = false
             File(store.trainDir, "pid").writeText(pidOf(proc).toString())
             while (reader.isAlive || pending.isNotEmpty()) {
                 if (cancel.exists()) {
@@ -179,6 +200,7 @@ class TrainService : Service() {
                     break
                 }
                 var advanced = false
+                var microAdvanced = false
                 while (true) {
                     val line = pending.poll() ?: break
                     if (line.isNotBlank()) {
@@ -190,6 +212,7 @@ class TrainService : Service() {
                         step = parsed.first
                         total = parsed.second
                         loss = parsed.third
+                        microAdvanced = true
                         val rss = rssKbOf(proc)
                         val thermal = File("/sys/class/thermal").listFiles()
                             ?.mapNotNull { zone ->
@@ -204,36 +227,58 @@ class TrainService : Service() {
                         microTotal = mark.microTotal
                         pendingStep = mark.pendingStep
                         total = mark.total
+                        seenMicro = true
+                        microAdvanced = true
                     }
                 }
                 val now = System.currentTimeMillis()
-                if (advanced) lastAdvance = now
+                if (advanced && !seenMicro) lastAdvance = now
+                if (microAdvanced) {
+                    lastAdvance = now
+                    lastMicroAt = now
+                }
                 val rssNow = if (proc.isAlive) rssKbOf(proc) else 0L
                 if (rssMoved(lastRssKb, rssNow)) lastRssMove = now
                 if (rssNow > 0L) lastRssKb = rssNow
                 val setup = step <= 0 && pendingStep <= 0 && isTrainSetupLine(lastLine)
+                val microElapsed = if (seenMicro) (now - lastMicroAt) / 1000 else 0L
                 if (proc.isAlive && trainStillExpected(step, total)) {
                     val quietOut = trainQuietTooLong(lastAdvance, now)
                     val quietMem = trainQuietTooLong(lastRssMove, now)
                     if (setup && quietOut && quietMem) {
                         val detail = trainLoadStallDetail(lastLine)
-                        publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
+                        publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
                         notify("加载模型没有进展")
                         stalled = true
                         killTrain(proc)
                         break
                     }
-                    if (!setup && quietOut) {
+                    val hungMicro = !setup && microStalled(lastMicroAt, now, seenMicro)
+                    if (hungMicro || (!setup && !seenMicro && quietOut)) {
+                        val next = if (hungMicro) lighterTrainRecipe(recipe) else null
+                        if (next != null) {
+                            recipe = next
+                            restart = true
+                            killTrain(proc)
+                            val detail = trainRetryDetail(recipe.threads)
+                            publish(status, "running", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
+                            notify(detail)
+                            break
+                        }
                         val detail = trainStallDetail(lastLine)
-                        publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
+                        publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
                         notify("训练没有前进")
                         stalled = true
                         killTrain(proc)
                         break
                     }
                 }
-                val detail = if (setup) trainLoadHeartbeat((now - started) / 1000, lastRssKb) else lastLine
-                publish(status, "running", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal)
+                val detail = when {
+                    setup -> trainLoadHeartbeat((now - started) / 1000, lastRssKb)
+                    restart -> trainRetryDetail(recipe.threads)
+                    else -> lastLine
+                }
+                publish(status, "running", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
                 notify(
                     when {
                         total > 0 && pendingStep > step && micro > 0 && microTotal > 0 ->
@@ -248,6 +293,10 @@ class TrainService : Service() {
                 Thread.sleep(1000)
             }
             reader.join(2000)
+            if (restart) {
+                log.appendText(trainRetryDetail(recipe.threads) + "\n")
+                continue
+            }
             if (stalled) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -302,6 +351,12 @@ class TrainService : Service() {
             }
             publish(status, "running", "register", step, total, epochs, loss, started, "注册专家", "")
             publish(status, "done", "done", step, total, epochs, loss, started, "已登记 $expert", "")
+            break
+            }
+            } finally {
+                beater.interrupt()
+                if (wake.isHeld) wake.release()
+            }
         } catch (ex: Throwable) {
             writeStatus(status, "error", ex.message ?: ex.toString())
         }
@@ -323,12 +378,13 @@ class TrainService : Service() {
         pendingStep: Int = 0,
         micro: Int = 0,
         microTotal: Int = 0,
+        microElapsedSec: Long = 0,
     ) {
         val elapsed = (System.currentTimeMillis() - startedMs) / 1000
         file.writeText(
             trainSnapshotJson(
                 state, stage, step, total, epochs, loss, elapsed, detail, logTail,
-                pendingStep, micro, microTotal,
+                pendingStep, micro, microTotal, microElapsedSec,
             ),
         )
     }
@@ -524,6 +580,30 @@ class TrainService : Service() {
                 selected = row.optBoolean("selected", true),
                 gate = row.optString("gate"),
             )
+        }
+
+        fun markDead(store: MemoryStore) {
+            store.ensure()
+            val pid = File(store.trainDir, "pid").takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
+            if (pid != null && pid > 0) {
+                runCatching { Runtime.getRuntime().exec(arrayOf("kill", "-9", pid.toString())) }
+            }
+            File(store.trainDir, "status.json").writeText(
+                trainSnapshotJson("error", "train", 0, 0, 0, null, 0, trainDeadDetail(), ""),
+            )
+        }
+
+        fun trainPidAlive(store: MemoryStore): Boolean {
+            val pid = File(store.trainDir, "pid").takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: return false
+            if (pid <= 0) return false
+            return File("/proc/$pid").exists()
+        }
+
+        fun heartbeatAgeMs(store: MemoryStore, nowMs: Long = System.currentTimeMillis()): Long {
+            val beat = File(store.trainDir, "heartbeat")
+            val file = if (beat.exists()) beat else File(store.trainDir, "status.json")
+            if (!file.exists()) return Long.MAX_VALUE
+            return nowMs - file.lastModified()
         }
 
         fun abandon(store: MemoryStore) {

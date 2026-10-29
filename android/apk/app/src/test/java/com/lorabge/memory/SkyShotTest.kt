@@ -140,6 +140,89 @@ class SkyShotTest {
     }
 
     @Test
+    fun consolidateTrainLiveZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                fourPending().copy(
+                    training = true,
+                    loss = emptyList(),
+                    train = TrainSnapshot(
+                        state = "running",
+                        stage = "train",
+                        total = 12,
+                        epochs = 4,
+                        elapsedSec = 48,
+                        etaSec = 120,
+                        pendingStep = 1,
+                        micro = 4,
+                        microTotal = 8,
+                        microElapsedSec = 12,
+                    ),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "running", 2),
+                        SkyBatchItem("我叫徐金朔", "running", 2),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun consolidateTrainRetryZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                fourPending().copy(
+                    training = true,
+                    status = "这一微批超过 45 秒没有新输出，改用 1 个 CPU 线程重试",
+                    train = TrainSnapshot(
+                        state = "running",
+                        stage = "train",
+                        total = 12,
+                        epochs = 4,
+                        elapsedSec = 50,
+                        pendingStep = 1,
+                        micro = 4,
+                        microTotal = 8,
+                        microElapsedSec = 45,
+                        detail = "这一微批超过 45 秒没有新输出，改用 1 个 CPU 线程重试",
+                    ),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "running", 2),
+                        SkyBatchItem("我叫徐金朔", "running", 2),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun consolidateTrainStallZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                fourPending().copy(
+                    training = false,
+                    status = "失败",
+                    train = TrainSnapshot(
+                        state = "error",
+                        stage = "train",
+                        total = 12,
+                        elapsedSec = 179,
+                        pendingStep = 1,
+                        micro = 4,
+                        microTotal = 8,
+                        microElapsedSec = 120,
+                        detail = "这一微批没有再往前走。点「重试」从 CPU 再训一次，或点「取消训练」。\n停在: [micro 4/8] step 1/12",
+                    ),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "error", 2),
+                        SkyBatchItem("我叫徐金朔", "error", 2),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun downloadZh() {
         paparazzi.snapshot { SetupFrame(downloadSample("zh")) }
     }
@@ -274,7 +357,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.22",
+        versionName = "0.1.23",
     )
 
     private fun fourPending() = SkyState(
