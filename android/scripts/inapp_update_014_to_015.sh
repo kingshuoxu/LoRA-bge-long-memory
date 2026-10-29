@@ -128,6 +128,24 @@ fi
 Xvfb :99 -screen 0 1280x2800x24 -ac +extension GLX +render -noreset >"$STAGE/xvfb.log" 2>&1 &
 XVFB_PID=$!
 export DISPLAY=:99
+i=0
+while [ "$i" -lt 50 ]; do
+  if xdpyinfo >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+    echo "Xvfb 退出了" >&2
+    cat "$STAGE/xvfb.log" >&2 || true
+    exit 1
+  fi
+  i=$((i + 1))
+  sleep 0.2
+done
+if ! xdpyinfo >/dev/null 2>&1; then
+  echo "Xvfb 没有在 :99 上起来" >&2
+  cat "$STAGE/xvfb.log" >&2 || true
+  exit 1
+fi
 
 "$EMU" -avd "$AVD" -port "$PORT" -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 3072 -accel on -no-metrics -dns-server 8.8.8.8 >"$STAGE/emulator.log" 2>&1 &
 EMU_PID=$!

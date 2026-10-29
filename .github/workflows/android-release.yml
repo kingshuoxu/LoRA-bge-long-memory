@@ -140,7 +140,7 @@ jobs:
         run: |
           set -eu
           sudo apt-get update -qq
-          sudo apt-get install -y -qq unzip ffmpeg xvfb x11-utils libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
+          sudo apt-get install -y -qq unzip ffmpeg xvfb x11-utils libnss3 libx11-xcb1 libxcb-cursor0 libxkbcommon-x11-0 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
           sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
           SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
@@ -184,7 +184,7 @@ jobs:
         run: |
           set -eu
           sudo apt-get update -qq
-          sudo apt-get install -y -qq unzip ffmpeg xvfb x11-utils libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
+          sudo apt-get install -y -qq unzip ffmpeg xvfb x11-utils libnss3 libx11-xcb1 libxcb-cursor0 libxkbcommon-x11-0 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
           sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
           SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
@@ -211,6 +211,10 @@ jobs:
 
   publish:
     needs: [build, upgrade, inapp-update]
+    # inapp-update 是 continue-on-error。它失败不能挡住发布；升级任务失败才挡住。
+    if: ${{ always() && needs.build.result == 'success' && needs.upgrade.result == 'success' }}
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

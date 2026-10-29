@@ -1,6 +1,6 @@
 #!/bin/sh
 # 用同一把测试钥匙打 0.1.20 和 0.1.21 的 x86_64 包（不含 arm64 .so），
-# 在模拟器上 adb install -r，确认记忆、模型和设置还在。
+# 在模拟器上 adb install -r，确认对话、待巩固、模型和设置还在。
 # 已发布的 0.1.4 走应用内「检查更新」升到 0.1.5，那条在 inapp_update_014_to_015.sh，不在这里。
 set -eu
 
@@ -118,6 +118,25 @@ fi
 Xvfb :99 -screen 0 1280x2800x24 -ac +extension GLX +render -noreset >"$STAGE/xvfb.log" 2>&1 &
 XVFB_PID=$!
 export DISPLAY=:99
+# 新的模拟器 Qt 在显示器还没听的时候会直接退出，并抱怨缺 libxcb-cursor0。
+i=0
+while [ "$i" -lt 50 ]; do
+  if xdpyinfo >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+    echo "Xvfb 退出了" >&2
+    cat "$STAGE/xvfb.log" >&2 || true
+    exit 1
+  fi
+  i=$((i + 1))
+  sleep 0.2
+done
+if ! xdpyinfo >/dev/null 2>&1; then
+  echo "Xvfb 没有在 :99 上起来" >&2
+  cat "$STAGE/xvfb.log" >&2 || true
+  exit 1
+fi
 
 "$EMU" -avd "$AVD" -port "$PORT" -no-audio -no-boot-anim -no-snapshot -no-snapshot-load -no-snapshot-save -wipe-data -gpu swiftshader_indirect -memory 2048 -accel "$ACCEL" -no-metrics >"$STAGE/emulator.log" 2>&1 &
 EMU_PID=$!
@@ -205,21 +224,32 @@ printf '%s\n' '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' '<map>'
 "$ADB" -s "emulator-$PORT" push "$STAGE/keep.bin" /data/local/tmp/lorabge-keep.bin
 "$ADB" -s "emulator-$PORT" push "$STAGE/setup.xml" /data/local/tmp/lorabge-setup.xml
 "$ADB" -s "emulator-$PORT" shell chmod 644 /data/local/tmp/lorabge-keep.txt /data/local/tmp/lorabge-keep.bin /data/local/tmp/lorabge-setup.xml
-"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory mkdir -p files/memory files/models shared_prefs
+cat >"$STAGE/c-keep.json" << 'EOF'
+{"id":"c-keep","title":"待巩固","created":"2026-10-29T00:00:00Z","updated":"2026-10-29T00:00:00Z","messages":[{"role":"user","content":"我的猫叫咪咪"},{"role":"user","content":"我叫徐金朔"},{"role":"user","content":"我是徐金朔。"},{"role":"user","content":"我的猫猫叫咪咪"}]}
+EOF
+"$ADB" -s "emulator-$PORT" push "$STAGE/c-keep.json" /data/local/tmp/lorabge-c-keep.json
+"$ADB" -s "emulator-$PORT" shell chmod 644 /data/local/tmp/lorabge-c-keep.json
+"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory mkdir -p files/memory/conversations files/models shared_prefs
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.txt files/memory/keep.txt
+"$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-c-keep.json files/memory/conversations/c-keep.json
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.bin files/models/keep.bin
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-setup.xml shared_prefs/setup.xml
 
 "$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.21.apk"
 MEM=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/keep.txt | tr -d '\r')
+CHAT=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/conversations/c-keep.json | tr -d '\r')
 MOD=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/models/keep.bin | tr -d '\r')
 PREF=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat shared_prefs/setup.xml | tr -d '\r')
 CODE=$("$ADB" -s "emulator-$PORT" shell dumpsys package com.lorabge.memory | tr -d '\r' | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -1)
 printf '%s\n' "$MEM" | grep -qx 'keep-memory'
+printf '%s\n' "$CHAT" | grep -q '我的猫叫咪咪'
+printf '%s\n' "$CHAT" | grep -q '我叫徐金朔'
+printf '%s\n' "$CHAT" | grep -q '我是徐金朔'
+printf '%s\n' "$CHAT" | grep -q '我的猫猫叫咪咪'
 printf '%s\n' "$MOD" | grep -qx 'keep-model'
 printf '%s\n' "$PREF" | grep -q 'name="keep">yes'
 test "$CODE" = "1021"
-echo "upgrade preserved memory, models, settings; versionCode 1021"
+echo "upgrade preserved chat, pending facts, models, settings; versionCode 1021"
 
 "$ADB" -s "emulator-$PORT" shell settings put secure show_ime_with_hard_keyboard 1
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
