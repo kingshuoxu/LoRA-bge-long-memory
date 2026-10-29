@@ -16,13 +16,16 @@ BG = (8, 10, 16, 255)
 TEAL = (126, 200, 192)
 INK = (247, 251, 252)
 
-# Positions in the 108dp adaptive viewport. Center is 54. Safe radius is ~33.
+# 108dp viewport. The 72dp safe zone is centered on 54. The mark spans ~46dp,
+# about 64% of that zone, and its bounding box is centered on 54,54.
+SPARK = (43.0, 52.8)
+SPARK_ARM = 12.2
+SPARK_INNER = 3.4
 NODES = (
-    (48.0, 54.0, 6.6, True),
-    (66.5, 43.5, 3.7, False),
-    (62.0, 67.5, 4.2, False),
+    (71.2, 37.3, 5.6),
+    (66.4, 70.3, 6.0),
 )
-EDGES = ((0, 1), (0, 2), (1, 2))
+LINE = 2.8
 
 
 def scale(value, canvas):
@@ -33,46 +36,54 @@ def blank(canvas):
     return Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
 
 
+def spark_points(cx, cy, arm, inner):
+    # Angular order, so the polygon does not cross itself or leave a hole.
+    return [
+        (cx, cy - arm),
+        (cx + inner, cy - inner),
+        (cx + arm, cy),
+        (cx + inner, cy + inner),
+        (cx, cy + arm),
+        (cx - inner, cy + inner),
+        (cx - arm, cy),
+        (cx - inner, cy - inner),
+    ]
+
+
 def draw_mark(canvas, color, glow=True):
     image = blank(canvas)
+    sx, sy = SPARK
     if glow:
         haze = blank(canvas)
         hd = ImageDraw.Draw(haze)
-        cx, cy = scale(56, canvas), scale(54, canvas)
-        radius = scale(22, canvas)
-        hd.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(*TEAL, 90))
-        image = Image.alpha_composite(image, haze.filter(ImageFilter.GaussianBlur(scale(10, canvas))))
-        soft = blank(canvas)
-        sd = ImageDraw.Draw(soft)
-        for x, y, r, _primary in NODES:
-            px, py, pr = scale(x, canvas), scale(y, canvas), scale(r * 2.4, canvas)
-            sd.ellipse((px - pr, py - pr, px + pr, py + pr), fill=(*TEAL, 70))
-        image = Image.alpha_composite(image, soft.filter(ImageFilter.GaussianBlur(scale(3.2, canvas))))
+        cx, cy = scale(54, canvas), scale(54, canvas)
+        radius = scale(32, canvas)
+        hd.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(*TEAL, 46))
+        image = Image.alpha_composite(image, haze.filter(ImageFilter.GaussianBlur(scale(16, canvas))))
+    points = [(sx, sy), NODES[0][:2], NODES[1][:2]]
     lines = blank(canvas)
     ld = ImageDraw.Draw(lines)
-    width = max(1, int(round(scale(1.35, canvas))))
-    for a, b in EDGES:
-        ax, ay = scale(NODES[a][0], canvas), scale(NODES[a][1], canvas)
-        bx, by = scale(NODES[b][0], canvas), scale(NODES[b][1], canvas)
-        ld.line((ax, ay, bx, by), fill=(*color, 210), width=width)
+    width = max(2, int(round(scale(LINE, canvas))))
+    for a, b in ((0, 1), (0, 2), (1, 2)):
+        ax, ay = scale(points[a][0], canvas), scale(points[a][1], canvas)
+        bx, by = scale(points[b][0], canvas), scale(points[b][1], canvas)
+        ld.line((ax, ay, bx, by), fill=(*color, 230), width=width)
     image = Image.alpha_composite(image, lines)
     cores = blank(canvas)
     cd = ImageDraw.Draw(cores)
-    for x, y, r, primary in NODES:
-        px, py, pr = scale(x, canvas), scale(y, canvas), scale(r, canvas)
-        if primary:
-            draw_spark(cd, px, py, pr * 1.55, color)
-        cd.ellipse((px - pr, py - pr, px + pr, py + pr), fill=(*color, 255))
+    px, py = scale(sx, canvas), scale(sy, canvas)
+    arm = scale(SPARK_ARM, canvas)
+    inner = scale(SPARK_INNER, canvas)
+    if glow:
+        core = blank(canvas)
+        cr = scale(4.2, canvas)
+        ImageDraw.Draw(core).ellipse((px - cr, py - cr, px + cr, py + cr), fill=(*color, 200))
+        image = Image.alpha_composite(image, core.filter(ImageFilter.GaussianBlur(scale(2.2, canvas))))
+    cd.polygon(spark_points(px, py, arm, inner), fill=(*color, 255))
+    for x, y, radius in NODES:
+        nx, ny, nr = scale(x, canvas), scale(y, canvas), scale(radius, canvas)
+        cd.ellipse((nx - nr, ny - nr, nx + nr, ny + nr), fill=(*color, 255))
     return Image.alpha_composite(image, cores)
-
-
-def draw_spark(draw, cx, cy, radius, color):
-    # Two solid diamonds. A single star polygon fills with a hole.
-    arm = radius
-    waist = radius * 0.36
-    fill = (*color, 255)
-    draw.polygon([(cx, cy - arm), (cx + waist, cy), (cx, cy + arm), (cx - waist, cy)], fill=fill)
-    draw.polygon([(cx - arm, cy), (cx, cy - waist), (cx + arm, cy), (cx, cy + waist)], fill=fill)
 
 
 def full_icon(canvas):
@@ -160,11 +171,62 @@ def launcher_grid(icon, wallpaper, label_color):
     return canvas
 
 
+def fmt(value):
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def circle_path(cx, cy, radius):
+    return f"M{fmt(cx)},{fmt(cy - radius)} a{fmt(radius)},{fmt(radius)} 0 1,0 0,{fmt(radius * 2)} a{fmt(radius)},{fmt(radius)} 0 1,0 0,{fmt(-radius * 2)} z"
+
+
+def write_monochrome_xml():
+    sx, sy = SPARK
+    pts = spark_points(sx, sy, SPARK_ARM, SPARK_INNER)
+    star = "M" + " L".join(f"{fmt(x)},{fmt(y)}" for x, y in pts) + " Z"
+    b, c = NODES
+    lines = f"M{fmt(sx)},{fmt(sy)} L{fmt(b[0])},{fmt(b[1])} M{fmt(sx)},{fmt(sy)} L{fmt(c[0])},{fmt(c[1])} M{fmt(b[0])},{fmt(b[1])} L{fmt(c[0])},{fmt(c[1])}"
+    xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="{star}" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="{circle_path(b[0], b[1], b[2])}" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="{circle_path(c[0], c[1], c[2])}" />
+    <path
+        android:pathData="{lines}"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="{fmt(LINE)}" />
+</vector>
+"""
+    path = ROOT / "drawable" / "ic_launcher_monochrome.xml"
+    path.write_text(xml, encoding="utf-8")
+
+
+def themed_monochrome(canvas):
+    # Android 13 paints the monochrome alpha as a dark glyph on a light tint.
+    glyph = draw_mark(canvas, (255, 255, 255), glow=False)
+    plate = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    ImageDraw.Draw(plate).ellipse((0, 0, canvas - 1, canvas - 1), fill=(226, 232, 236, 255))
+    ink = Image.new("RGBA", (canvas, canvas), (24, 28, 34, 255))
+    ink.putalpha(glyph.getchannel("A"))
+    return Image.alpha_composite(plate, ink)
+
+
 def main():
     master = 1024
     icon = full_icon(master)
     foreground = draw_mark(master, INK, glow=True)
-    mono = draw_mark(master, (255, 255, 255), glow=False)
+    mono = themed_monochrome(master)
+    write_monochrome_xml()
     circle = apply_mask(icon, circle_mask(master))
     squircle = apply_mask(icon, squircle_mask(master))
 
