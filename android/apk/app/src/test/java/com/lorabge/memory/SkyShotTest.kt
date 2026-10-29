@@ -91,6 +91,41 @@ class SkyShotTest {
     }
 
     @Test
+    fun consolidateBatchRunningZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                twoSelf("zh").copy(
+                    training = true,
+                    status = "训练 LoRA",
+                    loss = listOf(1.2f, 0.4f),
+                    train = TrainSnapshot(state = "running", stage = "train", step = 3, total = 8, epoch = 1, epochs = 4, loss = 0.4f),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "running"),
+                        SkyBatchItem("我叫徐金朔", "running"),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun consolidateBatchDoneZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                twoSelf("zh").copy(
+                    training = false,
+                    loss = listOf(1.2f, 0.08f),
+                    train = TrainSnapshot(state = "done", stage = "done", step = 8, total = 8, epoch = 4, epochs = 4, loss = 0.08f),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "done"),
+                        SkyBatchItem("我叫徐金朔", "done"),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun downloadZh() {
         paparazzi.snapshot { SetupFrame(downloadSample("zh")) }
     }
@@ -225,7 +260,23 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.19",
+        versionName = "0.1.20",
+    )
+
+    private fun twoSelf(lang: String) = SkyState(
+        lang = lang,
+        tab = SkyTab.Consolidate,
+        statusTop = 36.dp,
+        navBottom = 24.dp,
+        entity = "我",
+        statement = "我叫徐金朔",
+        value = "徐金朔",
+        question = "我叫什么？",
+        answer = "徐金朔",
+        pendingDrafts = listOf(
+            SkyPending("我", "我的猫叫咪咪", "咪咪", "我的猫叫什么名字？", "咪咪", "猫的名字"),
+            SkyPending("我", "我叫徐金朔", "徐金朔", "我叫什么？", "徐金朔", "名字"),
+        ),
     )
 
     private fun consolidateSample(lang: String) = sample().copy(

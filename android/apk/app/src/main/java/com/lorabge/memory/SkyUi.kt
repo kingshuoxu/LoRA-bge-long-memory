@@ -136,6 +136,8 @@ data class SkyPending(
     val attr: String = "",
 )
 
+data class SkyBatchItem(val statement: String, val status: String)
+
 data class SkyState(
     val lang: String = "zh",
     val tab: SkyTab = SkyTab.Chat,
@@ -183,6 +185,7 @@ data class SkyState(
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
     val pendingDrafts: List<SkyPending> = emptyList(),
+    val batchItems: List<SkyBatchItem> = emptyList(),
     val nebulaCanvas: Boolean = false,
     val e2e: Boolean = false,
 )
@@ -220,6 +223,7 @@ sealed class SkyEvent {
     data class NebulaGl(val fallback: String) : SkyEvent()
     data class FocusPending(val statement: String) : SkyEvent()
     data class TrainPending(val statement: String) : SkyEvent()
+    data object TrainAll : SkyEvent()
 }
 
 fun skyText(lang: String, key: String): String {
@@ -249,6 +253,11 @@ fun skyText(lang: String, key: String): String {
         "answer" to "回答",
         "force" to "立即训练",
         "train" to "确认并训练",
+        "trainAll" to "全部训练",
+        "batchQueued" to "排队中",
+        "batchRunning" to "训练中",
+        "batchDone" to "已完成",
+        "batchFailed" to "失败",
         "cancel" to "取消训练",
         "delete" to "删除",
         "loss" to "损失",
@@ -336,6 +345,11 @@ fun skyText(lang: String, key: String): String {
         "answer" to "Answer",
         "force" to "Train now",
         "train" to "Confirm and train",
+        "trainAll" to "Train all",
+        "batchQueued" to "Queued",
+        "batchRunning" to "Training",
+        "batchDone" to "Done",
+        "batchFailed" to "Failed",
         "cancel" to "Cancel training",
         "delete" to "Delete",
         "loss" to "Loss",
@@ -1334,38 +1348,72 @@ private fun shownTrain(state: SkyState): TrainSnapshot {
 
 @Composable
 private fun PendingQueue(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    val rows = if (state.batchItems.isNotEmpty()) {
+        state.batchItems.map { it.statement to it.status }
+    } else {
+        state.pendingDrafts.map { it.statement to "" }
+    }
+    val busy = trainActionsOpen(state.training, shownTrain(state))
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics { contentDescription = "pendingQueue" }) {
         Text(
-            "${skyText(state.lang, "pendingHead")} · ${state.pendingDrafts.size}",
+            "${skyText(state.lang, "pendingHead")} · ${rows.size}",
             color = Muted,
             fontSize = 13.sp,
             modifier = Modifier.padding(bottom = 8.dp),
         )
-        state.pendingDrafts.forEachIndexed { index, item ->
-            val selected = item.statement.trim() == state.statement.trim()
+        if (!busy && state.pendingDrafts.size >= 2 && state.batchItems.isEmpty()) {
+            Text(
+                "${skyText(state.lang, "trainAll")} (${state.pendingDrafts.size})",
+                color = CanvasBg,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .padding(bottom = 10.dp)
+                    .background(Ink, Pill)
+                    .clickable { onEvent(SkyEvent.TrainAll) }
+                    .semantics { contentDescription = "trainAll" }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        }
+        rows.forEachIndexed { index, (statement, status) ->
+            val selected = statement.trim() == state.statement.trim()
             Column(
                 Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
                     .background(if (selected) SurfaceHi else Surface, RoundedCornerShape(14.dp))
-                    .clickable { onEvent(SkyEvent.FocusPending(item.statement)) }
+                    .clickable { onEvent(SkyEvent.FocusPending(statement)) }
                     .padding(horizontal = 12.dp, vertical = 10.dp)
                     .semantics { contentDescription = "pending-$index" },
             ) {
-                Text(item.statement, color = Ink, fontSize = 15.sp, lineHeight = 22.sp)
-                Text(
-                    skyText(state.lang, "train"),
-                    color = CanvasBg,
-                    fontSize = 14.sp,
-                    modifier = Modifier
-                        .padding(top = 8.dp)
-                        .background(Ink, Pill)
-                        .clickable { onEvent(SkyEvent.TrainPending(item.statement)) }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                )
+                Text(statement, color = Ink, fontSize = 15.sp, lineHeight = 22.sp)
+                if (status.isNotBlank()) {
+                    Text(batchStatusText(state.lang, status), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+                } else if (!busy) {
+                    Text(
+                        skyText(state.lang, "train"),
+                        color = CanvasBg,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .background(Ink, Pill)
+                            .clickable { onEvent(SkyEvent.TrainPending(statement)) }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
     }
+}
+
+private fun batchStatusText(lang: String, status: String): String {
+    val key = when (status) {
+        "queued" -> "batchQueued"
+        "running" -> "batchRunning"
+        "done" -> "batchDone"
+        "error" -> "batchFailed"
+        else -> status
+    }
+    return skyText(lang, key)
 }
 
 @Composable
@@ -1375,7 +1423,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         val snap = shownTrain(state)
         val chartLoss = lossChartValues(snap, state.loss)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            if (state.pendingDrafts.size >= 2) {
+            if (state.pendingDrafts.size >= 2 || state.batchItems.isNotEmpty()) {
                 PendingQueue(state, onEvent)
             }
             if (state.statement.isBlank() && state.entity.isBlank()) {

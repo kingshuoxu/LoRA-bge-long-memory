@@ -127,6 +127,21 @@ class EntityGroundTest {
         assertFalse(json.contains("\"nativeFired\":true"))
     }
 
+    @Test
+    fun bothSelfFactsAreRecalledFromTheSameExpert() {
+        val facts = listOf(
+            StoredFact("expert_self", "我", "我的猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？"), "猫的名字"),
+            StoredFact("expert_self", "我", "我叫徐金朔", "徐金朔", listOf("我叫什么？"), "名字"),
+        )
+        val cat = EntityGround.reply("我的猫叫什么名字？", facts)
+        val name = EntityGround.reply("我叫什么？", facts)
+        assertNotNull(cat)
+        assertNotNull(name)
+        assertTrue(cat!!.answer.contains("你的猫") && cat.answer.contains("咪咪"))
+        assertTrue(name!!.answer.contains("徐金朔"))
+        assertFalse(name.answer.contains("我叫"))
+    }
+
     private fun loadImported(): List<StoredFact> {
         val root = File("../../../experts")
         val dirs = root.listFiles()?.filter { it.isDirectory && it.name.startsWith("expert_") }?.sortedBy { it.name }.orEmpty()

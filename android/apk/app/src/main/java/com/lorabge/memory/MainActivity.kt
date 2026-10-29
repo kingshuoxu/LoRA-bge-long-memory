@@ -238,7 +238,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.19"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.20"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -255,7 +255,34 @@ private fun PhoneApp(
         }
         gatherPendingDrafts(store, experts.flatMap { it.facts }, form)
     }
+    val savedBatch = remember(tick) { TrainBatchStore.read(store) }
     LaunchedEffect(trainSnap.state, tick) {
+        val batch = TrainBatchStore.read(store)
+        if (batch != null && batch.phase == "running" && trainSnap.state == "error") {
+            TrainBatchStore.write(store, batch.copy(phase = "error"))
+            tick++
+            return@LaunchedEffect
+        }
+        if (batch != null && batch.phase == "running" && trainSnap.state == "done") {
+            if (batch.index + 1 < batch.groups.size) {
+                val nextIndex = batch.index + 1
+                val wanted = batch.groups[nextIndex].map { it.trim() }.toSet()
+                val facts = waiting.filter { it.statement.trim() in wanted }.map { it.toReviewed() }
+                if (facts.isNotEmpty()) {
+                    TrainBatchStore.write(store, batch.copy(index = nextIndex))
+                    TrainService.writeReviewedList(store, facts, force)
+                    File(store.trainDir, "status.json").writeText(
+                        trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "排队的下一组", ""),
+                    )
+                    onTrain()
+                    tick++
+                    return@LaunchedEffect
+                }
+            }
+            TrainBatchStore.write(store, batch.copy(phase = "done"))
+            tick++
+            return@LaunchedEffect
+        }
         if (trainSnap.state != "done" || statement.isBlank()) return@LaunchedEffect
         val stored = experts.flatMap { it.facts }
         if (pendingFactLines(listOf(statement), stored).isNotEmpty()) return@LaunchedEffect
@@ -314,6 +341,9 @@ private fun PhoneApp(
         pendingFacts = waiting.map { it.statement },
         pendingDrafts = waiting.map {
             SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr)
+        },
+        batchItems = (savedBatch?.let { batchMarks(it, trainSnap.state) } ?: emptyList()).map { (line, mark) ->
+            SkyBatchItem(line, mark)
         },
     )
     SkyFrame(state) { event ->
@@ -496,22 +526,40 @@ private fun PhoneApp(
             }
             is SkyEvent.TrainPending -> {
                 val draft = waiting.firstOrNull { it.statement == event.statement } ?: return@SkyFrame
+                if (training || trainSnap.state == "running") {
+                    queueBehind(store, draft.statement)
+                    tick++
+                    return@SkyFrame
+                }
                 entity = draft.entity
                 attr = draft.attr
                 statement = draft.statement
                 value = draft.value
                 question = draft.question
                 answer = draft.answer
-                val qa = if (draft.question.isBlank()) emptyList() else listOf(draft.question to draft.answer.ifBlank { draft.value })
-                TrainService.writeReviewed(
+                startReviewed(store, listOf(draft.toReviewed()), force)
+                onTrain()
+                tick++
+            }
+            SkyEvent.TrainAll -> {
+                if (waiting.isEmpty()) return@SkyFrame
+                if (training || trainSnap.state == "running") {
+                    waiting.forEach { queueBehind(store, it.statement) }
+                    tick++
+                    return@SkyFrame
+                }
+                val groups = planTrainGroups(waiting.map { it.toReviewed() })
+                if (groups.isEmpty()) return@SkyFrame
+                TrainBatchStore.write(
                     store,
-                    ReviewedFact(draft.entity.trim(), draft.statement.trim(), draft.value.trim(), qa, emptyList(), attr = draft.attr.trim(), selected = true),
-                    force,
+                    SavedBatch(groups.map { group -> group.map { it.statement } }, 0, "running"),
                 )
+                TrainService.writeReviewedList(store, groups[0], force)
                 onTrain()
                 tick++
             }
             SkyEvent.Train -> {
+                if (training || trainSnap.state == "running") return@SkyFrame
                 if (entity.isBlank() || statement.isBlank() || value.isBlank()) {
                     val job = File(store.trainDir, "job.json")
                     val again = trainSnap.state == "error" || trainSnap.state == "cancelled" || trainSnap.state == "waiting"
@@ -536,7 +584,10 @@ private fun PhoneApp(
                 onTrain()
                 tick++
             }
-            SkyEvent.CancelTrain -> onCancel()
+            SkyEvent.CancelTrain -> {
+                TrainBatchStore.clear(store)
+                onCancel()
+            }
             is SkyEvent.DeleteExpert -> {
                 store.deleteExpert(event.name)
                 Thread {
@@ -695,6 +746,47 @@ private fun clearDownloadedModels(context: android.content.Context) {
     context.getExternalFilesDir(null)?.let { File(it, "models").deleteRecursively() }
     File(context.filesDir, "setup/complete").delete()
     File(context.filesDir, "setup/status.json").delete()
+}
+
+private fun FactDraft.toReviewed(): ReviewedFact {
+    val qa = if (question.isBlank()) emptyList() else listOf(question to answer.ifBlank { value })
+    return ReviewedFact(entity.trim(), statement.trim(), value.trim(), qa, emptyList(), attr = attr.trim(), selected = true)
+}
+
+private fun startReviewed(store: MemoryStore, facts: List<ReviewedFact>, force: Boolean) {
+    val groups = planTrainGroups(facts)
+    if (groups.isEmpty()) return
+    TrainBatchStore.write(store, SavedBatch(groups.map { group -> group.map { it.statement } }, 0, "running"))
+    TrainService.writeReviewedList(store, groups[0], force)
+}
+
+private fun queueBehind(store: MemoryStore, statement: String) {
+    val key = statement.trim()
+    if (key.isEmpty()) return
+    val current = TrainBatchStore.read(store)
+    if (current == null) {
+        val running = jobStatements(store)
+        val groups = if (running.isEmpty() || running.any { it.trim() == key }) {
+            listOf(if (running.isEmpty()) listOf(key) else running)
+        } else {
+            listOf(running, listOf(key))
+        }
+        TrainBatchStore.write(store, SavedBatch(groups, 0, "running"))
+    } else {
+        TrainBatchStore.write(store, enqueueStatement(current, key))
+    }
+}
+
+private fun jobStatements(store: MemoryStore): List<String> {
+    val job = File(store.trainDir, "job.json")
+    if (!job.exists()) return emptyList()
+    val facts = runCatching { org.json.JSONObject(job.readText()).optJSONArray("facts") }.getOrNull() ?: return emptyList()
+    val out = ArrayList<String>()
+    for (i in 0 until facts.length()) {
+        val line = facts.getJSONObject(i).optString("statement").trim()
+        if (line.isNotEmpty()) out.add(line)
+    }
+    return out
 }
 
 internal fun pendingFactLines(noted: List<String>, stored: List<String>): List<String> {

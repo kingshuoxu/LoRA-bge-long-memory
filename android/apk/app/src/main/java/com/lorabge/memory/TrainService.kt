@@ -540,9 +540,14 @@ class TrainService : Service() {
         }
 
         fun writeReviewed(store: MemoryStore, fact: ReviewedFact, force: Boolean) {
+            writeReviewedList(store, listOf(fact), force)
+        }
+
+        fun writeReviewedList(store: MemoryStore, facts: List<ReviewedFact>, force: Boolean) {
+            if (facts.isEmpty()) return
             val generated = "expert_" + System.currentTimeMillis().toString().takeLast(6)
-            val name = store.expertNameFor(listOf(fact), generated)
-            writeJob(store, name, store.factsForTrain(listOf(fact)), force)
+            val name = store.expertNameFor(facts, generated)
+            writeJob(store, name, store.factsForTrain(facts), force)
         }
 
         fun writeJob(
