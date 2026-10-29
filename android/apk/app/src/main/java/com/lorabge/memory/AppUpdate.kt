@@ -44,7 +44,7 @@ val UPDATE_MIRROR_PREFIXES: List<String> = listOf(
 )
 
 const val BROWSER_APK_URL =
-    "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/android-v0.1.18/app-debug.apk"
+    "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/android-v0.1.19/app-debug.apk"
 
 const val BROWSER_RELEASES_URL =
     "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases"
