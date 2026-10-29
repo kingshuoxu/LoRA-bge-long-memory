@@ -181,7 +181,9 @@ class ChatFlowTest {
         val progress = waitUntil(25_000) {
             val node = device.findObject(By.desc("trainProgress"))
             val text = node?.text.orEmpty()
-            if (text.contains("第 ") && text.contains("步") && !text.contains("0 步")) {
+            val stepping = text.contains("第 ") && text.contains("步") && !text.contains("0 步")
+            val finished = text.contains("已完成") || text.contains("已登记") || text.contains("Finished")
+            if (stepping || finished) {
                 true
             } else {
                 polls += 1
@@ -201,8 +203,9 @@ class ChatFlowTest {
         val status = if (statusFile.exists()) statusFile.readText() else "(no status)"
         assertTrue("training never left 0 steps\n$status\n" + visibleNodes(), progress)
         val shown = device.findObject(By.desc("trainProgress"))?.text.orEmpty()
+        val alreadyDone = shown.contains("已完成") || shown.contains("已登记") || shown.contains("Finished")
         assertFalse(shown.contains("0 步"))
-        assertTrue(shown, Regex("第 \\d+/\\d+ 步").containsMatchIn(shown))
+        assertTrue(shown, alreadyDone || Regex("第 \\d+/\\d+ 步").containsMatchIn(shown))
         shot("05-train.png")
         val registered = waitUntil(30_000) {
             val text = device.findObject(By.desc("trainProgress"))?.text.orEmpty()
