@@ -265,7 +265,7 @@ class TrainService : Service() {
                             notify(detail)
                             break
                         }
-                        val detail = trainStallDetail(lastLine)
+                        val detail = trainStallDetail(pendingStep, micro)
                         publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
                         notify("训练没有前进")
                         stalled = true

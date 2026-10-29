@@ -211,7 +211,7 @@ class SkyShotTest {
                         micro = 4,
                         microTotal = 8,
                         microElapsedSec = 120,
-                        detail = "这一微批没有再往前走。点「重试」从 CPU 再训一次，或点「取消训练」。\n停在: [micro 4/8] step 1/12",
+                        detail = "这一微批没有再往前走。点「重试」再训一次，或点「放弃」。\n停在第 1 步的第 4 个微批",
                     ),
                     batchItems = listOf(
                         SkyBatchItem("我的猫叫咪咪", "error", 2),
@@ -357,7 +357,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.23",
+        versionName = "0.1.24",
     )
 
     private fun fourPending() = SkyState(

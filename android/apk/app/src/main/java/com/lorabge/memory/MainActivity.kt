@@ -239,7 +239,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.23"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.24"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -623,7 +623,14 @@ private fun PhoneApp(
             }
             SkyEvent.CancelTrain -> {
                 TrainBatchStore.clear(store)
-                onCancel()
+                if (trainSnap.state == "error") {
+                    File(store.trainDir, "status.json").delete()
+                    File(store.trainDir, "cancel").delete()
+                    File(store.trainDir, "heartbeat").delete()
+                    tick++
+                } else {
+                    onCancel()
+                }
             }
             is SkyEvent.DeleteExpert -> {
                 store.deleteExpert(event.name)

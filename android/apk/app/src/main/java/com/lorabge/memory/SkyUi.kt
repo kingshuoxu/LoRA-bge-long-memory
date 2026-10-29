@@ -261,6 +261,7 @@ fun skyText(lang: String, key: String): String {
         "batchWaiting" to "等待充电",
         "trainNow" to "现在训练",
         "retry" to "重试",
+        "giveUp" to "放弃",
         "cancel" to "取消训练",
         "delete" to "删除",
         "loss" to "损失",
@@ -356,6 +357,7 @@ fun skyText(lang: String, key: String): String {
         "batchWaiting" to "Waiting for charge",
         "trainNow" to "Train now",
         "retry" to "Retry",
+        "giveUp" to "Leave it",
         "cancel" to "Cancel training",
         "delete" to "Delete",
         "loss" to "Loss",
@@ -1470,7 +1472,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             } else {
                 FactCard(state, onEvent, showActions = !runningNow && !waitingNow && snap.state != "error")
             }
-            if (state.status.isNotEmpty()) {
+            if (state.status.isNotEmpty() && snap.state != "error") {
                 val stageWord = skyText(state.lang, "stage.${snap.stage.ifBlank { "train" }}")
                 if (state.status != stageWord) {
                     Text(
@@ -1533,7 +1535,7 @@ private fun TrainActionRow(state: SkyState, onEvent: (SkyEvent) -> Unit, showCon
             )
         }
         Text(
-            skyText(state.lang, "cancel"),
+            skyText(state.lang, if (state.train.state == "error") "giveUp" else "cancel"),
             color = Ink,
             fontSize = 15.sp,
             modifier = Modifier

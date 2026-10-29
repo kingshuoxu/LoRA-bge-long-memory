@@ -1,5 +1,5 @@
 #!/bin/sh
-# 用同一把测试钥匙打 0.1.22 和 0.1.23 的 x86_64 包（不含 arm64 .so），
+# 用同一把测试钥匙打 0.1.23 和 0.1.24 的 x86_64 包（不含 arm64 .so），
 # 在模拟器上 adb install -r，确认对话、待巩固、模型和设置还在。
 # 已发布的 0.1.4 走应用内「检查更新」升到 0.1.5，那条在 inapp_update_014_to_015.sh，不在这里。
 set -eu
@@ -142,25 +142,25 @@ fi
 EMU_PID=$!
 
 cd "$ROOT/android/apk"
-./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.22 --no-daemon
-cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.22.apk"
 ./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.23 --no-daemon
 cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.23.apk"
+./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.24 --no-daemon
+cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.24.apk"
 
 badging() {
   "$AAPT" dump badging "$1"
 }
-echo "$(badging "$STAGE/app-0.1.22.apk")" | grep -q "versionCode='1022'"
-echo "$(badging "$STAGE/app-0.1.22.apk")" | grep -q "versionName='0.1.22'"
 echo "$(badging "$STAGE/app-0.1.23.apk")" | grep -q "versionCode='1023'"
 echo "$(badging "$STAGE/app-0.1.23.apk")" | grep -q "versionName='0.1.23'"
-if unzip -l "$STAGE/app-0.1.23.apk" | grep -q '\.so$'; then
+echo "$(badging "$STAGE/app-0.1.24.apk")" | grep -q "versionCode='1024'"
+echo "$(badging "$STAGE/app-0.1.24.apk")" | grep -q "versionName='0.1.24'"
+if unzip -l "$STAGE/app-0.1.24.apk" | grep -q '\.so$'; then
   echo "升级测试包不应带原生库，否则 x86_64 模拟器装不上" >&2
   exit 1
 fi
 
-CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.22.apk" | grep 'SHA-256 digest' | head -1)
-CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.23.apk" | grep 'SHA-256 digest' | head -1)
+CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.23.apk" | grep 'SHA-256 digest' | head -1)
+CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.24.apk" | grep 'SHA-256 digest' | head -1)
 test -n "$CERT_A"
 test "$CERT_A" = "$CERT_B"
 
@@ -215,7 +215,7 @@ PY
 # shellcheck disable=SC1091
 . "$STAGE/grab.env"
 
-"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.22.apk"
+"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.23.apk"
 # adb shell 会把 run-as … sh -c "echo > file" 里的重定向吃掉，文件写不进应用目录。
 printf '%s\n' 'keep-memory' >"$STAGE/keep.txt"
 printf '%s\n' 'keep-model' >"$STAGE/keep.bin"
@@ -235,7 +235,7 @@ EOF
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-keep.bin files/models/keep.bin
 "$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cp /data/local/tmp/lorabge-setup.xml shared_prefs/setup.xml
 
-"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.23.apk"
+"$ADB" -s "emulator-$PORT" install -r -t "$STAGE/app-0.1.24.apk"
 MEM=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/keep.txt | tr -d '\r')
 CHAT=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/memory/conversations/c-keep.json | tr -d '\r')
 MOD=$("$ADB" -s "emulator-$PORT" shell run-as com.lorabge.memory cat files/models/keep.bin | tr -d '\r')
@@ -248,8 +248,8 @@ printf '%s\n' "$CHAT" | grep -q '我是徐金朔'
 printf '%s\n' "$CHAT" | grep -q '我的猫猫叫咪咪'
 printf '%s\n' "$MOD" | grep -qx 'keep-model'
 printf '%s\n' "$PREF" | grep -q 'name="keep">yes'
-test "$CODE" = "1023"
-echo "upgrade preserved chat, pending facts, models, settings; versionCode 1023"
+test "$CODE" = "1024"
+echo "upgrade preserved chat, pending facts, models, settings; versionCode 1024"
 
 "$ADB" -s "emulator-$PORT" shell settings put secure show_ime_with_hard_keyboard 1
 "$ADB" -s "emulator-$PORT" shell ime enable com.android.inputmethod.latin/.LatinIME || true
@@ -325,7 +325,7 @@ pull_e2e() {
   done <"$STAGE/e2e-ls.txt"
 }
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.23 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.24 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
 chat_pid=$!
 set -e
 while kill -0 "$chat_pid" 2>/dev/null; do
@@ -346,7 +346,7 @@ fi
 RECORD="$STAGE/nebula-gesture.webm"
 RECORD_NAME="$RECORD"
 set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.23 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
+./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.24 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.NebulaGestureTest --no-daemon &
 nebula_pid=$!
 recorded=0
 for _ in $(seq 1 180); do

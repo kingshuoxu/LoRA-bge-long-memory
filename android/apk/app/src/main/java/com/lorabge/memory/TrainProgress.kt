@@ -72,10 +72,8 @@ fun trainLoadHeartbeat(elapsedSec: Long, rssKb: Long): String {
     return "正在加载模型 · 已过 ${elapsedSec} 秒$mem"
 }
 
-fun trainLoadStallDetail(lastLine: String): String {
-    val head = "加载模型没有进展。点「确认并训练」重试，或点「取消训练」。"
-    val where = lastLine.trim().take(180)
-    return if (where.isEmpty()) head else "$head\n停在: $where"
+fun trainLoadStallDetail(@Suppress("UNUSED_PARAMETER") lastLine: String): String {
+    return "加载模型没有进展。点「重试」再试一次，或点「放弃」。"
 }
 
 /** Failure before any loss should not keep a curve from an older log. */
@@ -129,7 +127,7 @@ fun trainRetryDetail(threads: Int): String {
 }
 
 fun trainDeadDetail(): String {
-    return "训练进程已经停住，界面还停在上一次的微批。点「重试」再开始，或点「取消训练」。"
+    return "训练进程已经停住。点「重试」再开始，或点「放弃」。"
 }
 
 /** Running in the status file is not proof the trainer is alive. */
@@ -151,10 +149,10 @@ fun etaFromMicros(elapsedSec: Long, finished: Int, totalMicros: Int): Long {
     return elapsedSec * (totalMicros - finished) / finished
 }
 
-fun trainStallDetail(lastLine: String): String {
-    val head = "这一微批没有再往前走。点「重试」从 CPU 再训一次，或点「取消训练」。"
-    val where = lastLine.trim().take(180)
-    return if (where.isEmpty()) head else "$head\n停在: $where"
+fun trainStallDetail(pendingStep: Int, micro: Int): String {
+    val head = "这一微批没有再往前走。点「重试」再训一次，或点「放弃」。"
+    if (pendingStep <= 0 || micro <= 0) return head
+    return "$head\n停在第 $pendingStep 步的第 $micro 个微批"
 }
 
 /** The trainer has logged a micro of a step that does not have a loss line yet. */

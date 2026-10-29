@@ -180,10 +180,11 @@ class TrainProgressTest {
         assertTrue(trainStillExpected(7, 8))
         assertFalse(trainStillExpected(8, 8))
         assertEquals(180_000L, TRAIN_STALL_MS)
-        val detail = trainStallDetail("[Dataset] epochs=4 max_steps=8")
+        val detail = trainStallDetail(1, 4)
         assertTrue(detail.contains("重试"))
-        assertTrue(detail.contains("取消训练"))
-        assertTrue(detail.contains("[Dataset] epochs=4 max_steps=8"))
+        assertTrue(detail.contains("放弃"))
+        assertTrue(detail.contains("停在第 1 步的第 4 个微批"))
+        assertFalse(detail.contains("["))
         val runningLast = formatTrainProgress(
             "zh",
             TrainSnapshot(state = "running", stage = "train", step = 4, total = 4, epoch = 1, epochs = 1, loss = 0.6f),
@@ -220,9 +221,10 @@ class TrainProgressTest {
         assertTrue(heartbeat.contains("500 MB"))
         val stalled = trainLoadStallDetail(facts)
         assertTrue(stalled.contains("加载模型没有进展"))
-        assertTrue(stalled.contains("确认并训练"))
-        assertTrue(stalled.contains("取消训练"))
-        assertTrue(stalled.contains("rows=20"))
+        assertTrue(stalled.contains("重试"))
+        assertTrue(stalled.contains("放弃"))
+        assertFalse(stalled.contains("rows=20"))
+        assertFalse(stalled.contains("["))
         val hidden = lossChartValues(
             TrainSnapshot(state = "error", step = 0, loss = null, detail = stalled),
             listOf(1.4f, 0.8f, 0f),
