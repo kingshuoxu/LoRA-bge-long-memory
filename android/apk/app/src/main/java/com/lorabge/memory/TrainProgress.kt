@@ -219,8 +219,14 @@ fun trainFrameKey(snap: TrainSnapshot): String {
  * One poll of status.json. Null means the page must not recompose: the read
  * was empty or cut off, the visible frame is unchanged, or a blank "running"
  * reset is trying to cover a failure the user is already looking at.
+ * A missing file is the user tapping 放弃, so the failure card has to go.
+ * An empty read of a file that is still there is a torn write, and is ignored.
  */
-fun acceptTrainStatus(previous: TrainSnapshot, raw: String): TrainSnapshot? {
+fun acceptTrainStatus(previous: TrainSnapshot, raw: String, fileExists: Boolean = true): TrainSnapshot? {
+    if (!fileExists) {
+        val cleared = TrainSnapshot()
+        return if (trainFrameKey(cleared) == trainFrameKey(previous)) null else cleared
+    }
     val trimmed = raw.trim()
     if (trimmed.isEmpty()) return null
     if (runCatching { JSONObject(trimmed) }.isFailure) return null

@@ -290,6 +290,8 @@ class TrainProgressTest {
         assertEquals(0, flips)
         assertEquals("error", shown.state)
         assertTrue(formatTrainProgress("zh", shown).contains("训练进程已经停住"))
+        assertEquals("", acceptTrainStatus(shown, "", fileExists = false)!!.state)
+        assertEquals(null, acceptTrainStatus(TrainSnapshot(), "", fileExists = false))
         val retry = trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "抽取事实", "")
         val started = acceptTrainStatus(shown, retry)
         assertEquals("running", started!!.state)

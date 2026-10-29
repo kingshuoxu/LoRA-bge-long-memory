@@ -222,8 +222,9 @@ private fun PhoneApp(
         var held = trainSnap
         while (true) {
             delay(350)
-            val raw = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
-            val next = acceptTrainStatus(held, raw) ?: continue
+            val exists = statusFile.exists()
+            val raw = if (exists) runCatching { statusFile.readText() }.getOrDefault("") else ""
+            val next = acceptTrainStatus(held, raw, exists) ?: continue
             held = next
             trainSnap = next
         }
@@ -258,7 +259,12 @@ private fun PhoneApp(
         if (trainSnap.state == "running") {
             while (true) {
                 delay(3000)
-                val raw = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+                if (!statusFile.exists()) {
+                    val cleared = acceptTrainStatus(trainSnap, "", fileExists = false)
+                    if (cleared != null) trainSnap = cleared
+                    return@LaunchedEffect
+                }
+                val raw = runCatching { statusFile.readText() }.getOrDefault("")
                 val now = parseTrainSnapshot(raw)
                 // A cut-off read is not a new state, and it must not kill the trainer.
                 if (now.state.isEmpty()) continue
@@ -267,10 +273,15 @@ private fun PhoneApp(
                 ) {
                     TrainService.markDead(store)
                 }
-                val after = runCatching { statusFile.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault("")
+                if (!statusFile.exists()) {
+                    val cleared = acceptTrainStatus(trainSnap, "", fileExists = false)
+                    if (cleared != null) trainSnap = cleared
+                    return@LaunchedEffect
+                }
+                val after = runCatching { statusFile.readText() }.getOrDefault("")
                 val afterSnap = parseTrainSnapshot(after)
                 if (afterSnap.state.isEmpty()) continue
-                val next = acceptTrainStatus(trainSnap, after)
+                val next = acceptTrainStatus(trainSnap, after, fileExists = true)
                 if (next != null && next.state != "running") {
                     trainSnap = next
                     return@LaunchedEffect
@@ -282,7 +293,10 @@ private fun PhoneApp(
         val stuck = TrainBatchStore.read(store)
         if (shouldRecoverBatch(stuck, live.state)) {
             TrainBatchStore.clear(store)
-            if (live.state == "waiting") statusFile.delete()
+            if (live.state == "waiting") {
+                statusFile.delete()
+                trainSnap = TrainSnapshot()
+            }
             tick++
             return@LaunchedEffect
         }
@@ -631,6 +645,7 @@ private fun PhoneApp(
                     File(store.trainDir, "status.json").delete()
                     File(store.trainDir, "cancel").delete()
                     File(store.trainDir, "heartbeat").delete()
+                    trainSnap = TrainSnapshot()
                     tick++
                 } else {
                     onCancel()
