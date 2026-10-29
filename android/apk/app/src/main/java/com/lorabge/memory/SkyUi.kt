@@ -1387,7 +1387,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     modifier = Modifier.padding(vertical = 18.dp),
                 )
             } else {
-                FactCard(state, onEvent)
+                FactCard(state, onEvent, showActions = !trainActionsOpen(state.training, snap))
             }
             if (chartLoss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error") {
                 Spacer(Modifier.height(12.dp))
@@ -1543,7 +1543,7 @@ private fun StageTimeline(state: SkyState) {
 }
 
 @Composable
-private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit, showActions: Boolean) {
     Column(
         Modifier.fillMaxWidth().padding(top = 8.dp)
             .height(IntrinsicSize.Min)
@@ -1577,27 +1577,29 @@ private fun FactCard(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                         modifier = Modifier.clickable { onEvent(SkyEvent.Force(!state.force)) },
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        skyText(state.lang, "train"),
-                        color = CanvasBg,
-                        fontSize = 15.sp,
-                        modifier = Modifier
-                            .background(Ink, Pill)
-                            .clickable { onEvent(SkyEvent.Train) }
-                            .semantics { contentDescription = "confirmTrain" }
-                            .padding(vertical = 8.dp, horizontal = 14.dp),
-                    )
-                    Text(
-                        skyText(state.lang, "cancel"),
-                        color = Ink,
-                        fontSize = 15.sp,
-                        modifier = Modifier
-                            .border(1.dp, GlassLine, Pill)
-                            .clickable { onEvent(SkyEvent.CancelTrain) }
-                            .semantics { contentDescription = "cancelTrain" }
-                            .padding(vertical = 8.dp, horizontal = 14.dp),
-                    )
+                if (showActions) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            skyText(state.lang, "train"),
+                            color = CanvasBg,
+                            fontSize = 15.sp,
+                            modifier = Modifier
+                                .background(Ink, Pill)
+                                .clickable { onEvent(SkyEvent.Train) }
+                                .semantics { contentDescription = "confirmTrain" }
+                                .padding(vertical = 8.dp, horizontal = 14.dp),
+                        )
+                        Text(
+                            skyText(state.lang, "cancel"),
+                            color = Ink,
+                            fontSize = 15.sp,
+                            modifier = Modifier
+                                .border(1.dp, GlassLine, Pill)
+                                .clickable { onEvent(SkyEvent.CancelTrain) }
+                                .semantics { contentDescription = "cancelTrain" }
+                                .padding(vertical = 8.dp, horizontal = 14.dp),
+                        )
+                    }
                 }
             }
         }
