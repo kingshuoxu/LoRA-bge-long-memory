@@ -275,7 +275,12 @@ private fun PhoneApp(
                 // A cut-off read is not a new state, and it must not kill the trainer.
                 if (now.state.isEmpty()) continue
                 if (shouldRemarkFailedTrain(now.state) &&
-                    trainRunIsStale(now.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))
+                    trainRunIsStale(
+                        now.state,
+                        TrainService.trainPidAlive(store),
+                        TrainService.heartbeatAgeMs(store),
+                        pidKnown = TrainService.trainPidKnown(store),
+                    )
                 ) {
                     val alive = TrainService.trainPidAlive(store)
                     val exit = if (alive) {
@@ -849,6 +854,8 @@ private fun armForeground(store: MemoryStore) {
     store.ensure()
     File(store.trainDir, "force").writeText("1")
     File(store.trainDir, "cancel").delete()
+    File(store.trainDir, "pid").delete()
+    File(store.trainDir, "heartbeat").delete()
     writeTextAtomic(
         File(store.trainDir, "status.json"),
         trainSnapshotJson("running", "extract", 0, 0, 4, null, 0, "抽取事实", ""),

@@ -663,9 +663,14 @@ class TrainService : Service() {
             )
         }
 
-        fun trainPidAlive(store: MemoryStore): Boolean {
+        fun trainPidKnown(store: MemoryStore): Boolean {
             val pid = File(store.trainDir, "pid").takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: return false
-            if (pid <= 0) return false
+            return pid > 0
+        }
+
+        fun trainPidAlive(store: MemoryStore): Boolean {
+            if (!trainPidKnown(store)) return false
+            val pid = File(store.trainDir, "pid").readText().trim().toInt()
             return File("/proc/$pid").exists()
         }
 

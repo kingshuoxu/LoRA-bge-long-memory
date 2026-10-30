@@ -252,10 +252,20 @@ fun trainDeadDetail(): String {
     return "训练进程已经停住。点「重试」再开始，或点「放弃」。"
 }
 
-/** Running in the status file is not proof the trainer is alive. */
-fun trainRunIsStale(state: String, pidAlive: Boolean, heartbeatAgeMs: Long, limitMs: Long = TRAIN_HEARTBEAT_STALE_MS): Boolean {
+/**
+ * Running in the status file is not proof the trainer is alive.
+ * A pid that existed and is gone is a dead trainer. No pid yet means the
+ * service has not spawned it; that is only a failure once the heartbeat stops.
+ */
+fun trainRunIsStale(
+    state: String,
+    pidAlive: Boolean,
+    heartbeatAgeMs: Long,
+    limitMs: Long = TRAIN_HEARTBEAT_STALE_MS,
+    pidKnown: Boolean = true,
+): Boolean {
     if (state != "running") return false
-    if (!pidAlive) return true
+    if (pidKnown && !pidAlive) return true
     if (heartbeatAgeMs < 0) return false
     return heartbeatAgeMs >= limitMs
 }

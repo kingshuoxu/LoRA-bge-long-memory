@@ -54,7 +54,7 @@ class LlmClient(context: Context) {
             app.stopService(Intent(app, LlmService::class.java))
         } catch (_: Throwable) {
         }
-        ChatRuntime.waitUntilReleased()
+        ChatRuntime.releaseHeldModels()
     }
 
     /** Allow the next chat or route to load the model again. */

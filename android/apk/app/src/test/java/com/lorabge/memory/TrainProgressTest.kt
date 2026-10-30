@@ -162,6 +162,8 @@ class TrainProgressTest {
         assertEquals("32", args[args.indexOf("--lora_r") + 1])
         assertFalse(trainRunIsStale("running", pidAlive = true, heartbeatAgeMs = 2_000))
         assertTrue(trainRunIsStale("running", pidAlive = false, heartbeatAgeMs = 0))
+        assertFalse(trainRunIsStale("running", pidAlive = false, heartbeatAgeMs = 0, pidKnown = false))
+        assertTrue(trainRunIsStale("running", pidAlive = false, heartbeatAgeMs = TRAIN_HEARTBEAT_STALE_MS, pidKnown = false))
         assertTrue(trainRunIsStale("running", pidAlive = true, heartbeatAgeMs = TRAIN_HEARTBEAT_STALE_MS))
         assertFalse(trainRunIsStale("done", pidAlive = false, heartbeatAgeMs = 60_000))
         assertEquals(3, finishedMicros(0, 4, 8))
