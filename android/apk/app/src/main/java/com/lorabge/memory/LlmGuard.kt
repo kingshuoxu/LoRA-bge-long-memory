@@ -79,28 +79,11 @@ class LlmGuard(private val file: File?) {
     }
 
     fun notice(lang: String): String {
-        val (code, stage, signal) = locked {
-            val last = crashes.lastOrNull { it.backend != "cpu" && it.backend != "unknown" && it.backend.isNotBlank() }
-            Triple(notice, last?.stage.orEmpty(), last?.signal.orEmpty())
-        }
+        val code = locked { notice }
         if (code.isBlank()) return ""
         val zh = lang != "en"
-        val where = stageName(stage, zh)
-        val how = signal.ifBlank { if (zh) "退出" else "exit" }
-        if (code == "ensure_lost") {
-            val raw = stage.ifBlank { "ensure" }
-            return if (zh) {
-                "图形后端在启动时退出（stage=$raw，$how）。这一次改用 CPU，没有停用 GPU。设置里把图形后端改成「自动」会再测。"
-            } else {
-                "Graphics backend exited during startup (stage=$raw, $how). This attempt used CPU. GPU stays available. Set Graphics to Auto to measure again."
-            }
-        }
-        if (code != "cpu_fallback") return if (zh) "生成失败" else "Generation failed"
-        return if (zh) {
-            "图形后端异常（$where $how），这条已改用 CPU。设置里把图形后端改成「自动」可再试。"
-        } else {
-            "Graphics backend failed ($where $how). This reply used CPU. Set Graphics to Auto in Settings to try the GPU again."
-        }
+        if (code != "ensure_lost" && code != "cpu_fallback") return if (zh) "生成失败" else "Generation failed"
+        return if (zh) "这条改用了 CPU。" else "This reply used the CPU."
     }
 
     fun render(): String {

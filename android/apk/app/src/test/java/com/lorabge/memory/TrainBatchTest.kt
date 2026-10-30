@@ -13,15 +13,17 @@ class TrainBatchTest {
         val cat = ReviewedFact("我", "我的猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？" to "咪咪"), emptyList(), attr = "猫的名字")
         val name = ReviewedFact("我", "我叫徐金朔", "徐金朔", listOf("我叫什么？" to "徐金朔"), emptyList(), attr = "名字")
         val groups = planTrainGroups(listOf(cat, name))
-        assertEquals(1, groups.size)
-        assertEquals(listOf("我的猫叫咪咪", "我叫徐金朔"), groups[0].map { it.statement })
+        assertEquals(2, groups.size)
+        assertEquals(listOf("我叫徐金朔"), groups[0].map { it.statement })
+        assertEquals(listOf("我的猫叫咪咪"), groups[1].map { it.statement })
         val root = Files.createTempDirectory("batch-self").toFile()
         val store = MemoryStore(root)
         store.ensure()
         assertEquals(SELF_EXPERT, store.expertNameFor(groups[0], "expert_999999"))
+        assertEquals(stableExpertId("咪咪"), store.expertNameFor(groups[1], "expert_999999"))
         val merged = store.factsForTrain(groups[0])
-        assertEquals(setOf("我的猫叫咪咪", "我叫徐金朔"), merged.map { it.statement }.toSet())
-        assertTrue(merged.all { it.entity == "我" })
+        assertEquals(listOf("我叫徐金朔"), merged.map { it.statement })
+        assertTrue(merged.all { isAboutYou(it) })
     }
 
     @Test

@@ -53,7 +53,7 @@ object EntityGround {
         val related = if (alias != null) {
             facts.filter { it.entity == alias.first.entity }
         } else {
-            facts.filter { personalHit(query, it) || questionMatches(query, it) }
+            facts.filter { personalHit(query, it) || possessionHit(query, it) || questionMatches(query, it) }
         }
         if (related.isEmpty()) return null
         val fact = alias?.first ?: related.first()
@@ -133,6 +133,12 @@ object EntityGround {
             kind == "overview" -> mine
             else -> emptyList()
         }
+        if (kind == "identity" && use.isNotEmpty()) {
+            val name = use.first()
+            val value = name.value.ifBlank { name.statement }
+            val answer = if (lang == "en") "You are $value." else "你是$value。"
+            return GroundedReply(name.expert, "我", finish(answer), "entity")
+        }
         if (use.isEmpty()) {
             val answer = when {
                 lang == "en" && kind == "place" -> "I don't know where you live yet. You can tell me."
@@ -167,9 +173,21 @@ object EntityGround {
 
     private fun personalHit(query: String, fact: StoredFact): Boolean {
         if (fact.entity != "我" || fact.attr.isBlank()) return false
+        if (possessedName(fact.entity, fact.attr, fact.statement, fact.value) != null) return false
         val noun = fact.attr.removeSuffix("的名字")
         if (noun.isBlank() || noun == fact.attr) return false
         return query.contains(noun) && (query.contains("叫") || query.contains("名字") || query.contains("是"))
+    }
+
+    private fun possessionHit(query: String, fact: StoredFact): Boolean {
+        val name = possessedName(fact.entity, fact.attr, fact.statement, fact.value) ?: return false
+        val q = norm(query)
+        if (name.isNotBlank() && q.contains(name)) return true
+        val stmt = fact.statement
+        if (stmt.contains("猫") && (q.contains("猫") || q.contains("cat"))) return true
+        val thing = Regex("^我的(.+?)叫").find(stmt.trim())?.groupValues?.get(1)?.trim().orEmpty()
+        if (thing.isNotEmpty() && q.contains(thing)) return true
+        return false
     }
 
     private fun questionMatches(query: String, fact: StoredFact): Boolean {
@@ -216,7 +234,7 @@ object EntityGround {
      * A reply has to speak to them, not repeat the sentence as if the assistant were the user.
      */
     internal fun assistantVoice(statement: String, entity: String): String {
-        if (!isSelfEntity(entity)) return statement
+        if (!isSelfEntity(entity) && !statement.trim().startsWith("我")) return statement
         val text = statement.trim()
         if (text.isEmpty()) return text
         if (!FactExpand.hasCjk(text)) return speakEnglish(text)

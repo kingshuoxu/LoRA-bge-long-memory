@@ -564,21 +564,19 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             if (state.updatePhase.isNotBlank() && state.updatePhase != "latest" && !state.settingsOpen) {
                 UpdateCard(state, onEvent, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = nav + 76.dp))
             }
-            if (state.toast.isNotBlank() && !state.settingsOpen && state.updatePhase.isBlank()) {
-                val toastBottom = when {
-                    keyboard -> ime + 76.dp
-                    else -> nav + 72.dp
-                }
+            if (state.toast.isNotBlank() && !state.settingsOpen && state.updatePhase.isBlank() && state.tab != SkyTab.Chat) {
                 Text(
                     state.toast,
-                    color = Ink,
-                    fontSize = 14.sp,
+                    color = Muted,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(start = 20.dp, end = 20.dp, bottom = toastBottom)
-                        .background(Color(0xF21C1C1F), RoundedCornerShape(16.dp))
+                        .padding(start = 16.dp, end = 16.dp, bottom = nav + 72.dp)
+                        .fillMaxWidth()
+                        .background(Surface, CardShape)
                         .clickable { onEvent(SkyEvent.DismissToast) }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
             if (state.settingsOpen) Box(Modifier.fillMaxSize().zIndex(3f)) { SettingsPane(state, top, nav, onEvent) }
@@ -1298,6 +1296,20 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 }
             }
         }
+        if (state.toast.isNotBlank()) {
+            Text(
+                state.toast,
+                color = Muted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .background(Surface, CardShape)
+                    .clickable { onEvent(SkyEvent.DismissToast) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        }
         // 语义放在输入框外面。交给 OutlinedTextField 的 modifier 会被装饰层盖住，
         // 无障碍树里只剩一个没有 EditableText 的 View，真输入法和 UiAutomator 都打不进去。
         Box(
@@ -1830,20 +1842,21 @@ private fun StageTimeline(state: SkyState) {
                 drawCircle(fill, radius, center)
             }
         }
-        Row(Modifier.fillMaxWidth()) {
-            stageIds.forEachIndexed { index, id ->
-                val mark = states[index]
-                Text(
-                    skyText(state.lang, "stage.$id"),
-                    color = if (mark == "active") Ink else if (mark == "done") Ink.copy(alpha = 0.72f) else Muted,
-                    fontSize = 10.sp,
-                    lineHeight = 13.sp,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 1.dp),
-                )
-            }
+        val focus = stageIds.indices.firstOrNull { states[it] == "active" }
+        val caption = when {
+            focus != null -> skyText(state.lang, "stage.${stageIds[focus]}")
+            states.isNotEmpty() && states.all { it == "done" } -> if (state.lang == "en") "Done" else "完成"
+            else -> ""
+        }
+        if (caption.isNotBlank()) {
+            Text(
+                caption,
+                color = Ink,
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
         }
     }
 }

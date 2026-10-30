@@ -12,8 +12,8 @@ class FactNoticeTest {
     @Test
     fun catStatementFillsQuestionAndAnswer() {
         val draft = FactNotice.draft("我的猫猫叫咪咪")
-        assertEquals("我", draft?.entity)
-        assertEquals("猫的名字", draft?.attr)
+        assertEquals("咪咪", draft?.entity)
+        assertEquals("宠物", draft?.attr)
         assertEquals("我的猫叫什么名字？", draft?.question)
         assertEquals("咪咪", draft?.answer)
         assertEquals("好的，记住了，你的猫叫咪咪。", FactNotice.acknowledge(draft!!, "zh"))
@@ -136,13 +136,14 @@ class FactNoticeTest {
         assertEquals(listOf("我的猫叫咪咪", "我叫徐金朔"), waiting.map { it.statement })
         assertEquals(listOf(2, 2), waiting.map { it.merged })
         assertEquals(listOf("咪咪", "徐金朔"), waiting.map { it.value })
-        assertTrue(waiting.all { it.entity == "我" })
+        assertEquals(listOf("咪咪", "我"), waiting.map { it.entity })
         val groups = planTrainGroups(
             waiting.map { ReviewedFact(it.entity, it.statement, it.value, emptyList(), emptyList(), attr = it.attr) },
         )
-        assertEquals(1, groups.size)
+        assertEquals(2, groups.size)
         val store = MemoryStore(Files.createTempDirectory("near-self").toFile())
-        assertEquals(SELF_EXPERT, store.expertNameFor(groups[0], "expert_x"))
+        assertEquals(SELF_EXPERT, store.expertNameFor(listOf(groups[0].first { isAboutYou(it) }), "expert_x"))
+        assertEquals(stableExpertId("咪咪"), store.expertNameFor(groups.first { it.any { fact -> possessedName(fact) != null } }, "expert_x"))
     }
 
     @Test

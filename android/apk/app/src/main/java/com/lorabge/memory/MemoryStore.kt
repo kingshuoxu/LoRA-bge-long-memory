@@ -164,16 +164,20 @@ class MemoryStore(val root: File) {
     }
 
     fun expertNameFor(facts: List<ReviewedFact>, generated: String): String {
-        if (facts.isNotEmpty() && facts.all { isSelfEntity(it.entity) }) return SELF_EXPERT
+        val owned = facts.mapNotNull { possessedName(it) }.distinct()
+        if (facts.isNotEmpty() && owned.size == 1 && facts.all { possessedName(it) == owned[0] }) {
+            return stableExpertId(owned[0])
+        }
+        if (facts.isNotEmpty() && facts.all { isAboutYou(it) }) return SELF_EXPERT
         return generated
     }
 
     fun factsForTrain(incoming: List<ReviewedFact>): List<ReviewedFact> {
-        if (incoming.isEmpty() || incoming.any { !isSelfEntity(it.entity) }) return incoming
+        if (incoming.isEmpty() || incoming.any { !isAboutYou(it) }) return incoming
         val merged = LinkedHashMap<String, ReviewedFact>()
         listExperts().forEach { record ->
-            val stored = readReviewedFacts(record.expert)
-            if (stored.isEmpty() || stored.any { !isSelfEntity(it.entity) }) return@forEach
+            val stored = readReviewedFacts(record.expert).filter { isAboutYou(it) }
+            if (stored.isEmpty()) return@forEach
             stored.forEach { fact ->
                 val key = fact.statement.trim()
                 if (key.isNotEmpty()) merged.putIfAbsent(key, fact)
@@ -184,6 +188,50 @@ class MemoryStore(val root: File) {
             if (key.isNotEmpty()) merged[key] = fact
         }
         return merged.values.toList()
+    }
+
+    /**
+     * Facts such as "我的猫叫咪咪" that were stored on the about-you expert
+     * become their own node. The name and the original sentence stay, so
+     * "我的猫是什么" still answers 咪咪.
+     */
+    fun migratePossessedEntities(): Boolean {
+        var changed = false
+        val records = listExperts()
+        for (record in records) {
+            val facts = readReviewedFacts(record.expert)
+            val owned = facts.filter { isSelfEntity(it.entity) && possessedName(it) != null }
+            if (owned.isEmpty()) continue
+            val keep = facts.filter { it !in owned }
+            owned.groupBy { possessedName(it)!! }.forEach { (name, rows) ->
+                val lifted = rows.map { fact ->
+                    fact.copy(
+                        entity = name,
+                        attr = if (fact.attr.contains("猫") || fact.statement.contains("猫")) "宠物" else fact.attr.ifBlank { "关系" },
+                    )
+                }
+                val id = stableExpertId(name)
+                val existing = readReviewedFacts(id)
+                val merged = (existing + lifted).distinctBy { it.statement.trim() }
+                val batchNo = listExperts().firstOrNull { it.expert == id }?.batch
+                    ?: ((listExperts().maxOfOrNull { it.batch } ?: -1) + 1)
+                val rank = listExperts().firstOrNull { it.expert == id }?.rank ?: record.rank
+                registerExpert(
+                    ExpertRecord(id, batchNo, merged.size, rank, "experts/$id/router_key.f32", "experts/$id/adapter.gguf"),
+                    merged,
+                )
+                val src = File(expertsDir, "${record.expert}/adapter.gguf")
+                val dest = File(expertsDir, "$id/adapter.gguf")
+                if (src.exists() && !dest.exists()) src.copyTo(dest)
+            }
+            if (keep.isEmpty()) {
+                if (record.expert != stableExpertId(possessedName(owned.first()) ?: "")) deleteExpert(record.expert)
+            } else {
+                registerExpert(record.copy(nFacts = keep.size), keep)
+            }
+            changed = true
+        }
+        return changed
     }
 
     fun retireOtherSelfExperts() {
@@ -385,3 +433,39 @@ data class ReviewedFact(
 internal const val SELF_EXPERT = "expert_self"
 
 internal fun isSelfEntity(entity: String) = entity.trim() == "我"
+
+/**
+ * A pet, person, or other thing named in the user's words ("我的猫叫咪咪")
+ * is its own entity. The value is the name. Facts about the user stay on 我.
+ */
+internal fun possessedName(entity: String, attr: String, statement: String, value: String): String? {
+    val stmt = statement.trim().trimEnd('。', '.', '！', '!', ' ')
+    if (!isSelfEntity(entity)) {
+        if (stmt.startsWith("我的") && entity.isNotBlank()) return entity.trim()
+        return null
+    }
+    if (attr.contains("猫") || stmt.contains("我的猫")) {
+        val named = value.trim().trimEnd('。', '.', '！', '!').ifBlank {
+            Regex("叫(.+)$").find(stmt)?.groupValues?.get(1)?.trim().orEmpty()
+        }
+        if (named.isNotEmpty() && named != "我") return named
+    }
+    val mine = Regex("^我的(.+?)叫(.+)$").find(stmt) ?: return null
+    val named = mine.groupValues[2].trim().trimEnd('。', '.', '！', '!')
+    if (named.isEmpty() || named == "我") return null
+    return named
+}
+
+internal fun possessedName(fact: ReviewedFact): String? =
+    possessedName(fact.entity, fact.attr, fact.statement, fact.value)
+
+internal fun isAboutYou(fact: ReviewedFact): Boolean = isSelfEntity(fact.entity) && possessedName(fact) == null
+
+internal fun stableExpertId(entity: String): String {
+    var hash = 2166136261u
+    entity.trim().forEach { ch ->
+        hash = hash xor ch.code.toUInt()
+        hash *= 16777619u
+    }
+    return "expert_${hash.toString(16)}"
+}

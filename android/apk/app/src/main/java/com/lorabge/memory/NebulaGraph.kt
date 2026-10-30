@@ -168,6 +168,10 @@ internal object NebulaGraph {
                 if (entity.isNotBlank() && !expertId.matches(entity)) {
                     entityExperts.getOrPut(entity) { LinkedHashSet() }.add(record.expert)
                 }
+                val owned = possessedName(entity, raw.optString("attr"), raw.optString("statement"), raw.optString("value"))
+                if (owned != null && !isSelfEntity(entity)) {
+                    entityExperts.getOrPut("我") { LinkedHashSet() }.add(record.expert)
+                }
             }
         }
         entityExperts.values.forEach { names ->
@@ -253,23 +257,31 @@ internal object NebulaGraph {
 }
 
 internal fun backendLine(lang: String, record: BackendRecord, baseReady: Boolean, bgeReady: Boolean): String {
-    val where = DeviceTune.label(record, lang)
-    val base = if (baseReady) skyText(lang, "baseReady") else skyText(lang, "baseMissing")
-    val bge = if (bgeReady) skyText(lang, "bgeReady") else skyText(lang, "bgeMissing")
-    val why = when (record.reason) {
-        "mali_unproven" -> skyText(lang, "maliUnproven")
-        "matched_faster" -> skyText(lang, "matchedFaster")
-        "matched" -> skyText(lang, "matched")
-        "no_vulkan" -> skyText(lang, "noVulkan")
-        "native_crash", "chat_exit", "embed_exit", "speed_exit" -> skyText(lang, "nativeCrash")
-        "chat_timeout", "embed_timeout" -> skyText(lang, "gpuTimeout")
-        else -> when (record.mode) {
-            "cpu" -> skyText(lang, "usingCpu")
-            "gpu" -> skyText(lang, "usingGpu")
-            else -> if (record.checking) skyText(lang, "checkingGpu") else ""
-        }
+    if (record.mode == "auto" && record.checking) {
+        return if (lang == "en") "Checking whether to use the GPU." else "正在确认用 CPU 还是 GPU"
     }
-    return listOf("$base · $bge · $where", why).filter { it.isNotBlank() }.joinToString("\n")
+    val gpu = DeviceTune.active(record) == "vulkan"
+    val head = if (lang == "en") {
+        if (gpu) "Using the GPU" else "Using the CPU"
+    } else {
+        if (gpu) "当前使用 GPU" else "当前使用 CPU"
+    }
+    val unstable = record.reason in setOf(
+        "mali_unproven",
+        "native_crash",
+        "chat_exit",
+        "embed_exit",
+        "speed_exit",
+        "chat_timeout",
+        "embed_timeout",
+        "no_vulkan",
+    )
+    val why = if (!gpu && unstable) {
+        if (lang == "en") "The GPU is not stable on this phone yet." else "GPU 在这台手机上暂不稳定"
+    } else {
+        ""
+    }
+    return listOf(head, why).filter { it.isNotBlank() }.joinToString("\n")
 }
 
 internal fun presentTrainStatus(lang: String, raw: String): String {

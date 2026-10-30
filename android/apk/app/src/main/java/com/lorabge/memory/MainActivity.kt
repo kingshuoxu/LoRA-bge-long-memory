@@ -130,6 +130,7 @@ private fun PhoneApp(
     var tick by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf("") }
+    var cpuNoticeShown by remember { mutableStateOf(false) }
     var updatePhase by remember { mutableStateOf("") }
     var updateVersion by remember { mutableStateOf("") }
     var updateNotes by remember { mutableStateOf("") }
@@ -171,7 +172,10 @@ private fun PhoneApp(
             } finally {
                 val fallback = client.notice(langNow)
                 if (fallback.isNotBlank()) {
-                    toast = fallback
+                    if (!cpuNoticeShown) {
+                        toast = fallback
+                        cpuNoticeShown = true
+                    }
                     client.acknowledgeNotice()
                 }
                 running.set(false)
@@ -249,7 +253,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.27"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.28"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -268,7 +272,9 @@ private fun PhoneApp(
     }
     val savedBatch = remember(tick) { TrainBatchStore.read(store) }
     LaunchedEffect(Unit) {
-        if (migrateFinishedTrain(store)) tick++
+        val moved = store.migratePossessedEntities()
+        val finished = migrateFinishedTrain(store)
+        if (moved || finished) tick++
     }
     LaunchedEffect(trainSnap.state) {
         if (trainSnap.state == "running") {
@@ -590,7 +596,10 @@ private fun PhoneApp(
                     streaming = ""
                     val fallback = client.notice(langNow)
                     if (fallback.isNotBlank()) {
-                        toast = fallback
+                        if (!cpuNoticeShown) {
+                            toast = fallback
+                            cpuNoticeShown = true
+                        }
                         client.acknowledgeNotice()
                     }
                     tick++

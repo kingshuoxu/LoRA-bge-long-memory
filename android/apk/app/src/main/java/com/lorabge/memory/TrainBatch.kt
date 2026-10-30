@@ -11,8 +11,8 @@ internal data class SavedBatch(
 )
 
 internal fun planTrainGroups(facts: List<ReviewedFact>): List<List<ReviewedFact>> {
-    val self = facts.filter { isSelfEntity(it.entity) }
-    val others = facts.filter { !isSelfEntity(it.entity) }
+    val self = facts.filter { isAboutYou(it) }
+    val others = facts.filter { !isAboutYou(it) }
     val out = ArrayList<List<ReviewedFact>>()
     if (self.isNotEmpty()) out.add(self)
     val grouped = LinkedHashMap<String, MutableList<ReviewedFact>>()

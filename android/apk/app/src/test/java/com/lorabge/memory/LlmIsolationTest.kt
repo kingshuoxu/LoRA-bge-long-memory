@@ -34,11 +34,11 @@ class LlmIsolationTest {
         assertTrue(rendered.contains("vulkan"))
         assertTrue(rendered.contains(driver))
         assertEquals(
-            "图形后端异常（生成 SIGSEGV），这条已改用 CPU。设置里把图形后端改成「自动」可再试。",
+            "这条改用了 CPU。",
             guard.notice("zh"),
         )
         assertTrue(guard.notice("en").contains("CPU"))
-        assertTrue(guard.notice("en").contains("Auto"))
+        assertFalse(guard.notice("en").contains("stage"))
 
         val again = supervisor.call("answer", "vulkan", driver, "hi")
         assertEquals("ok:hi", again)
@@ -74,8 +74,9 @@ class LlmIsolationTest {
         val first = LlmGuard(file)
         first.onDeath("selftest", "vulkan", "Mali-G925|r47", "SIGSEGV", "probe child")
         assertTrue(first.isBad("vulkan", "Mali-G925|r47"))
-        assertTrue(first.notice("zh").contains("自检"))
-        assertTrue(first.notice("zh").contains("SIGSEGV"))
+        assertEquals("这条改用了 CPU。", first.notice("zh"))
+        assertFalse(first.notice("zh").contains("SIGSEGV"))
+        assertFalse(first.notice("zh").contains("自检"))
         first.acknowledge()
         assertEquals("", first.notice("zh"))
 
@@ -104,9 +105,9 @@ class LlmIsolationTest {
         assertFalse(first.isBad("vulkan", driver))
         assertEquals(0, first.vulkanStrikes())
         val toast = first.notice("zh")
-        assertTrue(toast.contains("stage=ensure"))
-        assertTrue(toast.contains("binder"))
-        assertTrue(toast.contains("没有停用 GPU"))
+        assertEquals("这条改用了 CPU。", toast)
+        assertFalse(toast.contains("stage="))
+        assertFalse(toast.contains("binder"))
         first.onDeath("ensure", "vulkan", driver, "binder", detail)
         val second = LlmGuard(file)
         assertFalse(second.isBad("vulkan", driver))

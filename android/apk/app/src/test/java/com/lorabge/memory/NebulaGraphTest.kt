@@ -118,8 +118,11 @@ class NebulaGraphTest {
     fun backendLineHidesRawCodes() {
         val record = BackendRecord("auto", "cpu", "mali_unproven", true, "0.1.2+iso1", false, mali = true)
         val line = backendLine("zh", record, true, true)
-        assertTrue(line.contains("基座已就绪"))
-        assertTrue(line.contains("Mali"))
+        assertTrue(line.contains("当前使用 CPU"))
+        assertTrue(line.contains("GPU 在这台手机上暂不稳定"))
+        assertFalse(line.contains("Mali"))
+        assertFalse(line.contains("基座"))
+        assertFalse(line.contains("bge"))
         assertFalse(line.contains("mali_unproven"))
         assertFalse(line.contains(" ok"))
         val status = presentTrainStatus("zh", """{"state":"running","detail":"expert_0"}""")

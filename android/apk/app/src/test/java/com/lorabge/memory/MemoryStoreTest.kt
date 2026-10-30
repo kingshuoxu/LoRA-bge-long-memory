@@ -63,17 +63,25 @@ class MemoryStoreTest {
             listOf(ReviewedFact("佐雷", "佐雷公司成立于1979年。", "1979", emptyList(), emptyList())),
         )
         assertEquals(SELF_EXPERT, store.expertNameFor(listOf(city), "expert_111111"))
+        assertEquals(stableExpertId("咪咪"), store.expertNameFor(listOf(cat), "expert_111111"))
         assertEquals("expert_111111", store.expertNameFor(listOf(ReviewedFact("佐雷", "佐雷公司成立于1979年。", "1979", emptyList(), emptyList())), "expert_111111"))
         val merged = store.factsForTrain(listOf(city))
-        assertEquals(listOf("我的猫猫叫咪咪", "我住在上海"), merged.map { it.statement })
+        assertEquals(listOf("我住在上海"), merged.map { it.statement })
         assertTrue(merged.all { it.entity == "我" })
+        assertTrue(store.migratePossessedEntities())
+        assertEquals(setOf("我的猫猫叫咪咪"), store.readReviewedFacts(stableExpertId("咪咪")).map { it.statement }.toSet())
+        assertEquals("咪咪", store.readReviewedFacts(stableExpertId("咪咪")).first().entity)
         store.registerExpert(
             ExpertRecord(SELF_EXPERT, 5, merged.size, 32, "experts/$SELF_EXPERT/router_key.f32", "experts/$SELF_EXPERT/adapter.gguf"),
             merged,
         )
         val names = store.listExperts().map { it.expert }.sorted()
-        assertEquals(listOf("expert_company", SELF_EXPERT), names)
+        assertEquals(listOf(SELF_EXPERT, "expert_company", stableExpertId("咪咪")).sorted(), names)
         assertEquals("关于你", NebulaGraph.displayName(listOf("我"), "zh"))
+        assertEquals("咪咪", NebulaGraph.displayName(listOf("咪咪"), "zh"))
+        val catReply = EntityGround.reply("我的猫是什么", EntityGround.load(store), "zh")
+        assertEquals("你的猫猫叫咪咪。", catReply?.answer)
+        assertEquals(stableExpertId("咪咪"), catReply?.expert)
     }
 
     @Test

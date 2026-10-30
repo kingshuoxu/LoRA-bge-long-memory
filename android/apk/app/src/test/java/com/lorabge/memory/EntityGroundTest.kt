@@ -139,7 +139,7 @@ class EntityGroundTest {
         assertEquals("expert_self", who!!.expert)
         assertEquals("我", who.entity)
         assertEquals("entity", who.reason)
-        assertTrue(who.answer.contains("你叫徐金朔") || who.answer.contains("你是徐金朔"))
+        assertEquals("你是徐金朔。", who.answer)
         assertFalse(who.answer.contains("助手"))
         assertFalse(who.answer.contains("我是"))
         assertFalse(who.answer.contains("咪咪"))

@@ -30,7 +30,7 @@ object FactNotice {
     }
 
     fun acknowledge(draft: FactDraft, lang: String): String {
-        if (draft.attr == "猫的名字") {
+        if (draft.attr == "宠物" || draft.attr == "猫的名字") {
             return if (lang == "en") "Okay, I'll remember. Your cat is named ${draft.value}."
             else "好的，记住了，你的猫叫${draft.value}。"
         }
@@ -83,14 +83,15 @@ object FactNotice {
         if (cat != null) {
             val value = cat.groupValues[1].trim()
             if (dirty(value) || value.isEmpty()) return null
-            return FactDraft("我", "猫的名字", body, value, "我的猫叫什么名字？", value)
+            return FactDraft(value, "宠物", body, value, "我的猫叫什么名字？", value)
         }
         val mine = Regex("^我的(.+?)叫(.+)$").find(body)
         if (mine != null) {
             val thing = mine.groupValues[1].trim()
             val value = mine.groupValues[2].trim()
             if (thing.isEmpty() || dirty(value) || value.isEmpty()) return null
-            return FactDraft("我", "${thing}的名字", body, value, "我的${thing}叫什么？", value)
+            val attr = if (thing.contains("猫") || thing.contains("狗")) "宠物" else thing
+            return FactDraft(value, attr, body, value, "我的${thing}叫什么？", value)
         }
         draftSelf(body)?.let { return it }
         draftFounded(body)?.let { return it }
@@ -174,7 +175,7 @@ object FactNotice {
         if (cat != null) {
             val value = cat.groupValues[1].trim()
             if (value.isEmpty() || dirty(value)) return null
-            return FactDraft("我", "猫的名字", body, value, "我的猫叫什么名字？", value)
+            return FactDraft(value, "宠物", body, value, "我的猫叫什么名字？", value)
         }
         val name = Regex("(?i)^my name is (.+)$").find(body)
         if (name != null) {

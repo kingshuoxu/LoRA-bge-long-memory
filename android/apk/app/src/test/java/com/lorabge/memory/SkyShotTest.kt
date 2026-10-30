@@ -24,6 +24,25 @@ class SkyShotTest {
     }
 
     @Test
+    fun whoAmIZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                SkyState(
+                    lang = "zh",
+                    tab = SkyTab.Chat,
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    currentTitle = "我是谁",
+                    messages = listOf(
+                        SkyMessage("user", "我是谁"),
+                        SkyMessage("assistant", "你是徐金朔。", "expert_self"),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun chat() {
         paparazzi.snapshot { SkyFrame(sample().copy(tab = SkyTab.Chat, statusTop = 36.dp, navBottom = 24.dp)) {} }
     }
@@ -368,7 +387,7 @@ class SkyShotTest {
             navBottom = 24.dp,
             currentTitle = if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi",
             draft = if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi",
-            toast = if (zh) "图形后端异常，已改用 CPU" else "Graphics backend failed, switched to CPU",
+            toast = if (zh) "这条改用了 CPU" else "This reply used the CPU",
             messages = listOf(
                 SkyMessage("user", if (zh) "我的猫猫叫咪咪" else "My cat is called Mimi"),
                 SkyMessage(
@@ -390,7 +409,7 @@ class SkyShotTest {
             SkyMessage("user", "你好 我是徐金朔"),
             SkyMessage("assistant", "好的，记住了，你是徐金朔。", noticed = true),
         ),
-        toast = "图形后端异常，已改用 CPU",
+        toast = "这条改用了 CPU",
     )
 
     private fun settingsSample(lang: String) = SkyState(
@@ -400,14 +419,14 @@ class SkyShotTest {
         navBottom = 24.dp,
         backendMode = "auto",
         backendLine = if (lang == "en") {
-            "Base ready · bge ready · CPU\nThis Mali GPU stays on CPU until an isolated test is faster."
+            "Using the CPU\nThe GPU is not stable on this phone yet."
         } else {
-            "基座已就绪 · bge 已就绪 · CPU\n这台 Mali 还没在独立进程里证明更快，先用 CPU。"
+            "当前使用 CPU\nGPU 在这台手机上暂不稳定"
         },
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.27",
+        versionName = "0.1.28",
     )
 
     private fun fourPending() = SkyState(
