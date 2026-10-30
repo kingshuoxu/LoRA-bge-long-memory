@@ -24,6 +24,7 @@ class LlmClient(context: Context) {
     private val remote = AtomicReference<Messenger?>(null)
     private val bindLock = Any()
     @Volatile private var bindLatch = CountDownLatch(0)
+    @Volatile private var parked = false
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -38,7 +39,31 @@ class LlmClient(context: Context) {
 
     private val supervisor = LlmSupervisor(guard) { backend -> RemoteWorker(backend) }
 
+    /** Drop :llm and any llama-cli / Vulkan child so training can use the RAM. */
+    fun park() {
+        parked = true
+        synchronized(bindLock) {
+            remote.set(null)
+            try {
+                app.unbindService(connection)
+            } catch (_: Throwable) {
+            }
+            bindLatch.countDown()
+        }
+        try {
+            app.stopService(Intent(app, LlmService::class.java))
+        } catch (_: Throwable) {
+        }
+        ChatRuntime.waitUntilReleased()
+    }
+
+    /** Allow the next chat or route to load the model again. */
+    fun resume() {
+        parked = false
+    }
+
     fun ensure() {
+        if (parked) return
         settleGpuBan()
         if (guard.vulkanStrikes() >= 2) return
         if (!engine.needsGpuProbe()) return
@@ -49,6 +74,7 @@ class LlmClient(context: Context) {
     }
 
     fun route(text: String): RouteHit {
+        if (parked) return RouteHit(null, false, "", 0.0)
         try {
             val json = supervisor.call(
                 "route",
@@ -65,6 +91,7 @@ class LlmClient(context: Context) {
     }
 
     fun answer(text: String, expert: String?, onPartial: (String) -> Unit): String {
+        if (parked) throw ChatParked()
         try {
             val payload = JSONObject().put("text", text).put("expert", expert ?: "").toString()
             return supervisor.call("answer", chatBackend(), engine.driverKey(), payload, onPartial)
@@ -128,7 +155,7 @@ class LlmClient(context: Context) {
         })
         val binder = messenger.binder
         val death = IBinder.DeathRecipient {
-            failure.compareAndSet(null, deathOf(stage, backend))
+            failure.compareAndSet(null, if (parked) ChatParked() else deathOf(stage, backend))
             latch.countDown()
         }
         binder.linkToDeath(death, 0)
@@ -140,7 +167,10 @@ class LlmClient(context: Context) {
             msg.data.putString("backend", backend)
             msg.data.putString("payload", payload)
             messenger.send(msg)
-            if (!latch.await(200, TimeUnit.SECONDS)) throw deathOf(stage, backend)
+            if (!latch.await(200, TimeUnit.SECONDS)) {
+                if (parked) throw ChatParked()
+                throw deathOf(stage, backend)
+            }
         } finally {
             try {
                 binder.unlinkToDeath(death, 0)
@@ -168,9 +198,11 @@ class LlmClient(context: Context) {
     }
 
     private fun bind(): Messenger {
+        if (parked) throw ChatParked()
         val alive = remote.get()
         if (alive != null && alive.binder.isBinderAlive) return alive
         synchronized(bindLock) {
+            if (parked) throw ChatParked()
             val again = remote.get()
             if (again != null && again.binder.isBinderAlive) return again
             try {
@@ -181,9 +213,12 @@ class LlmClient(context: Context) {
             val latch = CountDownLatch(1)
             bindLatch = latch
             val ok = app.bindService(Intent(app, LlmService::class.java), connection, Context.BIND_AUTO_CREATE)
+            if (parked) throw ChatParked()
             if (!ok || !latch.await(20, TimeUnit.SECONDS)) {
+                if (parked) throw ChatParked()
                 throw WorkerDied("bind", "bind failed", "bind")
             }
+            if (parked) throw ChatParked()
             return remote.get() ?: throw WorkerDied("bind", "no binder", "bind")
         }
     }

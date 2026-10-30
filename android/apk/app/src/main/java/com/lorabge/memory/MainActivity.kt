@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
         val client = LlmClient(this)
         engine.disarmUnprovenMali()
         if (intent?.getStringExtra("mode") == "benchmark" || intent?.action == TrainService.ACTION_BENCHMARK) {
-            startBenchmark(store)
+            startBenchmark(store, client)
         }
         val benchmark = intent?.getStringExtra("mode") == "benchmark" || intent?.action == TrainService.ACTION_BENCHMARK
         val e2e = File(filesDir, "setup/e2e").exists()
@@ -58,7 +58,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                     notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
-                startForegroundService(Intent(this, TrainService::class.java))
+                Thread {
+                    client.park()
+                    startForegroundService(Intent(this, TrainService::class.java))
+                }.start()
             }, onCancel = {
                 TrainService.abandon(store)
                 startService(Intent(this, TrainService::class.java).setAction(TrainService.ACTION_CANCEL))
@@ -82,7 +85,7 @@ class MainActivity : ComponentActivity() {
         startActivity(chooser)
     }
 
-    private fun startBenchmark(store: MemoryStore) {
+    private fun startBenchmark(store: MemoryStore, client: LlmClient) {
         val obj = JSONObject(assets.open("consolidation_bench.json").bufferedReader().use { it.readText() })
         val factsJson = obj.getJSONArray("facts")
         val facts = ArrayList<ReviewedFact>()
@@ -97,7 +100,10 @@ class MainActivity : ComponentActivity() {
             heldOut = obj.optJSONArray("held_out"),
             neverWritten = obj.optJSONArray("never_written"),
         )
-        startForegroundService(Intent(this, TrainService::class.java))
+        Thread {
+            client.park()
+            startForegroundService(Intent(this, TrainService::class.java))
+        }.start()
     }
 }
 
@@ -237,7 +243,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.25"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.26"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -271,7 +277,21 @@ private fun PhoneApp(
                 if (shouldRemarkFailedTrain(now.state) &&
                     trainRunIsStale(now.state, TrainService.trainPidAlive(store), TrainService.heartbeatAgeMs(store))
                 ) {
-                    TrainService.markDead(store)
+                    val alive = TrainService.trainPidAlive(store)
+                    val exit = if (alive) {
+                        null
+                    } else {
+                        delay(400)
+                        val config = File(store.trainDir, "config.json").takeIf { it.exists() }
+                            ?.readText()?.let { parseTrainConfig(it) }
+                        pickTrainExit(
+                            readHistoricalTrainExits(context),
+                            null,
+                            ":train",
+                            config?.startedMs ?: 0L,
+                        )
+                    }
+                    TrainService.markDead(store, exit)
                 }
                 if (!statusFile.exists()) {
                     val cleared = acceptTrainStatus(trainSnap, "", fileExists = false)
@@ -289,6 +309,8 @@ private fun PhoneApp(
                 if (!shouldRemarkFailedTrain(afterSnap.state)) return@LaunchedEffect
             }
         }
+        var chained = false
+        try {
         val live = trainSnap
         val stuck = TrainBatchStore.read(store)
         if (shouldRecoverBatch(stuck, live.state)) {
@@ -323,6 +345,7 @@ private fun PhoneApp(
                     TrainBatchStore.write(store, batch.copy(index = nextIndex))
                     TrainService.writeReviewedList(store, facts, force = true)
                     armForeground(store)
+                    chained = true
                     onTrain()
                     tick++
                     return@LaunchedEffect
@@ -342,6 +365,9 @@ private fun PhoneApp(
         value = next.value
         question = next.question
         answer = next.answer
+        } finally {
+            if (!chained) client.resume()
+        }
     }
     val state = SkyState(
         lang = lang,
@@ -521,6 +547,8 @@ private fun PhoneApp(
                     } else {
                         try {
                             client.answer(text, expert) { streaming = it }
+                        } catch (ex: ChatParked) {
+                            if (langNow == "en") "Training is using the memory. Ask again in a moment." else "正在巩固，请稍后再问。"
                         } catch (ex: Throwable) {
                             if (langNow == "en") "Couldn't generate" else "生成失败"
                         }

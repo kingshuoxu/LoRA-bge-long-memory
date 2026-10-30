@@ -19,6 +19,7 @@ data class TrainSnapshot(
     val micro: Int = 0,
     val microTotal: Int = 0,
     val microElapsedSec: Long = 0,
+    val updated: String = "",
 )
 
 fun parseStepLine(line: String): Triple<Int, Int, Float>? {
@@ -244,7 +245,7 @@ fun shouldRemarkFailedTrain(state: String): Boolean = state == "running"
 
 fun isSettledFailure(raw: String): Boolean {
     val snap = parseTrainSnapshot(raw)
-    return snap.state == "error" && snap.detail == trainDeadDetail()
+    return snap.state == "error" && snap.detail.isNotBlank()
 }
 
 fun trainDeadDetail(): String {
@@ -333,6 +334,7 @@ fun trainSnapshotJson(
     micro: Int = 0,
     microTotal: Int = 0,
     microElapsedSec: Long = 0,
+    updated: String = "",
 ): String {
     val epoch = epochOf(step, total, epochs)
     val finished = finishedMicros((pendingStep - 1).coerceAtLeast(0), micro, microTotal)
@@ -353,7 +355,10 @@ fun trainSnapshotJson(
         .put("micro", micro)
         .put("microTotal", microTotal)
         .put("microElapsedSec", microElapsedSec)
-        .apply { if (loss != null) put("loss", loss.toDouble()) }
+        .apply {
+            if (loss != null) put("loss", loss.toDouble())
+            if (updated.isNotBlank()) put("updated", updated)
+        }
         .toString()
 }
 
@@ -378,6 +383,7 @@ fun parseTrainSnapshot(raw: String): TrainSnapshot {
         micro = obj.optInt("micro"),
         microTotal = obj.optInt("microTotal"),
         microElapsedSec = obj.optLong("microElapsedSec"),
+        updated = obj.optString("updated"),
     )
 }
 

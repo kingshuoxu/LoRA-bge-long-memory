@@ -152,10 +152,20 @@ class TrainService : Service() {
             wake.acquire(20 * 60 * 1000L)
             var restart = true
             var stalled = false
+            var stoppedByUs = false
             try {
+            ChatRuntime.waitUntilReleased(attempts = 15, pauseMs = 100)
             while (restart) {
             restart = false
+            stoppedByUs = false
             applyTrainRecipe(cmd, recipe, rank)
+            writeTextAtomic(
+                File(store.trainDir, "config.json"),
+                trainConfigJson(
+                    trainConfigOf(recipe, rank, startedMs = started, chatReleased = true),
+                    Instant.now().toString(),
+                ),
+            )
             val proc = ProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .apply {
@@ -191,16 +201,20 @@ class TrainService : Service() {
             var seenMicro = false
             var lastRssKb = 0L
             var lastRssMove = lastAdvance
-            File(store.trainDir, "pid").writeText(pidOf(proc).toString())
+            val trainerPid = pidOf(proc)
+            File(store.trainDir, "pid").writeText(trainerPid.toString())
+            ChatRuntime.preferTrainer(trainerPid)
             while (reader.isAlive || pending.isNotEmpty()) {
                 val held = parseTrainSnapshot(runCatching { status.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault(""))
                 if (held.state == "error") {
                     stalled = true
+                    stoppedByUs = true
                     killTrain(proc)
                     break
                 }
                 if (cancel.exists()) {
-                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消", tailOf(log), pendingStep, micro, microTotal)
+                    publish(status, "cancelled", "train", step, total, epochs, loss, started, "已取消", "", pendingStep, micro, microTotal)
+                    stoppedByUs = true
                     killTrain(proc)
                     break
                 }
@@ -255,6 +269,7 @@ class TrainService : Service() {
                         publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
                         notify("加载模型没有进展")
                         stalled = true
+                        stoppedByUs = true
                         killTrain(proc)
                         break
                     }
@@ -264,6 +279,7 @@ class TrainService : Service() {
                         if (next != null) {
                             recipe = next
                             restart = true
+                            stoppedByUs = true
                             killTrain(proc)
                             val detail = trainRetryDetail(recipe)
                             publish(status, "running", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
@@ -274,6 +290,7 @@ class TrainService : Service() {
                         publish(status, "error", "train", step, total, epochs, loss, started, detail, "", pendingStep, micro, microTotal, microElapsed)
                         notify("训练没有前进")
                         stalled = true
+                        stoppedByUs = true
                         killTrain(proc)
                         break
                     }
@@ -286,6 +303,7 @@ class TrainService : Service() {
                 val overwritten = parseTrainSnapshot(runCatching { status.takeIf { it.exists() }?.readText().orEmpty() }.getOrDefault(""))
                 if (overwritten.state == "error") {
                     stalled = true
+                    stoppedByUs = true
                     killTrain(proc)
                     break
                 }
@@ -317,6 +335,7 @@ class TrainService : Service() {
                 !proc.isAlive -> runCatching { proc.exitValue() }.getOrDefault(-1)
                 proc.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) -> proc.exitValue()
                 else -> {
+                    stoppedByUs = true
                     killTrain(proc)
                     if (proc.isAlive) -1 else runCatching { proc.exitValue() }.getOrDefault(-1)
                 }
@@ -327,7 +346,12 @@ class TrainService : Service() {
                 return
             }
             if (code != 0 || !adapter.exists()) {
-                publish(status, "error", "train", step, total, epochs, loss, started, "训练退出 $code", tailOf(log))
+                val inferred = if (!stoppedByUs && code != 0) exitFromChildCode(code, System.currentTimeMillis()) else null
+                if (inferred != null) {
+                    writeTextAtomic(File(store.trainDir, "exit.json"), trainExitJson(inferred))
+                }
+                val phrase = if (inferred != null) trainFailurePhrase(inferred) else "训练没有完成"
+                publish(status, "error", "train", step, total, epochs, loss, started, phrase, "", pendingStep, micro, microTotal)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
@@ -394,9 +418,10 @@ class TrainService : Service() {
         val elapsed = (System.currentTimeMillis() - startedMs) / 1000
         writeTextAtomic(
             file,
-            trainSnapshotJson(
+                trainSnapshotJson(
                 state, stage, step, total, epochs, loss, elapsed, detail, logTail,
                 pendingStep, micro, microTotal, microElapsedSec,
+                updated = Instant.now().toString(),
             ),
         )
     }
@@ -594,16 +619,48 @@ class TrainService : Service() {
             )
         }
 
-        fun markDead(store: MemoryStore) {
+        fun markDead(store: MemoryStore, exit: TrainExit? = null) {
             store.ensure()
             val status = File(store.trainDir, "status.json")
             val raw = status.takeIf { it.exists() }?.readText().orEmpty()
             if (isSettledFailure(raw)) return
+            val prev = parseTrainSnapshot(raw)
             val pid = File(store.trainDir, "pid").takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
-            if (pid != null && pid > 0) {
+            val alive = pid != null && pid > 0 && File("/proc/$pid").exists()
+            if (alive) {
                 runCatching { Runtime.getRuntime().exec(arrayOf("kill", "-9", pid.toString())) }
+                writeTextAtomic(
+                    File(store.trainDir, "exit.json"),
+                    trainExitJson(
+                        TrainExit(
+                            TRAIN_EXIT_SELF, "EXIT_SELF", 0, "stopped by app", 0, 0, 0,
+                            System.currentTimeMillis(), "app",
+                        ),
+                    ),
+                )
+            } else if (exit != null) {
+                writeTextAtomic(File(store.trainDir, "exit.json"), trainExitJson(exit))
             }
-            writeTextAtomic(status, trainSnapshotJson("error", "train", 0, 0, 0, null, 0, trainDeadDetail(), ""))
+            val phrase = if (alive) trainDeadDetail() else trainFailurePhrase(exit)
+            writeTextAtomic(
+                status,
+                trainSnapshotJson(
+                    "error",
+                    prev.stage.ifBlank { "train" },
+                    prev.step,
+                    prev.total,
+                    prev.epochs,
+                    prev.loss,
+                    prev.elapsedSec,
+                    phrase,
+                    "",
+                    prev.pendingStep,
+                    prev.micro,
+                    prev.microTotal,
+                    prev.microElapsedSec,
+                    updated = Instant.now().toString(),
+                ),
+            )
         }
 
         fun trainPidAlive(store: MemoryStore): Boolean {

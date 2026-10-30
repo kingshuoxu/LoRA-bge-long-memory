@@ -44,3 +44,6 @@ interface LlmWorker {
 }
 
 class WorkerDied(val signal: String, val detail: String, val stage: String, val backend: String = "") : RuntimeException(detail)
+
+/** Training asked the chat model to stay unloaded. This is not a GPU fault. */
+class ChatParked : RuntimeException("parked")

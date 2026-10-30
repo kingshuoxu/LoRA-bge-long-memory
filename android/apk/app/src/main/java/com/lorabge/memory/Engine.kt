@@ -506,6 +506,8 @@ class Engine(private val context: Context, private val store: MemoryStore) {
                 append(console.take(2000))
                 append('\n')
             }
+            append(loadTrainReport(File(context.filesDir, "memory/train"), readHistoricalTrainExits(context)).trimEnd())
+            append('\n')
         }
     }
 

@@ -106,6 +106,10 @@ internal fun NebulaHost(
             val script = "window.nebulaHost&&nebulaHost.apply(${JSONObject.quote(payload.toString())})"
             web.push(script)
         },
+        onRelease = { web ->
+            web.stopLoading()
+            web.destroy()
+        },
     )
 }
 
