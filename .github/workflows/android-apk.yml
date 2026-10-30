@@ -1,0 +1,129 @@
+name: Android APK
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-apk.yml"
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update check over the real network
+        run: python3 android/scripts/check_update_net.py
+
+      - name: Nebula lattice classifier
+        run: node android/apk/app/src/main/assets/nebula/nebula-pixels.test.mjs
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install SDK pieces
+        run: |
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
+          test -n "$CMDLINE"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' 24333f8a63b6825ea9c5514f83c2829b004d1fee d56f5187479451eabf01fb78af6dfcb131a6481e > "$SDK/licenses/android-sdk-license"
+          "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+
+      - name: Build on-device LoRA trainer
+        run: sh android/trainer/build_android.sh
+
+      - name: Build cased bge libllama
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq glslc libvulkan-dev
+          sh android/qvac/build_android.sh
+          test -f android/apk/app/src/main/jniLibs/arm64-v8a/libggml-vulkan.so
+          test -f android/apk/app/src/main/jniLibs/arm64-v8a/libggml-cpu.so
+          echo "Vulkan and dotprod/i8mm CPU libllama are in the APK"
+
+      - name: Note software Vulkan
+        run: |
+          sudo apt-get install -y -qq mesa-vulkan-drivers vulkan-tools || true
+          vulkaninfo --summary > /tmp/vulkaninfo.txt || true
+          if grep -Ei 'llvmpipe|lavapipe' /tmp/vulkaninfo.txt; then
+            echo "Software Vulkan is installed. A full CPU-versus-Vulkan llama compare is not run here: the phone binary is arm64 and this job has no GGUF. The Mali branch is covered by android/qvac/test_mali_policy.cpp."
+          else
+            echo "No lavapipe/llvmpipe ICD. The Mali branch is covered by android/qvac/test_mali_policy.cpp, which build_android.sh already ran."
+          fi
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests and signed debug APK
+        working-directory: android/apk
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: chmod +x ./gradlew && ./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lorabge-memory-arm64-debug
+          path: android/apk/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Nebula lattice classifier
+        run: node android/apk/app/src/main/assets/nebula/nebula-pixels.test.mjs
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install emulator pieces
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq unzip ffmpeg xvfb x11-utils libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
+          test -n "$CMDLINE"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' 24333f8a63b6825ea9c5514f83c2829b004d1fee d56f5187479451eabf01fb78af6dfcb131a6481e > "$SDK/licenses/android-sdk-license"
+          "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;aosp_atd;x86_64"
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; else echo "没有 /dev/kvm" >&2; exit 1; fi
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Upgrade from the previous version keeps data
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: sh android/scripts/upgrade_preserve.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upgrade-e2e
+          path: |
+            android/out/upgrade/shots
+            android/out/upgrade/emulator.log
+          if-no-files-found: ignore

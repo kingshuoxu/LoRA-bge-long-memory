@@ -1,0 +1,209 @@
+@font-face {
+  font-family: "Noto Serif SC";
+  src: url("fonts/noto-serif-sc-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Serif SC";
+  src: url("fonts/noto-serif-sc-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "EB Garamond";
+  src: url("fonts/eb-garamond-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "EB Garamond";
+  src: url("fonts/eb-garamond-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("fonts/cormorant-garamond-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Cormorant Garamond";
+  src: url("fonts/cormorant-garamond-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+  --ink: #eef3fb;
+  --muted: #a9b6c9;
+  --line: rgba(198, 214, 238, 0.18);
+  --accent: #b7d7ff;
+  --accent-2: #7ef0e0;
+  --gold: #f2d291;
+  --serif: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
+  --display: "Cormorant Garamond", "Noto Serif SC", "Songti SC", serif;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; background: #070910; color: var(--ink); font-family: var(--serif); overflow: hidden; touch-action: none; }
+#sky { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; display: block; touch-action: none; }
+#nebula-host {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  touch-action: none;
+}
+#nebula-canvas { width: 100%; height: 100%; display: block; background: transparent; touch-action: none; }
+.nebula-labels { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+.nebula-leaders { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.nebula-leaders line { stroke: rgba(236, 228, 214, 0.22); stroke-width: 1; stroke-linecap: round; }
+.nebula-label {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: baseline;
+  max-width: calc(100% - 24px);
+  color: rgba(236, 228, 214, 0.96);
+  padding: 5px 10px;
+  border-radius: 12px;
+  background: rgba(7, 9, 16, 0.82);
+  border: 1px solid rgba(198, 214, 238, 0.18);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  white-space: nowrap;
+}
+.nebula-label .name {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nebula-label .meta, .nebula-label .tag {
+  font-family: var(--serif);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: rgba(214, 206, 192, 0.92);
+}
+.nebula-label .tag { color: rgba(255, 228, 176, 0.96); }
+.nebula-label.fresh .name { color: rgba(255, 228, 176, 0.98); }
+.nebula-label.lit .name, .nebula-label.lit .meta { color: rgba(255, 246, 226, 0.98); }
+#recall-banner, #state-banner {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  z-index: 4;
+  max-width: calc(100% - 32px);
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(7, 9, 16, 0.88);
+  border: 1px solid rgba(198, 214, 238, 0.18);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--gold);
+  font-family: var(--serif);
+  font-size: 14px;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+#state-banner { top: 56px; }
+#detail {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(8, 12, 20, 0.94);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  font-size: 15px;
+  line-height: 1.45;
+}
+#detail .statement { margin: 0 0 8px; font-family: var(--display); font-size: 18px; letter-spacing: 0.03em; }
+#detail .row { margin: 4px 0; color: var(--muted); font-size: 14px; }
+#detail .row b { color: var(--ink); font-weight: 500; }
+#detail button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent-2);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+#empty {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  width: min(360px, 80%);
+  text-align: center;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.45;
+  pointer-events: none;
+}
+body.shot #nebula-host { top: 92px; bottom: 88px; }
+body.shot #chrome { display: block; }
+#chrome { display: none; position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+#chrome header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 36px 16px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#chrome h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 28px;
+  letter-spacing: 0.04em;
+}
+#chrome .gear {
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  position: relative;
+}
+#chrome .gear::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+}
+#chrome nav {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 88px;
+  padding: 8px 8px 24px;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+}
+#chrome nav span { color: var(--muted); font-family: var(--serif); font-size: 12px; letter-spacing: 0.02em; }
+#chrome nav span.on { color: var(--accent-2); }
