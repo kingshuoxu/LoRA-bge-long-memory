@@ -196,6 +196,56 @@ class SkyShotTest {
     }
 
     @Test
+    fun consolidateOomZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                fourPending().copy(
+                    training = false,
+                    status = "失败",
+                    train = TrainSnapshot(
+                        state = "error",
+                        stage = "train",
+                        step = 2,
+                        total = 8,
+                        detail = "内存不足被系统终止",
+                    ),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "error", 2),
+                        SkyBatchItem("我叫徐金朔", "error", 2),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun consolidateSuccessZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                fourPending().copy(
+                    training = false,
+                    status = "已完成",
+                    loss = listOf(1.2f, 0.1788f),
+                    train = TrainSnapshot(
+                        state = "done",
+                        stage = "done",
+                        step = 20,
+                        total = 20,
+                        epoch = 4,
+                        epochs = 4,
+                        loss = 0.1788f,
+                        detail = "已登记 expert_self",
+                    ),
+                    batchItems = listOf(
+                        SkyBatchItem("我的猫叫咪咪", "done", 2),
+                        SkyBatchItem("我叫徐金朔", "done", 2),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun consolidateTrainStallZh() {
         paparazzi.snapshot {
             SkyFrame(
@@ -357,7 +407,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.24",
+        versionName = "0.1.27",
     )
 
     private fun fourPending() = SkyState(

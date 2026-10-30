@@ -625,6 +625,8 @@ class TrainService : Service() {
             val raw = status.takeIf { it.exists() }?.readText().orEmpty()
             if (isSettledFailure(raw)) return
             val prev = parseTrainSnapshot(raw)
+            // A finished adapter is the run. Teardown CRASH must not replace it.
+            if (sealedTrain(store.trainDir, prev)) return
             val pid = File(store.trainDir, "pid").takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
             val alive = pid != null && pid > 0 && File("/proc/$pid").exists()
             if (alive) {

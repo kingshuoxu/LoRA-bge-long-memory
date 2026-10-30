@@ -1,13 +1,16 @@
 diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_lora_finetune/src/wikitext_main.cpp
+index 30cd862..19729f9 100644
 --- a/examples/qwen_lora_finetune/src/wikitext_main.cpp
 +++ b/examples/qwen_lora_finetune/src/wikitext_main.cpp
-@@ -3,9 +3,13 @@
+@@ -3,9 +3,15 @@
  #include <vector>
  #include <filesystem>
  #include <fstream>
 +#include <sstream>
 +#include <cstdlib>
 +#include <cstring>
++#include <unistd.h>
++#include <system_error>
  #include <chrono>
  #include <iomanip>
  #include <cstdint>
@@ -15,7 +18,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  #include <thread>
  
  #include "finetune_ops/core/tokenizer_bpe.h"
-@@ -27,16 +31,22 @@
+@@ -27,16 +33,22 @@ struct Args {
      std::string jsonl_train;
      std::string jsonl_valid;
      std::string jsonl_test;
@@ -38,7 +41,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
      bool shuffle_train = true;
      uint64_t seed = 42;
      std::string loss_impl = "auto"; // auto: selected for masked JSONL, dense otherwise; full_dense/full_streaming: full-token JSONL labels
-@@ -44,6 +53,12 @@
+@@ -44,6 +56,12 @@ struct Args {
      bool synthetic_smoke = false;
      int smoke_steps = 2;
      std::string output_dir = "outputs/qwen_wikitext";
@@ -51,7 +54,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
      std::string dump_first_batch_json;
      bool dump_only = false;
      std::string base_weight_storage = "auto"; // auto/native: preserve F16/BF16 frozen base weights; fp32: promote all
-@@ -63,10 +79,15 @@
+@@ -63,10 +81,15 @@ static void parse_args(int argc, char** argv, Args& args) {
          else if (k == "--jsonl_train") args.jsonl_train = get("--jsonl_train");
          else if (k == "--jsonl_valid") args.jsonl_valid = get("--jsonl_valid");
          else if (k == "--jsonl_test") args.jsonl_test = get("--jsonl_test");
@@ -67,7 +70,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
          else if (k == "--lr") args.lr = std::stof(get("--lr"));
          else if (k == "--max_grad_norm") args.max_grad_norm = std::stof(get("--max_grad_norm"));
          else if (k == "--lora_r") args.lora_r = std::stoi(get("--lora_r"));
-@@ -74,6 +93,13 @@
+@@ -74,6 +97,13 @@ static void parse_args(int argc, char** argv, Args& args) {
          else if (k == "--lora_dropout") args.lora_dropout = std::stof(get("--lora_dropout"));
          else if (k == "--qv_only") args.qv_only = true;
          else if (k == "--qkvo") args.qv_only = false;
@@ -81,7 +84,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
          else if (k == "--seed") args.seed = static_cast<uint64_t>(std::stoull(get("--seed")));
          else if (k == "--no_shuffle") args.shuffle_train = false;
          else if (k == "--loss_impl") args.loss_impl = get("--loss_impl");
-@@ -136,7 +162,8 @@
+@@ -136,7 +166,8 @@ static void configure_qwen_base_weight_storage(SafeTensorsLoadOptions& opts,
      };
  }
  
@@ -91,7 +94,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
      std::filesystem::create_directories(output_dir);
      const std::string path = output_dir + "/lora_weights.bin";
      std::ofstream out(path, std::ios::binary);
-@@ -155,6 +182,103 @@
+@@ -155,6 +186,103 @@ static void save_lora_weights_bin(const std::string& output_dir, const std::vect
          const int64_t numel = param->numel();
          out.write(reinterpret_cast<const char*>(param->data<float>()), numel * sizeof(float));
      }
@@ -195,7 +198,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  }
  
  static void dump_batch_json(const Batch& batch, const std::string& path) {
-@@ -209,6 +333,289 @@
+@@ -209,6 +337,299 @@ static void dump_batch_json(const Batch& batch, const std::string& path) {
      out << "\n}\n";
  }
  
@@ -222,8 +225,9 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +    if (!mlp || params.size() != static_cast<size_t>(num_layers) * 6) {
 +        throw std::runtime_error("GGUF export only supports the FFN gate/up/down recipe");
 +    }
-+    std::ofstream out(path, std::ios::binary);
-+    if (!out.is_open()) throw std::runtime_error("failed to open " + path);
++    const std::string partial = path + ".partial";
++    std::ofstream out(partial, std::ios::binary);
++    if (!out.is_open()) throw std::runtime_error("failed to open " + partial);
 +    const uint32_t magic = 0x46554747u;
 +    const uint32_t version = 3;
 +    const uint64_t tensor_count = params.size();
@@ -312,6 +316,15 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
 +            const char z = 0;
 +            out.write(&z, 1);
 +        }
++    }
++    out.flush();
++    if (!out) throw std::runtime_error("failed to write " + partial);
++    out.close();
++    std::error_code rename_ec;
++    std::filesystem::rename(partial, path, rename_ec);
++    if (rename_ec) {
++        std::filesystem::remove(path);
++        std::filesystem::rename(partial, path);
 +    }
 +}
 +
@@ -485,7 +498,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  static int run_synthetic_smoke(const Args& args, energy::PowerMonitor& power_monitor) {
      std::cout << "\n========== Qwen LoRA Synthetic Smoke ==========\n";
  
-@@ -276,7 +678,7 @@
+@@ -276,7 +697,7 @@ static int run_synthetic_smoke(const Args& args, energy::PowerMonitor& power_mon
      }
  
      double param_delta = smoke::max_param_delta(before, lora_params);
@@ -494,7 +507,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
      std::cout << "[SyntheticSmoke] param_delta=" << param_delta << std::endl;
      const bool ok = std::isfinite(param_delta) && param_delta > 0.0;
      std::cout << (ok ? "[PASS]" : "[FAIL]") << std::endl;
-@@ -292,6 +694,30 @@
+@@ -292,6 +713,30 @@ int main(int argc, char** argv) {
          if (args.synthetic_smoke) {
              return run_synthetic_smoke(args, power_monitor);
          }
@@ -525,7 +538,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  
          const bool use_jsonl =
              !args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty();
-@@ -358,9 +784,19 @@
+@@ -358,9 +803,19 @@ int main(int argc, char** argv) {
          MemoryManager::instance().clear_unused_memory();
  
          // 4) LoRA init
@@ -546,7 +559,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  
          // 5) dataset
          WT2Config dcfg;
-@@ -402,7 +838,7 @@
+@@ -402,7 +857,7 @@ int main(int argc, char** argv) {
          std::cout << "[Config] Grad accum steps: " << args.grad_accum_steps << std::endl;
          std::cout << "[Config] Effective batch size: " << args.batch_size * args.grad_accum_steps << std::endl;
          std::cout << "[Config] Max grad norm: " << args.max_grad_norm << std::endl;
@@ -555,7 +568,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
          std::cout << "[Config] Base weight storage: " << args.base_weight_storage << std::endl;
          std::cout << "[Config] Shuffle train: " << (args.shuffle_train ? "true" : "false") << std::endl;
          std::cout << "[Config] Seed: " << args.seed << std::endl;
-@@ -426,9 +862,12 @@
+@@ -426,9 +881,12 @@ int main(int argc, char** argv) {
              }
          }
          
@@ -571,7 +584,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
              std::cout << "[Dataset] Auto-set max_steps to " << args.max_steps << " (1 epoch)" << std::endl;
          }
  
-@@ -444,12 +883,15 @@
+@@ -444,12 +902,15 @@ int main(int argc, char** argv) {
          auto train_start = std::chrono::steady_clock::now();
          auto step_start = train_start;
          
@@ -589,7 +602,8 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
              // Forward. The streaming loss is mathematically equivalent to
              // dense LM CE over all non-ignore shifted labels. In full_streaming
              // mode those labels cover every shifted token; in selected mode
-@@ -474,6 +474,11 @@
+@@ -473,6 +934,11 @@ int main(int argc, char** argv) {
+             
              // Backward (with gradient accumulation)
              loss->backward();
 +            // `loss` owns the tape. force_cleanup at the optimizer step cannot
@@ -600,8 +614,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
  
              accum_counter++;
              
-             // Update parameters once accumulation target is met
-@@ -538,6 +980,15 @@
+@@ -538,6 +1004,15 @@ int main(int argc, char** argv) {
                  MemoryManager::instance().force_cleanup();
                  if (((step + 1) % 20) == 0) MemoryManager::instance().clear_unused_memory();
                  if ((step + 1) % 10 == 0)   MemoryManager::instance().print_memory_stats();
@@ -617,7 +630,7 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
                  
                  accum_loss = 0.0f;
                  accum_counter = 0;
-@@ -548,10 +999,44 @@
+@@ -548,13 +1023,52 @@ int main(int argc, char** argv) {
                  MemoryManager::instance().force_cleanup();
              }
              
@@ -665,6 +678,14 @@ diff --git a/examples/qwen_lora_finetune/src/wikitext_main.cpp b/examples/qwen_l
          std::cout << "[Metrics] Step metrics written to "
                    << args.output_dir + "/step_metrics.csv" << std::endl;
          std::cout << "✅ Finetune finished." << std::endl;
++        std::cout.flush();
++        std::cerr.flush();
++        // The memory pool's destructor crashes after the adapter is on disk
++        // and Android records that as CRASH. The file is already flushed.
++        _exit(0);
+     } catch (const std::exception& e) {
+         std::cerr << "[ERROR] " << e.what() << std::endl;
+         return 1;
 diff --git a/operator/CMakeLists.txt b/operator/CMakeLists.txt
 index ac10235..45bce7d 100644
 --- a/operator/CMakeLists.txt

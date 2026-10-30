@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -33,6 +34,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightNavigationBars = false
         val store = MemoryStore(File(filesDir, "memory"))
@@ -243,7 +249,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.26"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.27"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -261,6 +267,9 @@ private fun PhoneApp(
         gatherPendingDrafts(store, experts.flatMap { it.facts }, form)
     }
     val savedBatch = remember(tick) { TrainBatchStore.read(store) }
+    LaunchedEffect(Unit) {
+        if (migrateFinishedTrain(store)) tick++
+    }
     LaunchedEffect(trainSnap.state) {
         if (trainSnap.state == "running") {
             while (true) {
@@ -336,7 +345,11 @@ private fun PhoneApp(
             }
         }
         val batch = TrainBatchStore.read(store)
-        if (batch != null && batch.phase == "running" && trainSnap.state == "error") {
+        if (batch != null && sealedTrain(store.trainDir, trainSnap) && migrateFinishedTrain(store)) {
+            tick++
+            return@LaunchedEffect
+        }
+        if (batch != null && batch.phase == "running" && trainSnap.state == "error" && !sealedTrain(store.trainDir, trainSnap)) {
             TrainBatchStore.write(store, batch.copy(phase = "error"))
             tick++
             return@LaunchedEffect
@@ -422,7 +435,17 @@ private fun PhoneApp(
         pendingDrafts = waiting.map {
             SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr, it.merged)
         },
-        batchItems = (savedBatch?.let { batchMarks(it, trainSnap.state) } ?: emptyList()).map { (line, mark) ->
+        batchItems = (savedBatch?.let { saved ->
+            val lines = saved.groups.flatten().map { it.trim() }.filter { it.isNotEmpty() }
+            val expert = jobExpertName(store.trainDir)
+            val registered = if (expert == null) {
+                emptySet()
+            } else {
+                store.readReviewedFacts(expert).map { it.statement.trim() }.toSet()
+            }
+            val succeeded = sealedTrain(store.trainDir, trainSnap) && lines.isNotEmpty() && lines.all { it in registered }
+            batchMarks(saved, trainSnap.state, succeeded)
+        } ?: emptyList()).map { (line, mark) ->
             SkyBatchItem(line, mark)
         },
         editorOpen = editorOpen,

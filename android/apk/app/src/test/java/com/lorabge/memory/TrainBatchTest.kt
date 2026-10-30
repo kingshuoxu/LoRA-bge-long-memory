@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.nio.file.Files
 
 class TrainBatchTest {
@@ -85,6 +86,54 @@ class TrainBatchTest {
                 "我的猫猫叫咪咪" to "queued",
             ),
             batchMarks(behind, "waiting"),
+        )
+    }
+
+    @Test
+    fun successAfterAnEarlierFailureMovesRegisteredSelfFactsToDone() {
+        val root = Files.createTempDirectory("batch-recover").toFile()
+        val store = MemoryStore(root)
+        store.ensure()
+        val cat = "我的猫叫咪咪"
+        val name = "我叫徐金朔"
+        val batch = SavedBatch(listOf(listOf(cat, name)), 0, "error")
+        TrainBatchStore.write(store, batch)
+        assertEquals(listOf(cat to "error", name to "error"), batchMarks(batch, "error"))
+        File(store.trainDir, "expert_self.gguf").writeBytes(
+            byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()) + ByteArray(32),
+        )
+        File(store.trainDir, "train.log").writeText("[gguf] wrote expert_self.gguf\n✅ Finetune finished.\n")
+        File(store.trainDir, "status.json").writeText(
+            trainSnapshotJson("done", "done", 20, 20, 4, 0.1788f, 250, "已登记 expert_self", ""),
+        )
+        File(store.trainDir, "job.json").writeText(
+            """
+            {"expert":"expert_self","rank":32,"facts":[
+              {"entity":"我","attr":"猫的名字","statement":"我的猫叫咪咪","value":"咪咪","qa":[{"q":"我的猫叫什么名字？","a":"咪咪"}]},
+              {"entity":"我","attr":"名字","statement":"我叫徐金朔","value":"徐金朔","qa":[{"q":"我叫什么？","a":"徐金朔"}]}
+            ]}
+            """.trimIndent(),
+        )
+        assertTrue(migrateFinishedTrain(store))
+        val settled = TrainBatchStore.read(store)
+        assertEquals("done", settled?.phase)
+        assertEquals(listOf(cat to "done", name to "done"), batchMarks(settled!!, "done"))
+        val experts = store.listExperts()
+        assertEquals(listOf(SELF_EXPERT), experts.map { it.expert })
+        val stored = store.readReviewedFacts(SELF_EXPERT).map { it.statement }.toSet()
+        assertEquals(setOf(cat, name), stored)
+        assertTrue(stored.all { store.readReviewedFacts(SELF_EXPERT).first { fact -> fact.statement == it }.entity == "我" })
+        val who = EntityGround.reply("我是谁", EntityGround.load(store), "zh")
+        assertTrue(who!!.answer.contains("徐金朔"))
+        assertEquals(SELF_EXPERT, who.expert)
+        val again = migrateFinishedTrain(store)
+        assertFalse(again)
+        val stranger = SavedBatch(listOf(listOf("塔佐巴洛公司成立于1978年。")), 0, "error")
+        assertEquals(null, reconcileSucceededBatch(stranger, stored))
+        assertEquals(listOf("塔佐巴洛公司成立于1978年。" to "error"), batchMarks(stranger, "done", succeeded = false))
+        assertEquals(
+            listOf(cat to "done", name to "done"),
+            batchMarks(batch, "done", succeeded = true),
         )
     }
 

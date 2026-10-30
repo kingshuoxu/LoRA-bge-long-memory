@@ -46,6 +46,9 @@ object EntityGround {
     }
 
     fun reply(query: String, facts: List<StoredFact>, lang: String = "zh"): GroundedReply? {
+        val ask = selfAsk(query)
+        if (ask == "assistant") return null
+        if (ask != null) return selfReply(ask, facts, lang)
         val alias = longestAlias(query, facts)
         val related = if (alias != null) {
             facts.filter { it.entity == alias.first.entity }
@@ -75,6 +78,81 @@ object EntityGround {
             answer = answer,
             reason = if (missing) "entity_partial" else "entity",
         )
+    }
+
+    /**
+     * 我 / 我的 in the user's message is the user. 你是谁 is the assistant.
+     * identity, name, place, overview, or assistant. Null means not a self question.
+     */
+    internal fun selfAsk(query: String): String? {
+        val q = norm(query)
+        if (q.isEmpty()) return null
+        val lower = q.lowercase()
+        val aboutUser = q.contains("我") || Regex("""\b(i|me|my)\b""").containsMatchIn(lower)
+        val assistant = !aboutUser && (
+            q.startsWith("你是谁") || q.startsWith("你叫什么") ||
+                Regex("""\bwho are you\b""").containsMatchIn(lower) ||
+                Regex("""what(?:'s| is) your name\b""").containsMatchIn(lower)
+            )
+        if (assistant) return "assistant"
+        if (q == "我是谁" || q.startsWith("我是谁") || Regex("""\bwho am i\b""").containsMatchIn(lower)) return "identity"
+        if (q.startsWith("我叫什么") || q.startsWith("我的名字") ||
+            Regex("""what(?:'s| is) my name\b""").containsMatchIn(lower)
+        ) {
+            return "name"
+        }
+        if (q.startsWith("我住") || Regex("""\bwhere (?:do i live|am i from)\b""").containsMatchIn(lower)) return "place"
+        if (q.contains("关于我") || q.contains("你知道我") || q.contains("你了解我") ||
+            Regex("""what do you know about me\b""").containsMatchIn(lower)
+        ) {
+            return "overview"
+        }
+        return null
+    }
+
+    /** Force the about-you expert. A miss must not fall through to the base model's own identity. */
+    internal fun selfRoute(query: String, hasSelfExpert: Boolean): RouteHit? {
+        val ask = selfAsk(query) ?: return null
+        if (ask == "assistant") return null
+        return if (hasSelfExpert) {
+            RouteHit(SELF_EXPERT, true, "self", 1.0)
+        } else {
+            RouteHit(null, false, "self_empty", 0.0)
+        }
+    }
+
+    private fun selfReply(kind: String, facts: List<StoredFact>, lang: String): GroundedReply {
+        val mine = facts.filter { isSelfEntity(it.entity) }
+        val picked = when (kind) {
+            "place" -> mine.filter { factKind(it.statement) == "place" || it.statement.contains("住") }
+            "overview" -> mine
+            else -> mine.filter { isUserName(it) }
+        }
+        val use = when {
+            picked.isNotEmpty() -> picked
+            kind == "overview" -> mine
+            else -> emptyList()
+        }
+        if (use.isEmpty()) {
+            val answer = when {
+                lang == "en" && kind == "place" -> "I don't know where you live yet. You can tell me."
+                lang == "en" -> "I don't know who you are yet. You can tell me."
+                kind == "place" -> "还不知道你住在哪里。你可以告诉我。"
+                else -> "还不知道你是谁。你可以告诉我。"
+            }
+            return GroundedReply("", "我", answer, "self_empty")
+        }
+        val lines = use.map { finish(assistantVoice(it.statement, it.entity)) }.distinct()
+        val fact = use.first()
+        return GroundedReply(fact.expert, "我", lines.joinToString(""), "entity")
+    }
+
+    private fun isUserName(fact: StoredFact): Boolean {
+        if (!isSelfEntity(fact.entity)) return false
+        if (fact.attr.contains("猫")) return false
+        if (fact.attr == "名字") return true
+        val statement = fact.statement.trim()
+        return statement.startsWith("我叫") || statement.startsWith("我是") || statement.startsWith("我的名字")
     }
 
     private fun stringList(arr: org.json.JSONArray?): List<String> {

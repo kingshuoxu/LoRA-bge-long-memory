@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -125,6 +126,52 @@ class EntityGroundTest {
         assertTrue(json.contains("好的，记住了，你是徐金朔。"))
         assertFalse(json.contains("bge_block"))
         assertFalse(json.contains("\"nativeFired\":true"))
+    }
+
+    @Test
+    fun whoAmIUsesTheAboutYouExpertAndDoesNotSpeakAsTheAssistant() {
+        val facts = listOf(
+            StoredFact("expert_self", "我", "我叫徐金朔", "徐金朔", listOf("我叫什么？"), "名字"),
+            StoredFact("expert_self", "我", "我的猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？"), "猫的名字"),
+        )
+        val who = EntityGround.reply("我是谁", facts, "zh")
+        assertNotNull(who)
+        assertEquals("expert_self", who!!.expert)
+        assertEquals("我", who.entity)
+        assertEquals("entity", who.reason)
+        assertTrue(who.answer.contains("你叫徐金朔") || who.answer.contains("你是徐金朔"))
+        assertFalse(who.answer.contains("助手"))
+        assertFalse(who.answer.contains("我是"))
+        assertFalse(who.answer.contains("咪咪"))
+        val name = EntityGround.reply("我叫什么", facts, "zh")
+        assertTrue(name!!.answer.contains("徐金朔"))
+        val home = EntityGround.reply(
+            "我住哪",
+            listOf(StoredFact("expert_self", "我", "我住在上海。", "上海", listOf("我住在哪里？"), "居住地")),
+            "zh",
+        )
+        assertTrue(home!!.answer.contains("上海"))
+        assertTrue(home.answer.contains("你住"))
+        val overview = EntityGround.reply("你知道我什么", facts, "zh")
+        assertTrue(overview!!.answer.contains("徐金朔"))
+        assertTrue(overview.answer.contains("咪咪"))
+        assertTrue(EntityGround.reply("关于我", facts, "zh")!!.answer.contains("徐金朔"))
+        val english = EntityGround.reply("who am I", facts, "en")
+        assertTrue(english!!.answer.contains("徐金朔") || english.answer.contains("you"))
+        assertEquals("expert_self", english.expert)
+        val named = EntityGround.reply("what's my name", facts, "en")
+        assertNotNull(named)
+        assertNull(EntityGround.reply("你是谁", facts, "zh"))
+        assertNull(EntityGround.reply("who are you", facts, "en"))
+        assertEquals(RouteHit(SELF_EXPERT, true, "self", 1.0), EntityGround.selfRoute("我是谁", true))
+        assertEquals(RouteHit(null, false, "self_empty", 0.0), EntityGround.selfRoute("who am I", false))
+        assertNull(EntityGround.selfRoute("你是谁", true))
+        val empty = EntityGround.reply("我是谁", emptyList(), "zh")
+        assertEquals("self_empty", empty!!.reason)
+        assertEquals("", empty.expert)
+        assertTrue(empty.answer.contains("还不知道"))
+        assertFalse(empty.answer.contains("助手"))
+        assertTrue(empty.answer.contains("告诉"))
     }
 
     @Test

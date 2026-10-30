@@ -50,11 +50,15 @@ internal fun confirmTrainShown(training: Boolean, trainState: String, marks: Lis
     return trainState == "error"
 }
 
-internal fun batchMarks(batch: SavedBatch, trainState: String): List<Pair<String, String>> {
+/**
+ * A completed run marks every item in the batch done, even if an earlier attempt
+ * left phase=error. Otherwise a failure is only the group this attempt was on.
+ */
+internal fun batchMarks(batch: SavedBatch, trainState: String, succeeded: Boolean = false): List<Pair<String, String>> {
     val out = ArrayList<Pair<String, String>>()
     batch.groups.forEachIndexed { index, statements ->
         val mark = when {
-            batch.phase == "done" || index < batch.index -> "done"
+            succeeded || batch.phase == "done" || index < batch.index -> "done"
             index > batch.index -> "queued"
             batch.phase == "error" || trainState == "error" -> "error"
             trainState == "waiting" -> "waiting"
@@ -64,6 +68,94 @@ internal fun batchMarks(batch: SavedBatch, trainState: String): List<Pair<String
         statements.forEach { out.add(it to mark) }
     }
     return out
+}
+
+/**
+ * Move the batch to done only when every statement is actually stored on the expert.
+ * Does not invent a separate expert for a value such as 咪咪; self facts stay together.
+ */
+internal fun reconcileSucceededBatch(batch: SavedBatch, registered: Set<String>): SavedBatch? {
+    val lines = batch.groups.flatten().map { it.trim() }.filter { it.isNotEmpty() }
+    if (lines.isEmpty() || lines.any { it !in registered }) return null
+    val at = batch.groups.lastIndex
+    if (batch.phase == "done" && batch.index == at) return null
+    return batch.copy(phase = "done", index = at)
+}
+
+/**
+ * A done run whose adapter is on disk should be registered and shown as 已完成.
+ * Returns true when batch or expert state changed.
+ */
+internal fun migrateFinishedTrain(store: MemoryStore): Boolean {
+    val trainDir = store.trainDir
+    val jobFile = File(trainDir, "job.json")
+    if (!jobFile.exists()) return false
+    val job = runCatching { org.json.JSONObject(jobFile.readText()) }.getOrNull() ?: return false
+    val expert = job.optString("expert").ifBlank { return false }
+    val statusFile = File(trainDir, "status.json")
+    val snap = parseTrainSnapshot(statusFile.takeIf { it.exists() }?.readText().orEmpty())
+    if (!sealedTrain(trainDir, snap)) return false
+    val factsJson = job.optJSONArray("facts") ?: return false
+    val facts = ArrayList<ReviewedFact>()
+    for (i in 0 until factsJson.length()) {
+        val row = factsJson.optJSONObject(i) ?: continue
+        facts.add(TrainService.factFromJson(row))
+    }
+    if (facts.isEmpty()) return false
+    // Personal facts share expert_self. A cat's name is not its own expert.
+    if (facts.all { isSelfEntity(it.entity) } && expert != SELF_EXPERT) return false
+    var changed = false
+    val registered = store.readReviewedFacts(expert).map { it.statement.trim() }.toSet()
+    val wanted = facts.map { it.statement.trim() }.filter { it.isNotEmpty() }
+    if (wanted.any { it !in registered }) {
+        val dir = File(store.expertsDir, expert)
+        dir.mkdirs()
+        val adapter = trainAdapterFile(trainDir, expert)
+        val dest = File(dir, "adapter.gguf")
+        if (ggufIsValid(adapter) && !ggufIsValid(dest)) adapter.copyTo(dest, overwrite = true)
+        val existing = store.listExperts().firstOrNull { it.expert == expert }
+        val batchNo = existing?.batch ?: ((store.listExperts().maxOfOrNull { it.batch } ?: -1) + 1)
+        store.registerExpert(
+            ExpertRecord(
+                expert = expert,
+                batch = batchNo,
+                nFacts = facts.size,
+                rank = job.optInt("rank", 32),
+                keyPath = "experts/$expert/router_key.f32",
+                weight = "experts/$expert/adapter.gguf",
+            ),
+            facts,
+        )
+        changed = true
+    }
+    val now = store.readReviewedFacts(expert).map { it.statement.trim() }.toSet()
+    val saved = TrainBatchStore.read(store)
+    if (saved != null) {
+        val settled = reconcileSucceededBatch(saved, now)
+        if (settled != null) {
+            TrainBatchStore.write(store, settled)
+            changed = true
+        }
+    }
+    if (snap.state != "done" && wanted.all { it in now }) {
+        writeTextAtomic(
+            statusFile,
+            trainSnapshotJson(
+                "done",
+                "done",
+                snap.step,
+                snap.total,
+                snap.epochs,
+                snap.loss,
+                snap.elapsedSec,
+                "已登记 $expert",
+                "",
+                updated = java.time.Instant.now().toString(),
+            ),
+        )
+        changed = true
+    }
+    return changed
 }
 
 internal object TrainBatchStore {

@@ -504,6 +504,21 @@ static bool fact_allows(const FactGate& gate, const float* mq, const u32string& 
     return own >= gate.tau && own + 1e-6 >= other;
 }
 
+static bool contains_u(const u32string& text, const char* needle) {
+    return text.find(U(needle)) != u32string::npos;
+}
+
+/** Questions about the user. 你是谁 (no 我) is the assistant and returns false. */
+static bool is_user_self_query(const u32string& compact) {
+    bool about_user = contains_u(compact, "我");
+    if (!about_user) return false;
+    if (compact == U("我是谁") || contains_u(compact, "我是谁")) return true;
+    if (contains_u(compact, "我叫什么") || contains_u(compact, "我的名字")) return true;
+    if (compact.find(U("我住")) == 0) return true;
+    if (contains_u(compact, "关于我") || contains_u(compact, "你知道我") || contains_u(compact, "你了解我")) return true;
+    return false;
+}
+
 static Decision route_decision(
     const u32string& query,
     const vector<Expert>& experts,
@@ -534,6 +549,30 @@ static Decision route_decision(
     };
 
     u32string compact = compact_query(query);
+    // 我/我的 is the user. A one-character pronoun never survives the name span
+    // rules, so "我是谁" used to miss expert_self and the base model answered
+    // as itself. 你是谁 stays on the assistant path.
+    if (is_user_self_query(compact)) {
+        for (const auto& expert : experts) {
+            bool self = expert.name == "expert_self";
+            if (!self) {
+                for (const auto& ent : expert.entities)
+                    if (ent == "我") self = true;
+            }
+            if (!self) continue;
+            Decision d;
+            d.expert = expert.name;
+            d.candidate = expert.name;
+            d.fired = true;
+            d.reason = "self";
+            d.sim = sims.get(expert.name, 1.0);
+            return d;
+        }
+        Decision missing;
+        missing.fired = false;
+        missing.reason = "self_empty";
+        return missing;
+    }
     auto spans = find_name_spans(compact);
     optional<string> best;
     double best_sim = 0;

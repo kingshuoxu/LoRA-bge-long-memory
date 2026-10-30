@@ -209,6 +209,53 @@ fun tailText(text: String, lines: Int = 40, maxChars: Int = 4000): String {
     return joined.takeLast(maxChars)
 }
 
+/** A finished adapter starts with the GGUF magic and is not an empty file. */
+fun ggufIsValid(file: File): Boolean {
+    if (!file.isFile || file.length() < 24) return false
+    val magic = ByteArray(4)
+    return try {
+        file.inputStream().use { input ->
+            if (input.read(magic) != 4) return false
+        }
+        magic[0] == 'G'.code.toByte() &&
+            magic[1] == 'G'.code.toByte() &&
+            magic[2] == 'U'.code.toByte() &&
+            magic[3] == 'F'.code.toByte()
+    } catch (_: Throwable) {
+        false
+    }
+}
+
+fun jobExpertName(trainDir: File): String? {
+    val file = File(trainDir, "job.json")
+    if (!file.exists()) return null
+    return runCatching { JSONObject(file.readText()).optString("expert") }.getOrNull()?.ifBlank { null }
+}
+
+fun trainAdapterFile(trainDir: File, expert: String = jobExpertName(trainDir) ?: "expert_self"): File {
+    return File(trainDir, "$expert.gguf")
+}
+
+/** status=done plus a real adapter. A later process exit does not undo this. */
+fun trainSucceeded(snap: TrainSnapshot, adapter: File): Boolean {
+    return snap.state == "done" && ggufIsValid(adapter)
+}
+
+/**
+ * The trainer already flushed a finished adapter. Status may still say running
+ * for the moment between process exit and registration, or error if a teardown
+ * crash was recorded first. Either way the run is complete.
+ */
+fun sealedTrain(trainDir: File, snap: TrainSnapshot): Boolean {
+    val adapter = trainAdapterFile(trainDir)
+    if (trainSucceeded(snap, adapter)) return true
+    if (!ggufIsValid(adapter)) return false
+    val log = File(trainDir, "train.log")
+    if (!log.exists() || !log.readText().contains("Finetune finished")) return false
+    val started = File(trainDir, "config.json").takeIf { it.exists() }?.readText()?.let { parseTrainConfig(it) }?.startedMs ?: 0L
+    return started <= 0L || adapter.lastModified() + 2_000L >= started
+}
+
 fun renderTrainSection(config: TrainConfig?, snap: TrainSnapshot, exit: TrainExit?, logTail: String): String {
     val longest = observedMaxLen(logTail)
     return buildString {
@@ -245,8 +292,9 @@ fun renderTrainSection(config: TrainConfig?, snap: TrainSnapshot, exit: TrainExi
         appendLine("进度时间: ${snap.updated.ifBlank { "无" }}")
         if (exit != null) {
             val importance = importanceLabel(exit.importance).let { if (it.isBlank()) "" else " $it" }
+            val head = if (snap.state == "done") "退出（完成之后）" else "退出"
             appendLine(
-                "退出: ${exit.reasonName} reason=${exit.reason} signal=${exit.status} importance=${exit.importance}$importance 峰值RSS=${exit.rssKb}KB 峰值PSS=${exit.pssKb}KB",
+                "$head: ${exit.reasonName} reason=${exit.reason} signal=${exit.status} importance=${exit.importance}$importance 峰值RSS=${exit.rssKb}KB 峰值PSS=${exit.pssKb}KB",
             )
             appendLine("退出说明: ${exit.description.ifBlank { "无" }}")
             appendLine("退出进程: ${exit.process.ifBlank { "无" }}")

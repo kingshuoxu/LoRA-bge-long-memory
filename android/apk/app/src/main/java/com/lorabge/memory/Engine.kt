@@ -39,6 +39,8 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     fun route(text: String): RouteHit = guarded("route") { routeOnce(text) }
 
     private fun routeOnce(text: String): RouteHit {
+        val forced = EntityGround.selfRoute(text, store.listExperts().any { it.expert == SELF_EXPERT })
+        if (forced != null) return forced
         val index = File(store.indexDir, "index.json")
         if (!index.exists()) rebuildIndex()
         if (!index.exists()) return RouteHit(null, false, "no_index", 0.0)

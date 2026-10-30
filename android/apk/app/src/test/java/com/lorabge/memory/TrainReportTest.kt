@@ -117,6 +117,50 @@ class TrainReportTest {
     }
 
     @Test
+    fun doneRunWithGgufStaysSuccessAfterALaterCrash() {
+        val root = java.nio.file.Files.createTempDirectory("train-done").toFile()
+        val store = MemoryStore(File(root, "memory"))
+        store.ensure()
+        val adapter = File(store.trainDir, "expert_self.gguf")
+        adapter.writeBytes(byteArrayOf('G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte()) + ByteArray(64))
+        val done = TrainSnapshot(
+            state = "done",
+            stage = "done",
+            step = 20,
+            total = 20,
+            epoch = 4,
+            epochs = 4,
+            loss = 0.1788f,
+            detail = "已登记 expert_self",
+            updated = "2026-10-30T09:04:04Z",
+        )
+        assertTrue(ggufIsValid(adapter))
+        assertTrue(trainSucceeded(done, adapter))
+        writeTextAtomic(File(store.trainDir, "status.json"), trainSnapshotJson(
+            "done", "done", 20, 20, 4, 0.1788f, 250, "已登记 expert_self", "",
+            updated = "2026-10-30T09:04:04Z",
+        ))
+        File(store.trainDir, "job.json").writeText("""{"expert":"expert_self","facts":[]}""")
+        File(store.trainDir, "train.log").writeText("[gguf] wrote expert_self.gguf\n✅ Finetune finished.\n")
+        assertTrue(sealedTrain(store.trainDir, done))
+        val crash = TrainExit(
+            TRAIN_EXIT_CRASH, "CRASH", 0, "crash", 400, 0, 151504, 90, "com.lorabge.memory:train",
+        )
+        TrainService.markDead(store, crash)
+        val snap = parseTrainSnapshot(File(store.trainDir, "status.json").readText())
+        assertEquals("done", snap.state)
+        assertEquals("已登记 expert_self", snap.detail)
+        assertFalse(File(store.trainDir, "exit.json").exists())
+        val text = renderTrainSection(null, snap, crash, File(store.trainDir, "train.log").readText())
+        assertTrue(text.contains("退出（完成之后）"))
+        assertTrue(text.contains("CRASH"))
+        assertTrue(text.contains("reason=4"))
+        assertTrue(text.contains("CACHED") || text.contains("importance=400"))
+        assertTrue(text.contains("状态: done"))
+        assertFalse(text.contains("\n退出: CRASH"))
+    }
+
+    @Test
     fun deadTrainerKeepsTheStepAndTheChineseReason() {
         val root = java.nio.file.Files.createTempDirectory("train-dead").toFile()
         val store = MemoryStore(File(root, "memory"))
