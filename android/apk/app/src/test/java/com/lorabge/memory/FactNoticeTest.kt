@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.nio.file.Files
 
 class FactNoticeTest {
@@ -99,6 +100,60 @@ class FactNoticeTest {
         assertEquals("居住地", draft?.attr)
         assertEquals("上海", draft?.value)
         assertEquals("我住在上海。", draft?.statement)
+    }
+
+    @Test
+    fun nearDuplicateTeachingsAreAlreadyRemembered() {
+        val stored = listOf("我的猫叫咪咪", "我叫徐金朔")
+        val noted = listOf("我的猫猫叫咪咪", "我是徐金朔。", "塔佐巴洛成立于1980年")
+        assertEquals(listOf("塔佐巴洛成立于1980年"), pendingFactLines(noted, stored))
+        assertTrue(pendingFactLines(listOf("塔佐巴洛成立于1980年。"), stored).single().contains("1980"))
+        assertEquals(listOf("我的猫猫叫咪咪", "我是徐金朔。"), rememberedFactLines(noted, stored))
+        assertTrue(isSameMemory("我的猫猫叫咪咪", "我的猫叫咪咪"))
+        assertTrue(isSameMemory("我是徐金朔。", "我叫徐金朔"))
+        assertFalse(isSameMemory("塔佐巴洛成立于1980年", "我叫徐金朔"))
+        val same = FloatArray(4) { 1f }
+        val other = floatArrayOf(1f, 0f, 0f, 0f)
+        val embed = { lines: List<String> ->
+            lines.map { if (normalizeFactKey(it).contains("佩莫")) same else other }
+        }
+        assertTrue(cosineSimilarity(same, same) >= REMEMBER_SIM)
+        assertTrue(matchesStored("佩莫总部在特希", listOf("佩莫的总部"), embed))
+        assertFalse(matchesStored("佐雷成立于1979年", listOf("佩莫的总部"), embed))
+        val cat = FactNotice.draft("我的猫猫叫咪咪")!!
+        val name = FactNotice.draft("我是徐金朔")!!
+        assertEquals("已经记住了，你的猫叫咪咪。", FactNotice.already(cat, "zh"))
+        assertEquals("已经记住了，你是徐金朔。", FactNotice.already(name, "zh"))
+        val root = Files.createTempDirectory("alias").toFile()
+        val store = MemoryStore(root)
+        store.registerExpert(
+            ExpertRecord(SELF_EXPERT, 1, 1, 32, "k", "w"),
+            listOf(ReviewedFact("我", "我叫徐金朔", "徐金朔", listOf("我叫什么？" to "徐金朔"), emptyList(), attr = "名字")),
+        )
+        store.registerExpert(
+            ExpertRecord(stableExpertId("咪咪"), 2, 1, 32, "k", "w"),
+            listOf(ReviewedFact("咪咪", "我的猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？" to "咪咪"), emptyList(), attr = "宠物")),
+        )
+        store.saveConversation(
+            Conversation(
+                "c1", "记", "t", "t",
+                listOf(
+                    ChatMessage("user", "我是徐金朔。"),
+                    ChatMessage("user", "我的猫猫叫咪咪"),
+                    ChatMessage("user", "塔佐巴洛成立于1980年"),
+                ),
+            ),
+        )
+        val storedLines = store.listExperts().flatMap { store.readReviewedFacts(it.expert).map { fact -> fact.statement } }
+        val pending = gatherPendingDrafts(store, storedLines, null).map { it.statement }
+        val remembered = gatherRememberedDrafts(store, storedLines, null).map { it.statement }
+        assertEquals(listOf("塔佐巴洛成立于1980年。"), pending)
+        assertEquals(setOf("我是徐金朔。", "我的猫猫叫咪咪"), remembered.toSet())
+        assertTrue(absorbRememberedAliases(store))
+        val nameJson = File(root, "experts/$SELF_EXPERT/fact_memory.json").readText()
+        val catJson = File(root, "experts/${stableExpertId("咪咪")}/fact_memory.json").readText()
+        assertTrue(nameJson.contains("我是徐金朔"))
+        assertTrue(catJson.contains("我的猫猫叫咪咪"))
     }
 
     @Test

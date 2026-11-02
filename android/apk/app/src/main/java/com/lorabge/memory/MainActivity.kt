@@ -253,7 +253,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.28"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.29"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -262,19 +262,20 @@ private fun PhoneApp(
     }
     val freshExperts = remember(tick, sessionGate) { NebulaGraph.sessionNew(store) }
     val nebulaJson = remember(tick, lang, freshExperts) { NebulaGraph.build(store, lang, freshExperts) }
+    val storedLines = experts.flatMap { it.facts }
+    val notedForm = if (statement.isBlank()) null else FactDraft(entity, attr, statement, value, question, answer)
     val waiting = remember(tick, statement, entity, value, question, answer, attr, experts) {
-        val form = if (statement.isBlank()) {
-            null
-        } else {
-            FactDraft(entity, attr, statement, value, question, answer)
-        }
-        gatherPendingDrafts(store, experts.flatMap { it.facts }, form)
+        gatherPendingDrafts(store, storedLines, notedForm)
+    }
+    val remembered = remember(tick, statement, entity, value, question, answer, attr, experts) {
+        gatherRememberedDrafts(store, storedLines, notedForm)
     }
     val savedBatch = remember(tick) { TrainBatchStore.read(store) }
     LaunchedEffect(Unit) {
         val moved = store.migratePossessedEntities()
+        val absorbed = absorbRememberedAliases(store)
         val finished = migrateFinishedTrain(store)
-        if (moved || finished) tick++
+        if (moved || absorbed || finished) tick++
     }
     LaunchedEffect(trainSnap.state) {
         if (trainSnap.state == "running") {
@@ -438,6 +439,7 @@ private fun PhoneApp(
         nebulaCanvas = nebulaCanvas,
         e2e = e2e,
         pendingFacts = waiting.map { it.statement },
+        rememberedFacts = remembered.map { it.statement },
         pendingDrafts = waiting.map {
             SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr, it.merged)
         },
@@ -527,7 +529,16 @@ private fun PhoneApp(
                 val facts = FactNotice.drafts(text)
                 val noticed = facts.isNotEmpty() || FactNotice.noticed(text)
                 if (noticed) {
-                    val fact = facts.firstOrNull()
+                    val storedNow = experts.flatMap { it.facts }
+                    val embed = if (engine.bgeModel() != null) {
+                        { lines: List<String> -> engine.embedTexts(lines) }
+                    } else {
+                        null
+                    }
+                    val fresh = facts.filter { !matchesStored(it.statement, storedNow, embed) }
+                    val known = facts.filter { matchesStored(it.statement, storedNow, embed) }
+                    known.forEach { store.attachRememberedAlias(it.statement) }
+                    val fact = fresh.firstOrNull()
                     if (fact != null) {
                         entity = fact.entity
                         attr = fact.attr
@@ -536,15 +547,22 @@ private fun PhoneApp(
                         question = fact.question
                         answer = fact.answer
                         pending = null
+                    } else if (known.isNotEmpty()) {
+                        statement = ""
+                        entity = ""
+                        attr = ""
+                        value = ""
+                        question = ""
+                        answer = ""
+                        pending = null
                     } else if (looksLikeCorrection(text)) {
                         pending = guessCorrection(text)
                     }
-                    val reply = if (facts.isNotEmpty()) {
-                        FactNotice.acknowledgeAll(facts, langNow)
-                    } else if (langNow == "en") {
-                        "Okay, I'll remember."
-                    } else {
-                        "好的，记住了。"
+                    val reply = when {
+                        fresh.isNotEmpty() -> FactNotice.acknowledgeAll(fresh, langNow)
+                        known.isNotEmpty() -> FactNotice.already(known.first(), langNow)
+                        langNow == "en" -> "Okay, I'll remember."
+                        else -> "好的，记住了。"
                     }
                     val taught = facts.firstOrNull()
                     val taughtEntity = taught?.entity ?: if (looksLikeCorrection(text)) guessCorrection(text).entity else ""
@@ -931,18 +949,89 @@ private fun jobStatements(store: MemoryStore): List<String> {
     return out
 }
 
-internal fun pendingFactLines(noted: List<String>, stored: List<String>): List<String> {
+internal const val REMEMBER_SIM = 0.86
+
+internal fun normalizeFactKey(text: String): String {
+    var key = foldStatement(text)
+    if (key.startsWith("我是")) key = "我叫" + key.removePrefix("我是")
+    return key
+}
+
+internal fun cosineSimilarity(left: FloatArray, right: FloatArray): Double {
+    if (left.isEmpty() || left.size != right.size) return 0.0
+    var dot = 0.0
+    var leftNorm = 0.0
+    var rightNorm = 0.0
+    for (index in left.indices) {
+        dot += left[index] * right[index]
+        leftNorm += left[index] * left[index]
+        rightNorm += right[index] * right[index]
+    }
+    if (leftNorm <= 0.0 || rightNorm <= 0.0) return 0.0
+    return dot / (kotlin.math.sqrt(leftNorm) * kotlin.math.sqrt(rightNorm))
+}
+
+/**
+ * Same memory after punctuation, 猫猫/猫 and 我是/我叫 are folded.
+ * Anything still different is the same only when bge cosine is at least [REMEMBER_SIM].
+ */
+internal fun isSameMemory(
+    pending: String,
+    stored: String,
+    embed: ((List<String>) -> List<FloatArray>)? = null,
+): Boolean {
+    val left = normalizeFactKey(pending)
+    val right = normalizeFactKey(stored)
+    if (left.isNotEmpty() && left == right) return true
+    if (left.isEmpty() || right.isEmpty() || embed == null) return false
+    val vectors = runCatching { embed(listOf(left, right)) }.getOrNull() ?: return false
+    if (vectors.size < 2) return false
+    return cosineSimilarity(vectors[0], vectors[1]) >= REMEMBER_SIM
+}
+
+internal fun matchesStored(
+    line: String,
+    stored: List<String>,
+    embed: ((List<String>) -> List<FloatArray>)? = null,
+): Boolean {
+    val key = normalizeFactKey(line)
+    if (key.isNotEmpty() && stored.any { normalizeFactKey(it) == key }) return true
+    if (embed == null || key.isEmpty()) return false
+    val keys = stored.map { normalizeFactKey(it) }.filter { it.isNotEmpty() }
+    if (keys.isEmpty()) return false
+    val vectors = runCatching { embed(listOf(key) + keys) }.getOrNull() ?: return false
+    if (vectors.size != keys.size + 1) return false
+    return vectors.drop(1).any { cosineSimilarity(vectors[0], it) >= REMEMBER_SIM }
+}
+
+internal fun pendingFactLines(
+    noted: List<String>,
+    stored: List<String>,
+    embed: ((List<String>) -> List<FloatArray>)? = null,
+): List<String> {
     return noted.map { it.trim() }.filter { it.isNotBlank() }.distinct().filter { line ->
-        val bare = line.trimEnd('。', '.', '！', '!')
-        stored.none { known ->
-            val other = known.trim().trimEnd('。', '.', '！', '!')
-            other == bare || other.contains(bare) || bare.contains(other)
+        !matchesStored(line, stored, embed)
+    }
+}
+
+internal fun rememberedFactLines(
+    noted: List<String>,
+    stored: List<String>,
+    embed: ((List<String>) -> List<FloatArray>)? = null,
+): List<String> {
+    return noted.map { it.trim() }.filter { it.isNotBlank() }.distinct().filter { line ->
+        matchesStored(line, stored, embed) && stored.none { known ->
+            known.trim().trimEnd('。', '.', '！', '!') == line.trim().trimEnd('。', '.', '！', '!')
         }
     }
 }
 
-internal fun pendingDrafts(drafts: List<FactDraft>, stored: List<String>): List<FactDraft> {
-    val allowed = pendingFactLines(drafts.map { it.statement }, stored)
+internal fun pendingDrafts(
+    drafts: List<FactDraft>,
+    stored: List<String>,
+    embed: ((List<String>) -> List<FloatArray>)? = null,
+): List<FactDraft> {
+    val allowed = pendingFactLines(drafts.map { it.statement }, stored, embed)
     val seen = HashSet<String>()
     val out = ArrayList<FactDraft>()
     for (line in allowed) {
@@ -1050,7 +1139,7 @@ internal fun collapseSavedBatch(batch: SavedBatch): SavedBatch {
     return batch.copy(groups = groups, index = batch.index.coerceIn(0, groups.lastIndex))
 }
 
-internal fun gatherPendingDrafts(store: MemoryStore, stored: List<String>, form: FactDraft?): List<FactDraft> {
+internal fun gatherNotedDrafts(store: MemoryStore, form: FactDraft?): List<FactDraft> {
     val noted = ArrayList<FactDraft>()
     for (conv in store.listConversations()) {
         val full = store.loadConversation(conv.id) ?: continue
@@ -1060,7 +1149,29 @@ internal fun gatherPendingDrafts(store: MemoryStore, stored: List<String>, form:
         }
     }
     if (form != null && form.statement.isNotBlank() && noted.none { samePendingFact(it, form) }) noted.add(form)
-    return pendingDrafts(noted, stored)
+    return noted
+}
+
+internal fun gatherPendingDrafts(store: MemoryStore, stored: List<String>, form: FactDraft?): List<FactDraft> {
+    return pendingDrafts(gatherNotedDrafts(store, form), stored)
+}
+
+internal fun gatherRememberedDrafts(store: MemoryStore, stored: List<String>, form: FactDraft?): List<FactDraft> {
+    val allowed = rememberedFactLines(gatherNotedDrafts(store, form).map { it.statement }, stored).toSet()
+    return dedupePendingFacts(gatherNotedDrafts(store, form).filter { it.statement.trim() in allowed })
+}
+
+/** Fold near-duplicates that are already consolidated into that fact, so upgrade clears 待巩固. */
+internal fun absorbRememberedAliases(store: MemoryStore): Boolean {
+    val stored = store.listExperts().flatMap { record ->
+        store.readReviewedFacts(record.expert).map { it.statement }
+    }
+    var changed = false
+    for (draft in gatherNotedDrafts(store, null)) {
+        if (!matchesStored(draft.statement, stored)) continue
+        if (store.attachRememberedAlias(draft.statement)) changed = true
+    }
+    return changed
 }
 
 internal fun lastRouteJson(query: String, hit: RouteHit, grounded: GroundedReply?): String {

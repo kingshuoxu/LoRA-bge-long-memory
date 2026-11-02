@@ -46,6 +46,19 @@ object FactNotice {
         return if (lang == "en") "Okay, I'll remember." else "好的，记住了。"
     }
 
+    fun already(draft: FactDraft, lang: String): String {
+        val named = when {
+            draft.attr == "宠物" || draft.attr == "猫的名字" || draft.statement.contains("猫") ->
+                if (lang == "en") "Already remembered. Your cat is named ${draft.value}."
+                else "已经记住了，你的猫叫${draft.value}。"
+            draft.entity == "我" && (draft.attr == "名字" || draft.statement.startsWith("我是") || draft.statement.startsWith("我叫")) ->
+                if (lang == "en") "Already remembered. You are ${draft.value}."
+                else "已经记住了，你是${draft.value}。"
+            else -> if (lang == "en") "Already remembered." else "已经记住了。"
+        }
+        return named
+    }
+
     fun noticed(text: String): Boolean {
         val body = text.trim()
         if (body.length < 4 || body.length > 600) return false

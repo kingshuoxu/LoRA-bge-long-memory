@@ -220,6 +220,7 @@ data class SkyState(
     val liveMotion: Boolean = false,
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
+    val rememberedFacts: List<String> = emptyList(),
     val pendingDrafts: List<SkyPending> = emptyList(),
     val batchItems: List<SkyBatchItem> = emptyList(),
     val editorOpen: Boolean = false,
@@ -357,6 +358,7 @@ fun skyText(lang: String, key: String): String {
         "updatePermission" to "请允许本应用安装未知来源应用，只需这一次。打开开关后回到这里再点下载并安装。",
         "updateInstalling" to "请在系统界面确认安装。模型和对话会保留。",
         "pendingHead" to "待巩固",
+        "rememberedHead" to "已记住",
         "advanced" to "高级",
         "nebulaFallback" to "这台手机绘不出完整星云，已改用兼容画面。",
     )
@@ -453,6 +455,7 @@ fun skyText(lang: String, key: String): String {
         "updatePermission" to "Allow this app to install unknown apps, just once. Turn the switch on, come back, and tap download and install.",
         "updateInstalling" to "Confirm the install. Models and chats stay.",
         "pendingHead" to "Waiting to consolidate",
+        "rememberedHead" to "Already remembered",
         "advanced" to "Advanced",
         "nebulaFallback" to "This phone can't draw the full nebula, so a compatible view is on.",
     )
@@ -2050,6 +2053,28 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 modifier = Modifier.semantics { contentDescription = "pendingFacts" }.padding(bottom = 8.dp),
             )
             state.pendingFacts.forEach { line ->
+                Text(
+                    line,
+                    color = Ink,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .background(Surface, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        if (state.rememberedFacts.isNotEmpty()) {
+            Text(
+                skyText(state.lang, "rememberedHead"),
+                color = Muted,
+                fontSize = 13.sp,
+                modifier = Modifier.semantics { contentDescription = "rememberedFacts" }.padding(bottom = 8.dp),
+            )
+            state.rememberedFacts.forEach { line ->
                 Text(
                     line,
                     color = Ink,

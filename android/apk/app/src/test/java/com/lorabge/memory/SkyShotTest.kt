@@ -317,6 +317,21 @@ class SkyShotTest {
     }
 
     @Test
+    fun libraryRememberedZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    tab = SkyTab.Library,
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    pendingFacts = listOf("塔佐巴洛成立于1980年"),
+                    rememberedFacts = listOf("我是徐金朔。", "我的猫猫叫咪咪"),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun libraryZh() {
         paparazzi.snapshot {
             SkyFrame(
@@ -426,7 +441,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.28",
+        versionName = "0.1.29",
     )
 
     private fun fourPending() = SkyState(

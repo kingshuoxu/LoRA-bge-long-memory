@@ -195,6 +195,38 @@ class MemoryStore(val root: File) {
      * become their own node. The name and the original sentence stay, so
      * "我的猫是什么" still answers 咪咪.
      */
+    fun attachRememberedAlias(alias: String): Boolean {
+        val line = alias.trim()
+        if (line.isEmpty()) return false
+        var changed = false
+        for (record in listExperts()) {
+            val file = File(expertsDir, "${record.expert}/fact_memory.json")
+            if (!file.exists()) continue
+            val text = file.readText().trim()
+            if (!text.startsWith("[")) continue
+            val rows = org.json.JSONArray(text)
+            var touched = false
+            for (index in 0 until rows.length()) {
+                val row = rows.optJSONObject(index) ?: continue
+                val statement = row.optString("statement")
+                if (!isSameMemory(statement, line)) continue
+                if (statement.trim().trimEnd('。', '.', '！', '!') == line.trimEnd('。', '.', '！', '!')) continue
+                val aliases = row.optJSONArray("aliases") ?: org.json.JSONArray()
+                val known = (0 until aliases.length()).any { isSameMemory(aliases.optString(it), line) }
+                if (!known) {
+                    aliases.put(line)
+                    row.put("aliases", aliases)
+                    touched = true
+                }
+            }
+            if (touched) {
+                file.writeText(rows.toString(2))
+                changed = true
+            }
+        }
+        return changed
+    }
+
     fun migratePossessedEntities(): Boolean {
         var changed = false
         val records = listExperts()
