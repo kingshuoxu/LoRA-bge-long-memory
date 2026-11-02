@@ -48,6 +48,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -154,6 +156,7 @@ data class SkyMessage(
     val expert: String? = null,
     val reason: String? = null,
     val noticed: Boolean = false,
+    val sources: List<DocChip> = emptyList(),
 )
 
 data class SkyExpert(val name: String, val facts: List<String>, val label: String = "")
@@ -226,6 +229,14 @@ data class SkyState(
     val editorOpen: Boolean = false,
     val nebulaCanvas: Boolean = false,
     val e2e: Boolean = false,
+    val docs: List<DocRecord> = emptyList(),
+    val docJob: DocJob = DocJob(),
+    val docReview: List<DocPoint> = emptyList(),
+    val docReviewTitle: String = "",
+    val docReviewId: String = "",
+    val passage: DocChip? = null,
+    val deleteDocId: String = "",
+    val deleteDocTitle: String = "",
 )
 
 sealed class SkyEvent {
@@ -242,6 +253,17 @@ sealed class SkyEvent {
     data class DeleteExpert(val name: String) : SkyEvent()
     data object NewChat : SkyEvent()
     data object ImportExperts : SkyEvent()
+    data object ImportDocument : SkyEvent()
+    data object CancelDoc : SkyEvent()
+    data class ToggleDocPoint(val id: String) : SkyEvent()
+    data object TrainDocPoints : SkyEvent()
+    data object DismissDocReview : SkyEvent()
+    data class OpenDoc(val id: String) : SkyEvent()
+    data class DeleteDoc(val id: String) : SkyEvent()
+    data object ConfirmDeleteDoc : SkyEvent()
+    data object DismissDeleteDoc : SkyEvent()
+    data class OpenPassage(val chip: DocChip) : SkyEvent()
+    data object ClosePassage : SkyEvent()
     data object SelfCheck : SkyEvent()
     data class BackendMode(val mode: String) : SkyEvent()
     data object ExportDiagnostics : SkyEvent()
@@ -359,6 +381,15 @@ fun skyText(lang: String, key: String): String {
         "updateInstalling" to "请在系统界面确认安装。模型和对话会保留。",
         "pendingHead" to "待巩固",
         "rememberedHead" to "已记住",
+        "docs" to "文档",
+        "importDoc" to "导入文档",
+        "docEmpty" to "还没有导入的文档",
+        "docReview" to "选择要巩固的重点",
+        "docTrain" to "加入待巩固",
+        "docSkip" to "先不加入",
+        "docDeleteAsk" to "删除这份文档？索引、待巩固和对应的记忆会一起去掉。",
+        "docKeep" to "留下",
+        "docCancel" to "取消",
         "advanced" to "高级",
         "nebulaFallback" to "这台手机绘不出完整星云，已改用兼容画面。",
     )
@@ -456,6 +487,15 @@ fun skyText(lang: String, key: String): String {
         "updateInstalling" to "Confirm the install. Models and chats stay.",
         "pendingHead" to "Waiting to consolidate",
         "rememberedHead" to "Already remembered",
+        "docs" to "Documents",
+        "importDoc" to "Import a document",
+        "docEmpty" to "No documents yet",
+        "docReview" to "Choose key points",
+        "docTrain" to "Add to consolidate",
+        "docSkip" to "Not now",
+        "docDeleteAsk" to "Delete this document? Its index, pending items, and memory go with it.",
+        "docKeep" to "Keep",
+        "docCancel" to "Cancel",
         "advanced" to "Advanced",
         "nebulaFallback" to "This phone can't draw the full nebula, so a compatible view is on.",
     )
@@ -584,6 +624,9 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             }
             if (state.settingsOpen) Box(Modifier.fillMaxSize().zIndex(3f)) { SettingsPane(state, top, nav, onEvent) }
             if (state.drawerOpen) Box(Modifier.fillMaxSize().zIndex(3f)) { Drawer(state, top, onEvent) }
+            if (state.docReview.isNotEmpty()) Box(Modifier.fillMaxSize().zIndex(4f)) { DocReviewPane(state, top, nav, onEvent) }
+            if (state.passage != null) Box(Modifier.fillMaxSize().zIndex(5f)) { PassagePane(state, top, onEvent) }
+            if (state.deleteDocId.isNotBlank()) Box(Modifier.fillMaxSize().zIndex(6f)) { DeleteDocPane(state, onEvent) }
         }
     }
 }
@@ -1255,6 +1298,7 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                         if (live) state.waitSeconds else 0,
                         state.liveMotion,
                         onCopied = { copied = true },
+                        onSource = { onEvent(SkyEvent.OpenPassage(it)) },
                     )
                 }
             }
@@ -1299,6 +1343,9 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 }
             }
         }
+        if (docJobActive(state.docJob)) {
+            DocProgress(state, onEvent)
+        }
         if (state.toast.isNotBlank()) {
             Text(
                 state.toast,
@@ -1315,8 +1362,20 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
         }
         // 语义放在输入框外面。交给 OutlinedTextField 的 modifier 会被装饰层盖住，
         // 无障碍树里只剩一个没有 EditableText 的 View，真输入法和 UiAutomator 都打不进去。
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.fillMaxWidth().semantics {
+            Modifier
+                .padding(end = 8.dp, bottom = 8.dp)
+                .size(44.dp)
+                .background(Surface, CircleShape)
+                .semantics { contentDescription = "importDocument" }
+                .clickable { onEvent(SkyEvent.ImportDocument) },
+            contentAlignment = Alignment.Center,
+        ) {
+            SkyIcon("plus", Ink, Modifier.size(18.dp))
+        }
+        Box(
+            Modifier.weight(1f).semantics {
                 testTagsAsResourceId = true
                 testTag = "composer"
                 contentDescription = "composer"
@@ -1368,6 +1427,7 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 maxLines = 4,
             )
         }
+        }
         if (copied) {
             Text(
                 skyText(state.lang, "copied"),
@@ -1388,6 +1448,7 @@ private fun Bubble(
     waitSeconds: Int,
     liveMotion: Boolean,
     onCopied: () -> Unit = {},
+    onSource: (DocChip) -> Unit = {},
 ) {
     val user = message.role == "user"
     val typing = streaming && message.text.isBlank()
@@ -1445,7 +1506,22 @@ private fun Bubble(
                 )
             }
             if (!user && !streaming && !typing) {
-                if (message.noticed) {
+                if (message.sources.isNotEmpty()) {
+                    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        message.sources.forEach { chip ->
+                            Text(
+                                chip.label,
+                                color = Accent,
+                                fontSize = 12.sp,
+                                modifier = Modifier
+                                    .background(Accent.copy(alpha = 0.12f), Pill)
+                                    .semantics { contentDescription = "docSource" }
+                                    .clickable { onSource(chip) }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                } else if (message.noticed) {
                     Text(skyText(lang, "noticed"), color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 } else if (!message.expert.isNullOrBlank()) {
                     Text(
@@ -2067,6 +2143,67 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
         }
+        Text(
+            skyText(state.lang, "docs"),
+            color = Muted,
+            fontSize = 13.sp,
+            modifier = Modifier.semantics { contentDescription = "documents" }.padding(bottom = 8.dp),
+        )
+        Text(
+            skyText(state.lang, "importDoc"),
+            color = Ink,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .padding(bottom = 8.dp)
+                .background(Surface, Pill)
+                .semantics { contentDescription = "importDocument" }
+                .clickable { onEvent(SkyEvent.ImportDocument) }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+        if (docJobActive(state.docJob) || state.docJob.phase == "error") {
+            DocProgress(state, onEvent)
+            Spacer(Modifier.height(8.dp))
+        }
+        if (state.docs.isEmpty() && !docJobActive(state.docJob)) {
+            Text(
+                skyText(state.lang, "docEmpty"),
+                color = Muted,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+        state.docs.forEach { doc ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .background(Surface, RoundedCornerShape(14.dp))
+                    .clickable { onEvent(SkyEvent.OpenDoc(doc.id)) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(doc.title, color = Ink, fontSize = 16.sp)
+                    Text(
+                        docStat(state.lang, doc),
+                        color = Muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                Text(
+                    skyText(state.lang, "delete"),
+                    color = Muted,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .semantics { contentDescription = "deleteDoc" }
+                        .clickable { onEvent(SkyEvent.DeleteDoc(doc.id)) },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         if (state.rememberedFacts.isNotEmpty()) {
             Text(
                 skyText(state.lang, "rememberedHead"),
@@ -2121,6 +2258,193 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                             .clickable { onEvent(SkyEvent.DeleteExpert(expert.name)) },
                     )
                 }
+            }
+        }
+    }
+}
+
+private fun docJobActive(job: DocJob): Boolean {
+    return job.phase in setOf("parse", "split", "index", "points")
+}
+
+private fun docStat(lang: String, doc: DocRecord): String {
+    return if (lang == "en") {
+        "${doc.pages} pages · ${doc.chunks} passages · ${doc.consolidated} consolidated"
+    } else {
+        "${doc.pages} 页 · ${doc.chunks} 段 · 已巩固 ${doc.consolidated}"
+    }
+}
+
+@Composable
+private fun DocProgress(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    val job = state.docJob
+    val label = if (job.phase == "error") {
+        if (job.message == PDF_NO_TEXT) pdfNoText(state.lang) else job.message.ifBlank { docPhaseLabel(job.phase, state.lang) }
+    } else {
+        "${docPhaseLabel(job.phase, state.lang)} ${job.percent}%"
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Surface, RoundedCornerShape(14.dp))
+            .semantics { contentDescription = "docProgress" }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(job.title, color = Ink, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        if (docJobActive(job)) {
+            Box(
+                Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(Hair, Pill),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(job.percent.coerceIn(0, 100) / 100f)
+                        .height(3.dp)
+                        .background(Accent, Pill),
+                )
+            }
+            Text(
+                skyText(state.lang, "docCancel"),
+                color = Muted,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .semantics { contentDescription = "cancelDoc" }
+                    .clickable { onEvent(SkyEvent.CancelDoc) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun DocReviewPane(state: SkyState, top: Dp, nav: Dp, onEvent: (SkyEvent) -> Unit) {
+    val selected = state.docReview.count { it.selected }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(CanvasBg)
+            .padding(top = top + 12.dp, start = 16.dp, end = 16.dp, bottom = nav + 12.dp),
+    ) {
+        Text(skyText(state.lang, "docReview"), color = Ink, fontSize = 22.sp)
+        if (state.docReviewTitle.isNotBlank()) {
+            Text(state.docReviewTitle, color = Muted, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+        Text(trainEstimate(selected, state.lang), color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp, bottom = 12.dp))
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(state.docReview, key = { it.id }) { point ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Surface, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = point.selected,
+                        onCheckedChange = { onEvent(SkyEvent.ToggleDocPoint(point.id)) },
+                        colors = CheckboxDefaults.colors(checkedColor = Accent, uncheckedColor = Muted, checkmarkColor = CanvasBg),
+                    )
+                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(point.text, color = Ink, fontSize = 15.sp, lineHeight = 22.sp)
+                        if (point.chapter.isNotBlank()) {
+                            Text(point.chapter, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                        }
+                    }
+                }
+            }
+        }
+        Text(
+            skyText(state.lang, "docTrain"),
+            color = CanvasBg,
+            fontSize = 15.sp,
+            modifier = Modifier
+                .padding(top = 12.dp)
+                .fillMaxWidth()
+                .background(if (selected > 0) Accent else SurfaceHi, Pill)
+                .semantics { contentDescription = "trainDocPoints" }
+                .clickable(enabled = selected > 0) { onEvent(SkyEvent.TrainDocPoints) }
+                .padding(vertical = 12.dp),
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            skyText(state.lang, "docSkip"),
+            color = Muted,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .fillMaxWidth()
+                .clickable { onEvent(SkyEvent.DismissDocReview) }
+                .padding(vertical = 8.dp),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun PassagePane(state: SkyState, top: Dp, onEvent: (SkyEvent) -> Unit) {
+    val chip = state.passage ?: return
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(CanvasBg)
+            .padding(top = top + 16.dp, start = 20.dp, end = 20.dp, bottom = 20.dp),
+    ) {
+        Text(chip.label, color = Accent, fontSize = 14.sp)
+        Text(
+            chip.passage,
+            color = Ink,
+            fontSize = 17.sp,
+            lineHeight = 27.sp,
+            modifier = Modifier.padding(top = 16.dp).weight(1f).verticalScroll(rememberScrollState()),
+        )
+        Text(
+            skyText(state.lang, "close"),
+            color = Ink,
+            fontSize = 15.sp,
+            modifier = Modifier
+                .padding(top = 12.dp)
+                .clickable { onEvent(SkyEvent.ClosePassage) },
+        )
+    }
+}
+
+@Composable
+private fun DeleteDocPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
+    Box(Modifier.fillMaxSize().background(Color(0xCC070910)), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier
+                .padding(24.dp)
+                .fillMaxWidth()
+                .background(Surface, RoundedCornerShape(16.dp))
+                .padding(18.dp),
+        ) {
+            Text(state.deleteDocTitle, color = Ink, fontSize = 18.sp)
+            Text(
+                skyText(state.lang, "docDeleteAsk"),
+                color = Muted,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    skyText(state.lang, "docKeep"),
+                    color = Muted,
+                    fontSize = 15.sp,
+                    modifier = Modifier.clickable { onEvent(SkyEvent.DismissDeleteDoc) },
+                )
+                Text(
+                    skyText(state.lang, "delete"),
+                    color = Ink,
+                    fontSize = 15.sp,
+                    modifier = Modifier
+                        .semantics { contentDescription = "confirmDeleteDoc" }
+                        .clickable { onEvent(SkyEvent.ConfirmDeleteDoc) },
+                )
             }
         }
     }

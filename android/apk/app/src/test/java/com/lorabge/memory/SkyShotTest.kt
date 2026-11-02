@@ -317,6 +317,79 @@ class SkyShotTest {
     }
 
     @Test
+    fun importProgressZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    tab = SkyTab.Library,
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    pendingFacts = emptyList(),
+                    docJob = DocJob(title = "佩莫灯录", phase = "index", percent = 62),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun docReviewZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    lang = "zh",
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    docReviewTitle = "佩莫灯录",
+                    docReviewId = "d1",
+                    docReview = listOf(
+                        DocPoint("p0", "佩莫的旗舰产品是青禾灯", "第一章", true),
+                        DocPoint("p1", "青禾灯的产地是临川", "第二章", false),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun docAnswerZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    currentTitle = "佩莫灯录",
+                    messages = listOf(
+                        SkyMessage("user", "佩莫的旗舰产品是什么？"),
+                        SkyMessage(
+                            "assistant",
+                            "佩莫的旗舰产品是青禾灯。",
+                            "doc_d1",
+                            "document",
+                            sources = listOf(DocChip("《佩莫灯录》第3页 · 第一章", "佩莫的旗舰产品是青禾灯。灯芯可以更换。", "d1")),
+                        ),
+                    ),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
+    fun libraryDocsZh() {
+        paparazzi.snapshot {
+            SkyFrame(
+                sample().copy(
+                    tab = SkyTab.Library,
+                    statusTop = 36.dp,
+                    navBottom = 24.dp,
+                    pendingFacts = emptyList(),
+                    experts = emptyList(),
+                    docs = listOf(DocRecord("d1", "佩莫灯录", 12, 40, 5, 2)),
+                ),
+            ) {}
+        }
+    }
+
+    @Test
     fun libraryRememberedZh() {
         paparazzi.snapshot {
             SkyFrame(
@@ -441,7 +514,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.29",
+        versionName = "0.1.30",
     )
 
     private fun fourPending() = SkyState(

@@ -703,9 +703,16 @@ class TrainService : Service() {
 
         fun writeReviewedList(store: MemoryStore, facts: List<ReviewedFact>, force: Boolean) {
             if (facts.isEmpty()) return
+            val doc = docExpertFor(store, facts.map { it.statement })
+            val title = if (doc != null) docTitleForExpert(store, doc) else ""
+            val adjusted = if (doc != null && title.isNotBlank()) {
+                facts.map { it.copy(entity = title, attr = it.attr.ifBlank { "文档" }) }
+            } else {
+                facts
+            }
             val generated = "expert_" + System.currentTimeMillis().toString().takeLast(6)
-            val name = store.expertNameFor(facts, generated)
-            writeJob(store, name, store.factsForTrain(facts), force)
+            val name = doc ?: store.expertNameFor(adjusted, generated)
+            writeJob(store, name, store.factsForTrain(adjusted), force)
         }
 
         fun writeJob(

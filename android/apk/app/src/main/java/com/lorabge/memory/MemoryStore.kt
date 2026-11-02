@@ -106,10 +106,22 @@ class MemoryStore(val root: File) {
     }
 
     fun registerExpert(record: ExpertRecord, facts: List<ReviewedFact>) {
-        val dir = File(expertsDir, record.expert)
+        val merged = if (record.expert.startsWith("doc_")) {
+            val prior = readReviewedFacts(record.expert).filter { !it.statement.startsWith("已导入《") }
+            val map = LinkedHashMap<String, ReviewedFact>()
+            (prior + facts.filter { !it.statement.startsWith("已导入《") }.ifEmpty { facts }).forEach { fact ->
+                val key = normalizeFactKey(fact.statement)
+                if (key.isNotEmpty()) map[key] = fact
+            }
+            map.values.toList().ifEmpty { facts }
+        } else {
+            facts
+        }
+        val stored = record.copy(nFacts = merged.size)
+        val dir = File(expertsDir, stored.expert)
         dir.mkdirs()
-        File(dir, "fact_memory.json").writeText(factsToFactMemory(facts))
-        File(dir, "key_texts.json").writeText(JSONArray(keyTexts(facts)).toString())
+        File(dir, "fact_memory.json").writeText(factsToFactMemory(merged))
+        File(dir, "key_texts.json").writeText(JSONArray(keyTexts(merged)).toString())
         File(dir, "adapter_config.json").writeText(
             JSONObject()
                 .put("peft_type", "LORA")
@@ -121,9 +133,9 @@ class MemoryStore(val root: File) {
                 .put("weight_format", "gguf-lora")
                 .toString(),
         )
-        val all = listExperts().filter { it.expert != record.expert } + record
+        val all = listExperts().filter { it.expert != stored.expert } + stored
         writeRouter(all.sortedBy { it.batch })
-        if (record.expert == SELF_EXPERT) retireOtherSelfExperts()
+        if (stored.expert == SELF_EXPERT) retireOtherSelfExperts()
     }
 
     fun readReviewedFacts(expert: String): List<ReviewedFact> {
@@ -349,6 +361,7 @@ data class ChatMessage(
     val expert: String? = null,
     val reason: String? = null,
     val noticed: Boolean = false,
+    val sources: List<DocChip> = emptyList(),
 )
 
 data class Conversation(
@@ -365,6 +378,18 @@ data class Conversation(
             if (message.expert != null) obj.put("expert", message.expert)
             if (message.reason != null) obj.put("reason", message.reason)
             if (message.noticed) obj.put("noticed", true)
+            if (message.sources.isNotEmpty()) {
+                val sources = JSONArray()
+                message.sources.forEach { chip ->
+                    sources.put(
+                        JSONObject()
+                            .put("label", chip.label)
+                            .put("passage", chip.passage)
+                            .put("docId", chip.docId),
+                    )
+                }
+                obj.put("sources", sources)
+            }
             arr.put(obj)
         }
         return JSONObject()
@@ -395,6 +420,14 @@ data class Conversation(
             val list = ArrayList<ChatMessage>()
             for (i in 0 until messages.length()) {
                 val m = messages.getJSONObject(i)
+                val sources = ArrayList<DocChip>()
+                val rawSources = m.optJSONArray("sources")
+                if (rawSources != null) {
+                    for (s in 0 until rawSources.length()) {
+                        val chip = rawSources.optJSONObject(s) ?: continue
+                        sources.add(DocChip(chip.optString("label"), chip.optString("passage"), chip.optString("docId")))
+                    }
+                }
                 list.add(
                     ChatMessage(
                         role = m.getString("role"),
@@ -402,6 +435,7 @@ data class Conversation(
                         expert = m.optString("expert").ifBlank { null },
                         reason = m.optString("reason").ifBlank { null },
                         noticed = m.optBoolean("noticed"),
+                        sources = sources,
                     ),
                 )
             }

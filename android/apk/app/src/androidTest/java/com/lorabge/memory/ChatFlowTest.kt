@@ -233,6 +233,24 @@ class ChatFlowTest {
         shot("07-zore.png")
     }
 
+    @Test(timeout = 90_000)
+    fun documentAnswersFromImportedPdf() {
+        File(context.filesDir, "docs").deleteRecursively()
+        val store = MemoryStore(File(context.filesDir, "memory"))
+        val book = File(context.filesDir, "docs/inbox/佩莫灯录.pdf")
+        book.parentFile?.mkdirs()
+        book.writeBytes(textLayerPdf("第一章 灯\n佩莫的旗舰产品是青禾灯。"))
+        runDocumentImport(book, store)
+        val intent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        context.startActivity(intent)
+        waitDesc("composer", 25_000)
+        sendComposer("佩莫的旗舰产品是什么？")
+        waitText("青禾灯", 12_000)
+        waitText("佩莫灯录", 8_000)
+        shot("09-doc.png")
+    }
+
     private fun ask(question: String, expect: String) {
         sendComposer(question)
         waitText(expect, 8_000)

@@ -30,6 +30,20 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : ComponentActivity() {
     private val notifyPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val openDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        val activity = this
+        Thread {
+            try {
+                val file = copyOpenedDocument(activity, uri)
+                startForegroundService(
+                    Intent(activity, DocumentService::class.java).putExtra(DocumentService.EXTRA_PATH, file.absolutePath),
+                )
+            } catch (err: Throwable) {
+                writeDocJob(File(filesDir, "docs/job.json"), DocJob(phase = "error", message = err.message ?: "没有打开"))
+            }
+        }.start()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +87,18 @@ class MainActivity : ComponentActivity() {
                 startService(Intent(this, TrainService::class.java).setAction(TrainService.ACTION_CANCEL))
             }, onExport = {
                 shareDiagnostics(engine.diagnostics())
+            }, onImport = {
+                openDocument.launch(
+                    arrayOf(
+                        "application/pdf",
+                        "text/plain",
+                        "text/markdown",
+                        "text/x-markdown",
+                        "application/epub+zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "*/*",
+                    ),
+                )
             })
         }
     }
@@ -124,6 +150,7 @@ private fun PhoneApp(
     onCancel: () -> Unit,
     onExport: () -> Unit,
     onCleared: () -> Unit,
+    onImport: () -> Unit = {},
 ) {
     var lang by remember { mutableStateOf("zh") }
     var tab by remember { mutableStateOf(SkyTab.Chat) }
@@ -213,6 +240,41 @@ private fun PhoneApp(
     var answer by remember { mutableStateOf("") }
     var attr by remember { mutableStateOf("") }
     var editorOpen by remember { mutableStateOf(false) }
+    var docReview by remember { mutableStateOf<List<DocPoint>>(emptyList()) }
+    var docReviewId by remember { mutableStateOf("") }
+    var docReviewTitle by remember { mutableStateOf("") }
+    var passage by remember { mutableStateOf<DocChip?>(null) }
+    var deleteDocId by remember { mutableStateOf("") }
+    var deleteDocTitle by remember { mutableStateOf("") }
+    var docShown by remember { mutableStateOf("") }
+    var docPulse by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        val pendingJob = readDocJob(File(docsRoot(store), "job.json"))
+        if (pendingJob.phase in setOf("parse", "split", "index", "points") && pendingJob.source.isNotBlank()) {
+            context.startForegroundService(
+                Intent(context, DocumentService::class.java).putExtra(DocumentService.EXTRA_PATH, pendingJob.source),
+            )
+        }
+        while (true) {
+            delay(400)
+            docPulse++
+        }
+    }
+    val docRoot = docsRoot(store)
+    val docJob = remember(docPulse) { readDocJob(File(docRoot, "job.json")) }
+    val docRecords = remember(docPulse, tick) { listDocRecords(docRoot, store) }
+    LaunchedEffect(docJob.phase, docJob.docId) {
+        if (docJob.phase == "done" && docJob.docId.isNotBlank() && docShown != docJob.docId) {
+            val points = loadDocPoints(File(docRoot, "${docJob.docId}/points.json"))
+            if (points.isNotEmpty()) {
+                docReview = points
+                docReviewId = docJob.docId
+                docReviewTitle = docJob.title
+                tab = SkyTab.Library
+            }
+            docShown = docJob.docId
+        }
+    }
     var force by remember { mutableStateOf(true) }
     var waitSeconds by remember { mutableIntStateOf(0) }
     val statusFile = File(store.trainDir, "status.json")
@@ -253,7 +315,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.29"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.30"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -399,7 +461,7 @@ private fun PhoneApp(
         tab = tab,
         training = training,
         status = presentTrainStatus(lang, statusFile.takeIf { it.exists() }?.readText().orEmpty()),
-        messages = current?.messages?.map { SkyMessage(it.role, it.content, it.expert, it.reason, it.noticed) } ?: emptyList(),
+        messages = current?.messages?.map { SkyMessage(it.role, it.content, it.expert, it.reason, it.noticed, it.sources) } ?: emptyList(),
         streaming = streaming,
         generating = generating,
         draft = draft,
@@ -457,6 +519,14 @@ private fun PhoneApp(
             SkyBatchItem(line, mark)
         },
         editorOpen = editorOpen,
+        docs = docRecords,
+        docJob = docJob,
+        docReview = docReview,
+        docReviewTitle = docReviewTitle,
+        docReviewId = docReviewId,
+        passage = passage,
+        deleteDocId = deleteDocId,
+        deleteDocTitle = deleteDocTitle,
     )
     SkyFrame(state) { event ->
         when (event) {
@@ -581,34 +651,70 @@ private fun PhoneApp(
                 }
                 generating = true
                 streaming = ""
-                val grounded = EntityGround.reply(text, EntityGround.load(store), langNow)
+                val selfKind = EntityGround.selfAsk(text)
+                val groundedRaw = EntityGround.reply(text, EntityGround.load(store), langNow)
+                val grounded = groundedRaw?.takeUnless { it.answer.startsWith("已导入《") }
+                val useSelf = selfKind != null && selfKind != "assistant"
                 Thread {
                     val hit = try {
                         client.route(text)
                     } catch (ex: Throwable) {
                         RouteHit(null, false, ex.message ?: "route", 0.0)
                     }
-                    writeLastRoute(context, text, hit, grounded)
-                    val expert = grounded?.expert ?: if (hit.fired) hit.expert else null
-                    val reason = grounded?.reason ?: hit.reason
+                    val indexed = if (useSelf) emptyList() else loadIndexedDocs(docsRoot(store))
+                    val queryVector = if (indexed.any { it.vectors != null } && engine.binariesReady() && engine.bgeModel() != null) {
+                        runCatching { engine.embedTexts(listOf(text)).firstOrNull() }.getOrNull()
+                    } else {
+                        null
+                    }
+                    val searched = if (indexed.isEmpty()) null else searchDocuments(text, indexed, queryVector)
+                    val doc = searched?.ground
+                    val miss = if (searched != null && admitNoPassage(searched, docMinScore(queryVector != null), queryVector != null)) {
+                        val named = indexed.firstOrNull { it.title.length >= 2 && text.contains(it.title) }?.title
+                            ?: indexed.firstOrNull()?.title.orEmpty()
+                        if (named.isBlank()) {
+                            if (langNow == "en") "Nothing relevant turned up in the documents." else "文档里没有找到相关内容。"
+                        } else {
+                            documentMiss(named, langNow)
+                        }
+                    } else {
+                        null
+                    }
+                    val memory = if (useSelf) grounded else grounded?.takeIf { doc == null }
+                    writeLastRoute(context, text, hit, memory)
+                    val expert = when {
+                        useSelf -> grounded?.expert
+                        doc != null -> doc.expert
+                        else -> grounded?.expert ?: if (hit.fired) hit.expert else null
+                    }
+                    val reason = when {
+                        useSelf -> grounded?.reason ?: hit.reason
+                        doc != null -> "document"
+                        else -> grounded?.reason ?: hit.reason
+                    }
                     val trace = NebulaGraph.recall(store, langNow, expert, expert != null, hit.sim, text)
                     recallJson = trace
                     recallBanner = org.json.JSONObject(trace).optString("banner")
-                    val reply = if (grounded != null) {
-                        grounded.answer
-                    } else {
-                        try {
-                            client.answer(text, expert) { streaming = it }
-                        } catch (ex: ChatParked) {
-                            if (langNow == "en") "Training is using the memory. Ask again in a moment." else "正在巩固，请稍后再问。"
-                        } catch (ex: Throwable) {
-                            if (langNow == "en") "Couldn't generate" else "生成失败"
+                    val reply = when {
+                        useSelf && grounded != null -> grounded.answer
+                        doc != null -> doc.answer
+                        grounded != null -> grounded.answer
+                        miss != null -> miss
+                        else -> {
+                            try {
+                                client.answer(text, expert) { streaming = it }
+                            } catch (ex: ChatParked) {
+                                if (langNow == "en") "Training is using the memory. Ask again in a moment." else "正在巩固，请稍后再问。"
+                            } catch (ex: Throwable) {
+                                if (langNow == "en") "Couldn't generate" else "生成失败"
+                            }
                         }
                     }
+                    val sources = if (doc != null && !useSelf) doc.chips else emptyList()
                     val saved = store.loadConversation(conversation.id) ?: withUser.let {
                         conversation.copy(title = title, updated = now, messages = withUser)
                     }
-                    val messages = saved.messages + ChatMessage("assistant", reply, expert, reason, noticed = false)
+                    val messages = saved.messages + ChatMessage("assistant", reply, expert, reason, noticed = false, sources = sources)
                     store.saveConversation(saved.copy(updated = Instant.now().toString(), messages = messages))
                     generating = false
                     streaming = ""
@@ -744,6 +850,53 @@ private fun PhoneApp(
                     tick++
                 }.start()
             }
+            SkyEvent.ImportDocument -> onImport()
+            SkyEvent.CancelDoc -> {
+                File(docsRoot(store), "cancel").apply { parentFile?.mkdirs() }.writeText("1")
+                context.startService(Intent(context, DocumentService::class.java).setAction(DocumentService.ACTION_CANCEL))
+            }
+            is SkyEvent.ToggleDocPoint -> {
+                docReview = docReview.map { point ->
+                    if (point.id == event.id) point.copy(selected = !point.selected) else point
+                }
+                if (docReviewId.isNotBlank()) saveDocPoints(File(docsRoot(store), "$docReviewId/points.json"), docReview)
+            }
+            SkyEvent.TrainDocPoints -> {
+                if (docReviewId.isNotBlank()) queueDocPoints(store, docReviewId, docReview)
+                val count = docReview.count { it.selected }
+                toast = if (lang == "en") {
+                    "Added to consolidate. ${trainEstimate(count, lang)}"
+                } else {
+                    "已放入待巩固。${trainEstimate(count, lang)}"
+                }
+                docReview = emptyList()
+                tab = SkyTab.Consolidate
+                tick++
+            }
+            SkyEvent.DismissDocReview -> docReview = emptyList()
+            is SkyEvent.OpenDoc -> {
+                val record = docRecords.firstOrNull { it.id == event.id }
+                docReview = loadDocPoints(File(docsRoot(store), "${event.id}/points.json"))
+                docReviewId = event.id
+                docReviewTitle = record?.title.orEmpty()
+            }
+            is SkyEvent.DeleteDoc -> {
+                deleteDocId = event.id
+                deleteDocTitle = docRecords.firstOrNull { it.id == event.id }?.title.orEmpty()
+            }
+            SkyEvent.ConfirmDeleteDoc -> {
+                if (deleteDocId.isNotBlank()) deleteDocument(store, deleteDocId)
+                if (docReviewId == deleteDocId) docReview = emptyList()
+                deleteDocId = ""
+                deleteDocTitle = ""
+                tick++
+            }
+            SkyEvent.DismissDeleteDoc -> {
+                deleteDocId = ""
+                deleteDocTitle = ""
+            }
+            is SkyEvent.OpenPassage -> passage = event.chip
+            SkyEvent.ClosePassage -> passage = null
             SkyEvent.ImportExperts -> {
                 val langNow = lang
                 Thread {
@@ -868,7 +1021,7 @@ internal fun readLoss(log: File): List<Float> {
 }
 
 private fun skyExperts(store: MemoryStore, lang: String): List<SkyExpert> {
-    return store.listExperts().map { record ->
+    return store.listExperts().filter { !it.expert.startsWith("doc_") }.map { record ->
         val raw = NebulaGraph.readFacts(File(store.expertsDir, record.expert))
         SkyExpert(
             record.expert,
@@ -1145,7 +1298,9 @@ internal fun gatherNotedDrafts(store: MemoryStore, form: FactDraft?): List<FactD
         val full = store.loadConversation(conv.id) ?: continue
         for (message in full.messages) {
             if (message.role != "user") continue
-            noted.addAll(FactNotice.drafts(message.content))
+            val drafts = FactNotice.drafts(message.content)
+            if (drafts.isNotEmpty()) noted.addAll(drafts)
+            else docPointDraft(store, message.content)?.let { noted.add(it) }
         }
     }
     if (form != null && form.statement.isNotBlank() && noted.none { samePendingFact(it, form) }) noted.add(form)
@@ -1204,6 +1359,36 @@ internal fun teachRouteJson(query: String, entity: String, expert: String, reply
         .put("reason", "teach")
         .put("reply", reply)
         .toString()
+}
+
+internal fun copyOpenedDocument(context: android.content.Context, uri: android.net.Uri): File {
+    val inbox = File(context.filesDir, "docs/inbox").apply { mkdirs() }
+    val rawName = documentDisplayName(context, uri)
+    val safe = rawName.replace(Regex("[^\\p{L}\\p{N}._\\-]"), "_").take(80).ifBlank { "book.txt" }
+    val dest = File(inbox, "${System.currentTimeMillis()}-$safe")
+    context.contentResolver.openInputStream(uri).use { input ->
+        if (input == null) error("没有打开")
+        dest.outputStream().use { output ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                output.write(buf, 0, n)
+            }
+        }
+    }
+    return dest
+}
+
+private fun documentDisplayName(context: android.content.Context, uri: android.net.Uri): String {
+    val cursor = context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+    cursor?.use {
+        if (it.moveToFirst()) {
+            val name = it.getString(0)
+            if (!name.isNullOrBlank()) return name
+        }
+    }
+    return uri.lastPathSegment ?: "book.txt"
 }
 
 private fun writeTeachRoute(context: android.content.Context, query: String, entity: String, expert: String, reply: String) {
