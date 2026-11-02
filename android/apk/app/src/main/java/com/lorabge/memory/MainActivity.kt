@@ -314,6 +314,13 @@ private fun PhoneApp(
             val next = acceptTrainStatus(held, raw, exists) ?: continue
             held = next
             trainSnap = next
+            if (next.state == "done") {
+                val batch = TrainBatchStore.read(store)
+                if (batch != null && batch.phase == "running" && batch.index >= batch.groups.lastIndex) {
+                    TrainBatchStore.write(store, batch.copy(phase = "done"))
+                    tick++
+                }
+            }
         }
     }
     val conversations = remember(tick) { store.listConversations() }
