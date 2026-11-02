@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -170,13 +171,14 @@ class ChatFlowTest {
         shot("04-pending.png")
 
         clickTab("tab-consolidate")
+        dismissEmulatorOverlays(device)
         val train = device.wait(Until.findObject(By.desc("confirmTrain")), 8_000)
             ?: device.wait(Until.findObject(By.text("确认并训练")), 4_000)
             ?: error("missing 确认并训练\n" + visibleNodes())
         if (train.visibleBounds.isEmpty) {
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 12)
         }
-        (device.findObject(By.desc("confirmTrain")) ?: device.findObject(By.text("确认并训练")) ?: train).click()
+        clickFresh("confirmTrain", "确认并训练")
         var polls = 0
         val progress = waitUntil(25_000) {
             val node = device.findObject(By.desc("trainProgress"))
@@ -332,7 +334,48 @@ class ChatFlowTest {
     }
 
     private fun clickDesc(desc: String) {
-        waitDesc(desc, 8_000).click()
+        val deadline = System.currentTimeMillis() + 8_000
+        while (System.currentTimeMillis() < deadline) {
+            dismissEmulatorOverlays(device)
+            val node = device.findObject(By.desc(desc))
+            if (node == null) {
+                Thread.sleep(200)
+                continue
+            }
+            try {
+                node.click()
+                return
+            } catch (_: StaleObjectException) {
+                Thread.sleep(200)
+            }
+        }
+        error("missing $desc\n" + visibleNodes())
+    }
+
+    private fun clickFresh(desc: String, text: String) {
+        val deadline = System.currentTimeMillis() + 8_000
+        while (System.currentTimeMillis() < deadline) {
+            dismissEmulatorOverlays(device)
+            val node = device.findObject(By.desc(desc)) ?: device.findObject(By.text(text))
+            if (node == null) {
+                device.swipe(
+                    device.displayWidth / 2,
+                    device.displayHeight * 3 / 4,
+                    device.displayWidth / 2,
+                    device.displayHeight / 3,
+                    12,
+                )
+                Thread.sleep(250)
+                continue
+            }
+            try {
+                node.click()
+                return
+            } catch (_: StaleObjectException) {
+                Thread.sleep(200)
+            }
+        }
+        error("missing $text\n" + visibleNodes())
     }
 
     private fun clickText(text: String) {

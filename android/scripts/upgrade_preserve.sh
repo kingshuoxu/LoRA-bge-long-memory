@@ -312,7 +312,7 @@ pull_e2e() {
         rm -f "$tmp"
       fi
       case "$name" in
-        canvas-*.png) ;;
+        canvas-*.png|doc-*.png) ;;
         *.png)
           if [ "$good" = 1 ] && [ -n "${GRAB_SIZE:-}" ] && [ ! -s "$STAGE/shots/$name.host.png" ]; then
             ffmpeg -nostdin -y -v error -f x11grab -video_size "$GRAB_SIZE" -i "$GRAB_INPUT" -frames:v 1 "$STAGE/shots/$name.host.png" </dev/null \

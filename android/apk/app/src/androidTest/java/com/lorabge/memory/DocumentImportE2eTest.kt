@@ -3,6 +3,7 @@ package com.lorabge.memory
 import android.content.Intent
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
@@ -54,6 +55,7 @@ class DocumentImportE2eTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         context.startActivity(intent)
         waitDesc("composer", 25_000)
+        dismissEmulatorOverlays(device)
         clickDesc("importDocument")
         pickPdf()
         val imported = waitUntil(90_000) {
@@ -67,7 +69,10 @@ class DocumentImportE2eTest {
         if (device.hasObject(By.textContains("没有文字层"))) {
             error("pdf text layer was not read\n" + dump())
         }
-        if (!imported) error("import did not finish\n" + dump())
+        if (!imported) {
+            device.dumpWindowHierarchy(File(shots, "import.xml"))
+            error("import did not finish\n" + dump())
+        }
         if (device.hasObject(By.text("先不加入"))) {
             device.findObject(By.text("先不加入")).click()
         }
@@ -115,22 +120,34 @@ class DocumentImportE2eTest {
     }
 
     private fun pickPdf() {
-        val deadline = System.currentTimeMillis() + 25_000
+        var shotTaken = false
+        var clicked = false
+        val deadline = System.currentTimeMillis() + 40_000
         while (System.currentTimeMillis() < deadline) {
+            dismissEmulatorOverlays(device)
             val file = device.findObject(By.textContains("wugang_chrome"))
                 ?: device.findObject(By.textContains("wugang"))
+            val recent = device.findObject(By.text("Recent"))
+            if (clicked && file == null && recent == null && device.findObject(By.desc("composer")) != null) return
             if (file != null) {
-                shot("doc-01-picker.png")
-                file.click()
+                if (!shotTaken) {
+                    shot("doc-01-picker.png")
+                    shotTaken = true
+                }
+                try {
+                    file.click()
+                } catch (_: StaleObjectException) {
+                    continue
+                }
+                clicked = true
                 Thread.sleep(500)
                 val open = device.findObject(By.text("Open"))
                     ?: device.findObject(By.text("OPEN"))
                     ?: device.findObject(By.text("选择"))
                     ?: device.findObject(By.text("打开"))
                 open?.click()
-                val again = device.findObject(By.textContains("wugang_chrome"))
-                if (again != null && device.findObject(By.desc("composer")) == null && open == null) again.click()
-                return
+                Thread.sleep(400)
+                continue
             }
             val downloads = device.findObject(By.textContains("Downloads"))
                 ?: device.findObject(By.textContains("Download"))
@@ -174,7 +191,22 @@ class DocumentImportE2eTest {
     }
 
     private fun clickDesc(desc: String) {
-        waitDesc(desc, 8_000).click()
+        val deadline = System.currentTimeMillis() + 8_000
+        while (System.currentTimeMillis() < deadline) {
+            dismissEmulatorOverlays(device)
+            val node = device.findObject(By.desc(desc))
+            if (node == null) {
+                Thread.sleep(200)
+                continue
+            }
+            try {
+                node.click()
+                return
+            } catch (_: StaleObjectException) {
+                Thread.sleep(200)
+            }
+        }
+        error("missing $desc\n" + dump())
     }
 
     private fun waitText(text: String, timeoutMs: Long): UiObject2 {
@@ -197,9 +229,11 @@ class DocumentImportE2eTest {
     }
 
     private fun dump(): String {
-        return device.findObjects(By.pkg(context.packageName)).take(30).joinToString("\n") { node ->
+        val nodes = device.findObjects(By.clazz("android.widget.TextView"))
+        val shown = if (nodes.isEmpty()) device.findObjects(By.pkg(context.packageName)) else nodes
+        return shown.take(30).joinToString("\n") { node ->
             val desc = node.contentDescription?.take(40).orEmpty()
-            val text = node.text?.take(40).orEmpty()
+            val text = node.text?.take(60).orEmpty()
             "$desc | $text"
         }
     }
