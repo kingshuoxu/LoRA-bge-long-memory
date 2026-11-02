@@ -1,6 +1,7 @@
 package com.lorabge.memory
 
 import android.content.Intent
+import android.graphics.Rect
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.StaleObjectException
@@ -100,10 +101,23 @@ class DocumentImportE2eTest {
         val add = waitText("加入待巩固", 8_000)
         add.click()
         clickTab("tab-consolidate")
-        waitText("1873年", 15_000)
-        waitText("四十二米", 8_000)
-        waitText("霜降", 8_000)
-        waitText("阿哨", 8_000)
+        val queued = waitUntil(6_000) {
+            device.hasObject(By.desc("toast")) &&
+                device.hasObject(By.desc("trainAll")) &&
+                device.hasObject(By.textContains("1873年")) &&
+                device.hasObject(By.textContains("四十二米")) &&
+                device.hasObject(By.textContains("霜降")) &&
+                device.hasObject(By.textContains("阿哨"))
+        }
+        if (!queued) error("pending queue or toast did not show\n" + dump())
+        val toast = device.findObject(By.desc("toast"))
+        val trainAll = device.findObject(By.desc("trainAll"))
+        if (toast == null || trainAll == null) error("toast or train all missing\n" + dump())
+        val toastBox = Rect(toast.visibleBounds)
+        val buttonBox = Rect(trainAll.visibleBounds)
+        if (Rect.intersects(toastBox, buttonBox) || toastBox.bottom > buttonBox.top) {
+            error("toast covers train all toast=$toastBox button=$buttonBox\n" + dump())
+        }
         val towerWhole = device.findObjects(By.clazz("android.widget.TextView")).any { node ->
             val text = node.text.orEmpty()
             text.contains("1873年") && text.contains("四十二米")
@@ -119,10 +133,16 @@ class DocumentImportE2eTest {
         clickTab("tab-consolidate")
         clickDesc("trainAll")
         val trained = waitUntil(90_000) {
-            device.hasObject(By.textContains("已登记")) && !device.hasObject(By.textContains("排队中"))
+            device.hasObject(By.textContains("已登记")) &&
+                !device.hasObject(By.textContains("排队中")) &&
+                !device.hasObject(By.desc("trainAll")) &&
+                !device.hasObject(By.desc("pendingQueue")) &&
+                !device.hasObject(By.textContains("1873年")) &&
+                !device.hasObject(By.textContains("星砂盐")) &&
+                !device.hasObject(By.text("全部训练"))
         }
         shot("doc-11-trained.png")
-        if (!trained) error("consolidate did not finish\n" + dump())
+        if (!trained) error("consolidate still lists pending facts\n" + dump())
         clickTab("tab-library")
         waitText("雾港灯塔志", 8_000)
         clickDesc("deleteDoc")
@@ -131,6 +151,13 @@ class DocumentImportE2eTest {
         val gone = waitUntil(12_000) { !device.hasObject(By.text("雾港灯塔志")) }
         shot("doc-10-deleted.png")
         if (!gone) error("document stayed in the library\n" + dump())
+        clickTab("tab-consolidate")
+        val cleared = waitUntil(8_000) {
+            !device.hasObject(By.desc("trainAll")) &&
+                !device.hasObject(By.desc("pendingQueue")) &&
+                !device.hasObject(By.textContains("1873年"))
+        }
+        if (!cleared) error("deleted document stayed on consolidate\n" + dump())
         clickTab("tab-chat")
         clickDesc("newChat")
         ask("白鹭塔建于哪一年？", "1873", null, "doc-12-memory.png")

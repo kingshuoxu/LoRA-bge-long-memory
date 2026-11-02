@@ -173,6 +173,68 @@ class DocumentBookTest {
     }
 
     @Test
+    fun trainedAndDeletedRowsLeaveTheConsolidateQueue() {
+        val trained = openConsolidateRows(
+            listOf("柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年。", "雾港的特产是一种蓝色海盐，名叫星砂盐。"),
+            listOf(
+                "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年。" to "done",
+                "雾港的特产是一种蓝色海盐，名叫星砂盐。" to "done",
+            ),
+        )
+        assertTrue(trained.isEmpty())
+        val deleted = openConsolidateRows(
+            emptyList(),
+            listOf("柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年。" to "queued"),
+        )
+        assertTrue(deleted.isEmpty())
+        val stillWaiting = openConsolidateRows(
+            listOf("雾港的特产是一种蓝色海盐，名叫星砂盐。"),
+            listOf("柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年。" to "done"),
+        )
+        assertEquals(listOf("雾港的特产是一种蓝色海盐，名叫星砂盐。" to ""), stillWaiting)
+    }
+
+    @Test
+    fun trainedDocFactLeavesPendingOnTheSameListAsTheLibrary() {
+        val root = File.createTempFile("docs-trained", "").apply { delete(); mkdirs() }
+        val store = MemoryStore(File(root, "memory"))
+        store.ensure()
+        val book = File(root, "雾港.pdf")
+        book.writeBytes(textLayerPdf("第一章 塔\n白鹭塔建于1873年。"))
+        runDocumentImport(book, store)
+        val record = listDocRecords(docsRoot(store), store).single()
+        val points = loadDocPoints(File(docsRoot(store), "${record.id}/points.json"))
+        val chosen = points.map { point ->
+            point.copy(selected = point.text.contains("1873") || point.text.contains("白鹭塔"))
+        }.filter { it.selected }
+        assertTrue(chosen.isNotEmpty())
+        queueDocPoints(store, record.id, chosen)
+        val before = gatherPendingDrafts(store, consolidatedStatements(store), null)
+        assertTrue(before.any { it.statement.contains("1873") || it.statement.contains("白鹭塔") })
+        val expert = store.listExperts().first { it.expert.startsWith("doc_") }
+        store.registerExpert(
+            expert,
+            before.map { draft ->
+                ReviewedFact(
+                    draft.entity.ifBlank { "白鹭塔" },
+                    draft.statement,
+                    draft.value.ifBlank { draft.statement },
+                    if (draft.question.isBlank()) emptyList() else listOf(draft.question to draft.answer),
+                    emptyList(),
+                    attr = draft.attr,
+                )
+            },
+        )
+        val stored = consolidatedStatements(store)
+        assertTrue(stored.any { it.contains("1873") || it.contains("白鹭塔") })
+        val after = gatherPendingDrafts(store, stored, null)
+        assertTrue(after.none { it.statement.contains("1873") || it.statement.contains("白鹭塔") })
+        deleteDocument(store, record.id)
+        val gone = gatherPendingDrafts(store, consolidatedStatements(store), null)
+        assertTrue(gone.none { it.statement.contains("1873") || it.statement.contains("白鹭塔") })
+    }
+
+    @Test
     fun consolidatedDocFactSurvivesDeletingTheFile() {
         val root = File.createTempFile("docs-keep", "").apply { delete(); mkdirs() }
         val store = MemoryStore(File(root, "memory"))

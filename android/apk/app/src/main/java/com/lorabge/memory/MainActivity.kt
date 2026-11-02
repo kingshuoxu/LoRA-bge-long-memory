@@ -159,7 +159,7 @@ private fun PhoneApp(
     var toast by remember { mutableStateOf("") }
     LaunchedEffect(toast) {
         if (toast.isBlank()) return@LaunchedEffect
-        delay(3500)
+        delay(8000)
         toast = ""
     }
     var cpuNoticeShown by remember { mutableStateOf(false) }
@@ -331,7 +331,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.32"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.33"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -340,7 +340,7 @@ private fun PhoneApp(
     }
     val freshExperts = remember(tick, sessionGate) { NebulaGraph.sessionNew(store) }
     val nebulaJson = remember(tick, lang, freshExperts) { NebulaGraph.build(store, lang, freshExperts) }
-    val storedLines = experts.flatMap { it.facts }
+    val storedLines = remember(tick) { consolidatedStatements(store) }
     val notedForm = if (statement.isBlank()) null else FactDraft(entity, attr, statement, value, question, answer)
     val waiting = remember(tick, statement, entity, value, question, answer, attr, experts) {
         gatherPendingDrafts(store, storedLines, notedForm)
@@ -458,7 +458,7 @@ private fun PhoneApp(
             return@LaunchedEffect
         }
         if (trainSnap.state != "done" || statement.isBlank()) return@LaunchedEffect
-        val stored = experts.flatMap { it.facts }
+        val stored = consolidatedStatements(store)
         if (pendingFactLines(listOf(statement), stored).isNotEmpty()) return@LaunchedEffect
         val next = waiting.firstOrNull { pendingFactLines(listOf(it.statement), stored).isNotEmpty() } ?: return@LaunchedEffect
         entity = next.entity
@@ -1034,6 +1034,15 @@ internal fun readLoss(log: File): List<Float> {
     return log.readLines().mapNotNull { parseStepLine(it)?.third }
 }
 
+/** Facts already written onto an expert, including a document expert. Pending lists use this, not the visible expert cards. */
+internal fun consolidatedStatements(store: MemoryStore): List<String> {
+    return store.listExperts().flatMap { record ->
+        store.readReviewedFacts(record.expert).map { it.statement }.filter { statement ->
+            statement.isNotBlank() && !statement.startsWith("已导入《")
+        }
+    }
+}
+
 private fun skyExperts(store: MemoryStore, lang: String): List<SkyExpert> {
     return store.listExperts().filter { !it.expert.startsWith("doc_") }.map { record ->
         val raw = NebulaGraph.readFacts(File(store.expertsDir, record.expert))
@@ -1269,12 +1278,19 @@ internal fun mergedCaption(lang: String, count: Int): String {
 
 /** The queue on screen. Raw rows from an older batch still collapse here. */
 /**
- * A finished batch must not hide facts that are still waiting.
- * Rows already marked done stay out of the open list.
+ * Pending drafts are the list. A finished row stays out, and a batch row whose
+ * statement is no longer pending (trained, or the document was deleted) stays out too.
  */
 internal fun openConsolidateRows(pending: List<String>, batch: List<Pair<String, String>>): List<Pair<String, String>> {
-    val active = batch.filter { it.second != "done" }
-    val covered = active.map { it.first.trim() }.toSet()
+    val pendingKeys = pending.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    val done = batch.map { it.first.trim() }.filter { line ->
+        line.isNotEmpty() && batch.any { it.first.trim() == line && it.second == "done" }
+    }.toSet()
+    val active = batch.filter { row ->
+        val line = row.first.trim()
+        row.second != "done" && line.isNotEmpty() && line in pendingKeys
+    }
+    val covered = active.map { it.first.trim() }.toSet() + done
     val extra = pending.map { it.trim() }.filter { it.isNotEmpty() && it !in covered }.map { it to "" }
     return active + extra
 }

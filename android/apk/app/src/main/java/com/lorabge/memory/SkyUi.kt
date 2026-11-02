@@ -532,7 +532,7 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         val immersive = state.tab == SkyTab.Nebula && !state.settingsOpen
         LaunchedEffect(state.toast) {
             if (state.toast.isBlank()) return@LaunchedEffect
-            kotlinx.coroutines.delay(4200)
+            kotlinx.coroutines.delay(8000)
             onEvent(SkyEvent.DismissToast)
         }
         Box(Modifier.fillMaxSize().background(if (immersive) Night else CanvasBg)) {
@@ -608,6 +608,7 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 UpdateCard(state, onEvent, Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = nav + 76.dp))
             }
             if (state.toast.isNotBlank() && !state.settingsOpen && state.updatePhase.isBlank() && state.tab != SkyTab.Chat) {
+                val actionLift = if (state.tab == SkyTab.Consolidate) 88.dp else 0.dp
                 Text(
                     state.toast,
                     color = Muted,
@@ -615,10 +616,11 @@ fun SkyFrame(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     lineHeight = 18.sp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(start = 16.dp, end = 16.dp, bottom = nav + 72.dp)
+                        .padding(start = 16.dp, end = 16.dp, bottom = nav + 72.dp + actionLift)
                         .fillMaxWidth()
                         .background(Surface, CardShape)
                         .clickable { onEvent(SkyEvent.DismissToast) }
+                        .semantics { contentDescription = "toast" }
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
@@ -1796,7 +1798,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         }
         if (showTrainAll) {
             Text(
-                "${skyText(state.lang, "trainAll")} (${shownPending.size})",
+                "${skyText(state.lang, "trainAll")} (${trainable})",
                 color = CanvasBg,
                 fontSize = 15.sp,
                 modifier = Modifier
