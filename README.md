@@ -270,12 +270,17 @@ CMMLU 11582 条题干四种都是激活 0（其中 10 条题干里出现了在�
 
 默认留在不改的双编码器闸上。A 把职务从 30/50 补到 50/50，但口语掉到 37/50，城市事实开始接「老板叫什么名字」，未见关系从 38/40 降到 34/40，留出问法的总数仍是 598/656。B 在调参集上能用的切分捞不回「创始人」。A+B 的判定和 A 相同，只多了窄带里的耗时。复现：先 `python scripts/expand_questions.py --sidecar /tmp/para_raw.jsonl`，再 `python scripts/eval_fact_variants.py`。`fact_gate.json` 里 `use_paraphrases` 和 `use_reranker` 都是 false，改写问句不写入 `fact_memory.json`。
 
+## 安卓端
+
+小米 15（arm64）的安装包、桌面已经核对的转换和路由、以及还要在真机上做的训练,写在 `docs/android_milestone_1.md`。安装步骤在 `android/README.md`。应用和桌面端共用的专家目录字段在 `docs/client_store.md`。
+
 ## 仓库结构
 
 - `scripts/` — 训练 / 评测 / 路由 / 容量 / 基准 / 自动门 / 校准，各脚本 docstring 含用法；`scripts/debug/` 排障工具
 - `docs/experiment-results.md` — 12 节实验主文档；`docs/experiment-design.md` — 设计文档；三张图（capacity_curve / router_scale / surprise_calibration)
 - `data/`、`data_capacity/`、`data_guard/`、`data_heldout/` — 虚构事实、真实问法守卫评测集，以及留出属性的开放域事实（`gen_data.py --open-domain`）
 - `experts/` — 0.5B 五专家 LoRA 权重（git LFS)
+- `android/` — 手机路由、GGUF 转换、QVAC 训练脚本和「长期记忆」APK;说明见 `docs/android_milestone_1.md`
 - `papers/` — 前沿论文清单与 PDF（本地调研资料，gitignored 不入库）
 - 1.5B 专家（`experts_15b/`)、自动门产出（`data_auto*/`)、CMMLU(`data_bench/`）不入库，用上面的命令复现
 
