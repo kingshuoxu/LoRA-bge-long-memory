@@ -674,8 +674,7 @@ private fun PhoneApp(
                     val searched = if (indexed.isEmpty()) null else searchDocuments(text, indexed, queryVector)
                     val doc = searched?.ground
                     val miss = if (searched != null && admitNoPassage(searched, docMinScore(queryVector != null), queryVector != null)) {
-                        val named = indexed.firstOrNull { it.title.length >= 2 && text.contains(it.title) }?.title
-                            ?: indexed.firstOrNull()?.title.orEmpty()
+                        val named = missedDocumentTitle(text, indexed)
                         if (named.isBlank()) {
                             if (langNow == "en") "Nothing relevant turned up in the documents." else "文档里没有找到相关内容。"
                         } else {

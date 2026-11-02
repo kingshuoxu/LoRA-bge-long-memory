@@ -36,6 +36,7 @@ class DocumentImportE2eTest {
         File(setup, "complete").writeText("ok")
         File(setup, "e2e").writeText("1")
         File(setup, "e2e-draft.txt").delete()
+        File(context.filesDir, "docs").deleteRecursively()
         shots.mkdirs()
         listOf(
             "doc-01-picker.png", "doc-02-imported.png", "doc-03-year.png", "doc-04-salt.png",
@@ -83,6 +84,7 @@ class DocumentImportE2eTest {
         ask("星砂盐什么时候晾晒？", "霜降", "第6页", "doc-04-salt.png")
         ask("柯小满的海鸥叫什么？", "阿哨", "第9页", "doc-05-gull.png")
         ask("雾港的市长是谁？", "没有找到", null, "doc-06-mayor.png")
+        waitText("雾港灯塔志", 8_000)
         clickTab("tab-library")
         val book = waitText("雾港灯塔志", 15_000)
         book.click()
@@ -99,10 +101,10 @@ class DocumentImportE2eTest {
         clickDesc("deleteDoc")
         waitText("删除这份文档", 8_000)
         clickDesc("confirmDeleteDoc")
+        File(shots, "e2e-report.md").writeText(report.toString())
         val gone = waitUntil(12_000) { !device.hasObject(By.text("雾港灯塔志")) }
         shot("doc-10-deleted.png")
         if (!gone) error("document stayed in the library\n" + dump())
-        File(shots, "e2e-report.md").writeText(report.toString())
     }
 
     private fun importReady(): Boolean {

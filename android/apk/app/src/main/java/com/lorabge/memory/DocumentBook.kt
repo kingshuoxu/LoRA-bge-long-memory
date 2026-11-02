@@ -677,6 +677,16 @@ fun documentMiss(title: String, lang: String): String {
     return if (lang == "en") "Nothing relevant turned up in $title." else "《$title》里没有找到相关内容。"
 }
 
+/** Prefer the book the question names, then the book that actually contains its terms. */
+fun missedDocumentTitle(query: String, docs: List<IndexedDoc>): String {
+    val named = docs.firstOrNull { it.title.length >= 2 && query.contains(it.title) }?.title
+    if (!named.isNullOrBlank()) return named
+    val runs = salientRuns(query)
+    return docs.maxByOrNull { doc ->
+        runs.count { run -> doc.chunks.any { chunk -> runCovered(run, chunk.text) } }
+    }?.title.orEmpty()
+}
+
 fun searchDocuments(query: String, docs: List<IndexedDoc>, queryVector: FloatArray?): DocSearch {
     if (docs.isEmpty() || query.isBlank()) return DocSearch(null, 0.0, false)
     val titleHit = docs.any { it.title.length >= 2 && query.contains(it.title) }

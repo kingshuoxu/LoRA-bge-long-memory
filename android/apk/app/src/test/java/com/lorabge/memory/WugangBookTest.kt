@@ -1,6 +1,7 @@
 package com.lorabge.memory
 
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -63,6 +64,9 @@ class WugangBookTest {
         val tower = searchDocuments("白鹭塔建于哪一年？", listOf(doc), null).ground
         assertTrue("answer=${tower?.answer} chip=${tower?.chips?.firstOrNull()?.label}", tower != null && tower.answer.contains("1873"))
         assertTrue(tower!!.chips.first().label.contains("第3页"))
+        val other = IndexedDoc("p", "佩莫灯录", "doc_p", listOf(DocChunk("c", "佩莫的旗舰产品是青禾灯。", "第一章", 1)), null)
+        val fog = IndexedDoc("w", "雾港灯塔志", "doc_w", listOf(DocChunk("c", "柯岚在雾港守护白鹭塔。", "第一章", 3)), null)
+        assertEquals("雾港灯塔志", missedDocumentTitle("雾港的市长是谁？", listOf(other, fog)))
     }
 
     @Test
