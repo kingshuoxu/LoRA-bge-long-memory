@@ -120,6 +120,15 @@ class DocumentBookTest {
     }
 
     @Test
+    fun oneBookTrainsAsASingleGroup() {
+        val tower = ReviewedFact("白鹭塔", "白鹭塔建于1873年，塔高四十二米。", "1873", emptyList(), emptyList(), attr = "第一章")
+        val salt = ReviewedFact("星砂盐", "特产名叫星砂盐，每年霜降晾晒。", "星砂盐", emptyList(), emptyList(), attr = "第二章")
+        val groups = immediateTrainGroups(true, listOf(tower, salt))
+        assertEquals(1, groups.size)
+        assertEquals(2, groups.single().size)
+    }
+
+    @Test
     fun batchKeepsTheWholeDocumentSentence() {
         val line = "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。"
         val kept = keepWholeStatement(line)

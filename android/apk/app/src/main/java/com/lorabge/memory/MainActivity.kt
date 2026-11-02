@@ -425,7 +425,6 @@ private fun PhoneApp(
         val batch = TrainBatchStore.read(store)
         if (batch != null && sealedTrain(store.trainDir, trainSnap) && migrateFinishedTrain(store)) {
             tick++
-            return@LaunchedEffect
         }
         if (batch != null && batch.phase == "running" && trainSnap.state == "error" && !sealedTrain(store.trainDir, trainSnap)) {
             TrainBatchStore.write(store, batch.copy(phase = "error"))
@@ -1073,8 +1072,13 @@ private fun armForeground(store: MemoryStore) {
     )
 }
 
+internal fun immediateTrainGroups(oneDocument: Boolean, facts: List<ReviewedFact>): List<List<ReviewedFact>> {
+    if (facts.isEmpty()) return emptyList()
+    return if (oneDocument) listOf(facts) else planTrainGroups(facts)
+}
+
 private fun beginImmediate(store: MemoryStore, facts: List<ReviewedFact>) {
-    val groups = planTrainGroups(facts)
+    val groups = immediateTrainGroups(docExpertFor(store, facts.map { it.statement }) != null, facts)
     if (groups.isEmpty()) return
     TrainBatchStore.write(store, SavedBatch(groups.map { group -> group.map { it.statement } }, 0, "running"))
     TrainService.writeReviewedList(store, groups[0], force = true)
