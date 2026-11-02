@@ -304,6 +304,7 @@ internal fun presentTrainStatus(lang: String, raw: String): String {
         obj.optString("state") == "canceled" ||
         detail.isBlank() ||
         detail.contains("expert_") ||
+        detail.contains("doc_") ||
         detail.contains("Exception") ||
         detail.startsWith("[")
     ) {
