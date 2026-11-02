@@ -172,12 +172,6 @@ class ChatFlowTest {
 
         clickTab("tab-consolidate")
         dismissEmulatorOverlays(device)
-        val train = device.wait(Until.findObject(By.desc("confirmTrain")), 8_000)
-            ?: device.wait(Until.findObject(By.text("确认并训练")), 4_000)
-            ?: error("missing 确认并训练\n" + visibleNodes())
-        if (train.visibleBounds.isEmpty) {
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 12)
-        }
         clickFresh("confirmTrain", "确认并训练")
         var polls = 0
         val progress = waitUntil(25_000) {
@@ -385,7 +379,7 @@ class ChatFlowTest {
     /** 底栏在键盘打开时会收起。「巩固」也不能用包含匹配，否则会点到「待巩固」。 */
     private fun clickTab(desc: String) {
         if (imeTopOrNull() != null) device.pressBack()
-        waitDesc(desc, 8_000).click()
+        clickDesc(desc)
     }
 
     private fun scrollToText(text: String): UiObject2 {

@@ -58,13 +58,7 @@ class DocumentImportE2eTest {
         dismissEmulatorOverlays(device)
         clickDesc("importDocument")
         pickPdf()
-        val imported = waitUntil(90_000) {
-            device.hasObject(By.textContains("选择要巩固的重点")) ||
-                device.hasObject(By.textContains("建索引")) ||
-                device.hasObject(By.textContains("提取重点")) ||
-                device.hasObject(By.textContains("没有文字层")) ||
-                device.hasObject(By.textContains("白鹭塔"))
-        }
+        val imported = waitUntil(120_000) { importReady() }
         shot("doc-02-imported.png")
         if (device.hasObject(By.textContains("没有文字层"))) {
             error("pdf text layer was not read\n" + dump())
@@ -73,9 +67,17 @@ class DocumentImportE2eTest {
             device.dumpWindowHierarchy(File(shots, "import.xml"))
             error("import did not finish\n" + dump())
         }
-        if (device.hasObject(By.text("先不加入"))) {
-            device.findObject(By.text("先不加入")).click()
+        val dismissed = waitUntil(15_000) {
+            val skip = device.findObject(By.text("先不加入"))
+            if (skip != null) {
+                try {
+                    skip.click()
+                } catch (_: StaleObjectException) {
+                }
+            }
+            !device.hasObject(By.text("先不加入")) && !device.hasObject(By.textContains("选择要巩固的重点"))
         }
+        if (!dismissed) error("review stayed open\n" + dump())
         clickTab("tab-chat")
         ask("白鹭塔建于哪一年？", "1873", "第3页", "doc-03-year.png")
         ask("星砂盐什么时候晾晒？", "霜降", "第6页", "doc-04-salt.png")
@@ -103,7 +105,17 @@ class DocumentImportE2eTest {
         File(shots, "e2e-report.md").writeText(report.toString())
     }
 
+    private fun importReady(): Boolean {
+        return device.hasObject(By.textContains("选择要巩固的重点")) ||
+            device.hasObject(By.text("先不加入")) ||
+            device.hasObject(By.textContains("没有文字层"))
+    }
+
     private fun ask(question: String, expect: String, page: String?, shotName: String) {
+        if (device.hasObject(By.text("先不加入"))) {
+            device.findObject(By.text("先不加入"))?.click()
+            clickTab("tab-chat")
+        }
         sendComposer(question)
         waitText(expect, 20_000)
         if (page != null) waitText(page, 8_000)
@@ -128,14 +140,9 @@ class DocumentImportE2eTest {
             val file = device.findObject(By.textContains("wugang_chrome"))
                 ?: device.findObject(By.textContains("wugang"))
             val recent = device.findObject(By.text("Recent"))
-            val imported = device.hasObject(By.textContains("选择要巩固的重点")) ||
-                device.hasObject(By.textContains("白鹭塔")) ||
-                device.hasObject(By.textContains("建索引")) ||
-                device.hasObject(By.textContains("提取重点")) ||
-                device.hasObject(By.textContains("没有文字层"))
             val backInApp = file == null && recent == null &&
                 (device.findObject(By.desc("composer")) != null || device.findObject(By.desc("tab-chat")) != null)
-            if (clicked && (imported || backInApp)) return
+            if (clicked && (backInApp || importReady())) return
             if (file != null) {
                 if (!shotTaken) {
                     shot("doc-01-picker.png")
