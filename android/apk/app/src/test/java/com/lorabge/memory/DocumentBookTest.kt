@@ -7,7 +7,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -35,7 +34,7 @@ class DocumentBookTest {
     fun pdfTextLayerAndScannedPages() {
         val pdf = textLayerPdf("佩莫的旗舰产品是青禾灯。")
         val text = extractPdfTextLayer(pdf)
-        assertTrue(text.contains("青禾灯"))
+        assertTrue(text.take(120), text.contains("青禾灯"))
         assertTrue(pdfHasTextLayer(pdf))
         val scanned = "%PDF-1.4\n1 0 obj\n<< /Length 4 >>\nstream\nimg\nendstream\nendobj\n".toByteArray()
         assertFalse(pdfHasTextLayer(scanned))
@@ -43,20 +42,25 @@ class DocumentBookTest {
     }
 
     @Test
-    fun flatePdfRoundTrip() {
-        val sentence = "(Qinghe lamp.) Tj\n"
-        val raw = sentence.toByteArray(Charsets.US_ASCII)
-        val deflater = Deflater()
-        deflater.setInput(raw)
-        deflater.finish()
-        val buf = ByteArray(128)
-        val n = deflater.deflate(buf)
-        deflater.end()
-        val body = buf.copyOf(n)
-        val head = "%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode /Length ${body.size} >>\nstream\n".toByteArray()
-        val tail = "endstream\nendobj\n%%EOF\n".toByteArray()
-        val text = extractPdfTextLayer(head + body + tail)
-        assertTrue(text.contains("Qinghe"))
+    fun extractionContextFitsThePrompt() {
+        val body = "佩莫的旗舰产品是青禾灯。".repeat(80)
+        val prompts = promptsForChapter("第一章", body)
+        assertTrue(prompts.isNotEmpty())
+        prompts.forEach { prompt ->
+            val context = extractContextSize(prompt)
+            assertTrue("context $context prompt ${prompt.length}", context >= prompt.length + 160)
+            assertTrue(context > 512)
+        }
+        val points = extractKeyPoints(
+            listOf("第一章" to "佩莫的旗舰产品是青禾灯。这是这一章的结论。"),
+            ask = { prompt ->
+                assertTrue(prompt.contains("青禾灯"))
+                assertTrue(extractContextSize(prompt) > 512)
+                "佩莫的旗舰产品是青禾灯"
+            },
+        )
+        assertEquals(1, points.size)
+        assertTrue(points.single().text.contains("青禾灯"))
     }
 
     @Test

@@ -1,0 +1,200 @@
+package com.lorabge.memory
+
+import android.content.Intent
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
+import androidx.test.uiautomator.Until
+import org.junit.Before
+import org.junit.Test
+import java.io.File
+
+/**
+ * Imports the Chrome print of 《雾港灯塔志》 through the system document picker,
+ * asks three questions that are in the book and one that is not, then reviews,
+ * queues, and deletes the document.
+ */
+class DocumentImportE2eTest {
+    private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val shots = File(context.filesDir, "e2e")
+    private val report = StringBuilder()
+
+    @Before
+    fun seed() {
+        val models = File(context.filesDir, "models")
+        File(models, "base.gguf").apply { parentFile?.mkdirs(); writeBytes(byteArrayOf(1)) }
+        File(models, "bge.gguf").writeBytes(byteArrayOf(1))
+        val weights = File(models, "Qwen2.5-0.5B-Instruct")
+        weights.mkdirs()
+        File(weights, "model.safetensors").writeBytes(byteArrayOf(1))
+        File(weights, "config.json").writeText("{}")
+        val setup = File(context.filesDir, "setup")
+        setup.mkdirs()
+        File(setup, "complete").writeText("ok")
+        File(setup, "e2e").writeText("1")
+        File(setup, "e2e-draft.txt").delete()
+        shots.mkdirs()
+        listOf(
+            "doc-01-picker.png", "doc-02-imported.png", "doc-03-year.png", "doc-04-salt.png",
+            "doc-05-gull.png", "doc-06-mayor.png", "doc-07-review.png", "doc-08-pending.png",
+            "doc-09-library.png", "doc-10-deleted.png", "e2e-report.md", "picker.xml",
+        ).forEach { File(shots, it).delete() }
+        device.executeShellCommand("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
+    }
+
+    @Test(timeout = 240_000)
+    fun importChromePdfAndAsk() {
+        val listed = device.executeShellCommand("ls /sdcard/Download/wugang_chrome.pdf")
+        if (!listed.contains("wugang_chrome.pdf")) {
+            error("missing /sdcard/Download/wugang_chrome.pdf\n$listed")
+        }
+        val intent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        context.startActivity(intent)
+        waitDesc("composer", 25_000)
+        clickDesc("importDocument")
+        pickPdf()
+        val imported = waitUntil(90_000) {
+            device.hasObject(By.textContains("选择要巩固的重点")) ||
+                device.hasObject(By.textContains("建索引")) ||
+                device.hasObject(By.textContains("提取重点")) ||
+                device.hasObject(By.textContains("没有文字层")) ||
+                device.hasObject(By.textContains("白鹭塔"))
+        }
+        shot("doc-02-imported.png")
+        if (device.hasObject(By.textContains("没有文字层"))) {
+            error("pdf text layer was not read\n" + dump())
+        }
+        if (!imported) error("import did not finish\n" + dump())
+        if (device.hasObject(By.text("先不加入"))) {
+            device.findObject(By.text("先不加入")).click()
+        }
+        clickTab("tab-chat")
+        ask("白鹭塔建于哪一年？", "1873", "第3页", "doc-03-year.png")
+        ask("星砂盐什么时候晾晒？", "霜降", "第6页", "doc-04-salt.png")
+        ask("柯小满的海鸥叫什么？", "阿哨", "第9页", "doc-05-gull.png")
+        ask("雾港的市长是谁？", "没有找到", null, "doc-06-mayor.png")
+        clickTab("tab-library")
+        val book = waitText("雾港灯塔志", 15_000)
+        book.click()
+        waitText("选择要巩固的重点", 15_000)
+        shot("doc-07-review.png")
+        val add = waitText("加入待巩固", 8_000)
+        add.click()
+        waitText("待巩固", 15_000)
+        shot("doc-08-pending.png")
+        clickTab("tab-library")
+        waitText("文档", 8_000)
+        waitText("雾港灯塔志", 8_000)
+        shot("doc-09-library.png")
+        clickDesc("deleteDoc")
+        waitText("删除这份文档", 8_000)
+        clickDesc("confirmDeleteDoc")
+        val gone = waitUntil(12_000) { !device.hasObject(By.text("雾港灯塔志")) }
+        shot("doc-10-deleted.png")
+        if (!gone) error("document stayed in the library\n" + dump())
+        File(shots, "e2e-report.md").writeText(report.toString())
+    }
+
+    private fun ask(question: String, expect: String, page: String?, shotName: String) {
+        sendComposer(question)
+        waitText(expect, 20_000)
+        if (page != null) waitText(page, 8_000)
+        shot(shotName)
+        val pageText = device.findObjects(By.pkg(context.packageName)).joinToString("\n") { it.text ?: "" }
+        report.append("Q: ").append(question).append('\n')
+        report.append("expect: ").append(expect)
+        if (page != null) report.append(" / ").append(page)
+        report.append('\n')
+        pageText.lineSequence().filter { line ->
+            expect in line || (page != null && page in line) || question in line
+        }.distinct().take(8).forEach { report.append("screen: ").append(it).append('\n') }
+        report.append('\n')
+    }
+
+    private fun pickPdf() {
+        val deadline = System.currentTimeMillis() + 25_000
+        while (System.currentTimeMillis() < deadline) {
+            val file = device.findObject(By.textContains("wugang_chrome"))
+                ?: device.findObject(By.textContains("wugang"))
+            if (file != null) {
+                shot("doc-01-picker.png")
+                file.click()
+                Thread.sleep(400)
+                val again = device.findObject(By.textContains("wugang_chrome"))
+                if (again != null && device.findObject(By.desc("composer")) == null) again.click()
+                return
+            }
+            val downloads = device.findObject(By.textContains("Download"))
+                ?: device.findObject(By.text("下载"))
+                ?: device.findObject(By.textContains("下载"))
+            if (downloads != null) {
+                downloads.click()
+            } else {
+                val roots = device.findObject(By.descContains("Show roots"))
+                    ?: device.findObject(By.descContains("显示根目录"))
+                    ?: device.findObject(By.descContains("根"))
+                roots?.click()
+            }
+            Thread.sleep(600)
+        }
+        device.dumpWindowHierarchy(File(shots, "picker.xml"))
+        error("system picker did not list wugang_chrome.pdf\n" + dump())
+    }
+
+    private fun sendComposer(text: String) {
+        File(context.filesDir, "setup").mkdirs()
+        File(context.filesDir, "setup/e2e-draft.txt").writeText(text)
+        val shown = waitUntil(8_000) {
+            device.findObject(By.desc("composer"))?.text?.contains(text) == true
+        }
+        if (!shown) error("composer never held [$text]\n" + dump())
+        clickDesc("send")
+        val posted = waitUntil(8_000) {
+            device.findObject(By.textContains(text)) != null &&
+                device.findObject(By.desc("composer"))?.text.orEmpty().contains(text).not()
+        }
+        if (!posted) error("send did not post [$text]\n" + dump())
+    }
+
+    private fun clickTab(desc: String) {
+        waitDesc(desc, 8_000).click()
+    }
+
+    private fun waitDesc(desc: String, timeoutMs: Long): UiObject2 {
+        return device.wait(Until.findObject(By.desc(desc)), timeoutMs) ?: error("missing $desc\n" + dump())
+    }
+
+    private fun clickDesc(desc: String) {
+        waitDesc(desc, 8_000).click()
+    }
+
+    private fun waitText(text: String, timeoutMs: Long): UiObject2 {
+        val found = device.wait(Until.findObject(By.textContains(text)), timeoutMs)
+        if (found != null) return found
+        error("missing text $text\n" + dump())
+    }
+
+    private fun waitUntil(timeoutMs: Long, probe: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (probe()) return true
+            Thread.sleep(250)
+        }
+        return false
+    }
+
+    private fun shot(name: String) {
+        device.takeScreenshot(File(shots, name))
+    }
+
+    private fun dump(): String {
+        return device.findObjects(By.pkg(context.packageName)).take(30).joinToString("\n") { node ->
+            val desc = node.contentDescription?.take(40).orEmpty()
+            val text = node.text?.take(40).orEmpty()
+            "$desc | $text"
+        }
+    }
+}

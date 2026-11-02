@@ -66,9 +66,13 @@ class Engine(private val context: Context, private val store: MemoryStore) {
     }
 
     fun answer(question: String, expert: String?, onPartial: (String) -> Unit = {}): String =
-        guarded("answer") { answerOnce(question, expert, onPartial) }
+        guarded("answer") { answerOnce(question, expert, onPartial, 512) }
 
-    private fun answerOnce(question: String, expert: String?, onPartial: (String) -> Unit): String {
+    /** Key-point prompts are longer than a chat turn. The context has to hold the whole prompt. */
+    fun answerExtract(prompt: String): String =
+        guarded("answer") { answerOnce(prompt, null, {}, extractContextSize(prompt)) }
+
+    private fun answerOnce(question: String, expert: String?, onPartial: (String) -> Unit, contextTokens: Int): String {
         val cli = tool("libllama-cli.so") ?: return "没有 llama-cli。请安装带 QVAC 二进制的 APK。"
         val base = baseModel() ?: return "还没有基座。把 GGUF 推到 ${modelsDir().absolutePath}/base.gguf"
         val template = File(store.root, "qwen25_chat_template.jinja")
@@ -86,7 +90,7 @@ class Engine(private val context: Context, private val store: MemoryStore) {
             "--temp", "0", "--top-k", "1", "--top-p", "1", "--min-p", "0",
             "-n", "40", "--single-turn", "-ngl", nglNow().toString(),
             "-t", threads.toString(), "-tb", threads.toString(),
-            "--no-warmup", "-c", "512",
+            "--no-warmup", "-c", contextTokens.coerceIn(512, 4096).toString(),
         )
         if (expert != null) {
             val weight = File(store.expertsDir, "$expert/adapter.gguf")

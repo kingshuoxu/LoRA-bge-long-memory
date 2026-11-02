@@ -74,12 +74,30 @@ data class DocSearch(
     val ground: DocGround?,
     val bestScore: Double,
     val titleHit: Boolean,
+    val missingTerm: Boolean = false,
 )
 
 /** A scanned PDF has no text layer. The message is for the person importing it. */
 const val PDF_NO_TEXT = "这份 PDF 没有文字层，扫描件暂时还不能读。"
 
-private val chapterHead = Regex("(?m)^(第[0-9０-９一二三四五六七八九十百千]+[章节回部篇].*|#{1,3} .+)$")
+private val chapterMark = Regex("^(第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇])[\\s　]*([^\\s，。！？\\n]{0,12})")
+private val otherHead = Regex("^(#{1,3}\\s+\\S.{0,40}|\\d{1,2}[\\.、]\\s*\\S.{0,24})$")
+
+fun documentTitle(file: File): String {
+    val lower = file.name.lowercase()
+    val bytes = if (lower.endsWith(".pdf")) return pdfDocumentTitle(file) else file.readBytes()
+    return when {
+        lower.endsWith(".epub") -> epubTitle(bytes)
+        lower.endsWith(".docx") -> docxTitle(bytes)
+        else -> ""
+    }
+}
+
+fun extractDocumentFile(file: File): String {
+    val lower = file.name.lowercase()
+    if (lower.endsWith(".pdf")) return extractPdfTextLayer(file.readBytes())
+    return extractDocument(file.name, file.readBytes())
+}
 
 fun extractDocument(name: String, bytes: ByteArray): String {
     val lower = name.lowercase()
@@ -104,13 +122,22 @@ fun decodePlain(bytes: ByteArray): String {
 
 fun extractDocx(bytes: ByteArray): String {
     val xml = zipEntry(bytes, "word/document.xml") ?: return ""
-    return xmlText(xml)
+    return docxParagraphs(xml).joinToString("\n")
+}
+
+fun docxTitle(bytes: ByteArray): String {
+    val core = zipEntry(bytes, "docProps/core.xml") ?: return ""
+    return Regex("<dc:title[^>]*>(.*?)</dc:title>", RegexOption.IGNORE_CASE).find(core)?.let { decodeXml(it.groupValues[1]) }.orEmpty()
 }
 
 fun extractEpub(bytes: ByteArray): String {
     val entries = zipTexts(bytes)
     val opf = entries.entries.firstOrNull { it.key.endsWith(".opf") }?.value.orEmpty()
-    val ordered = epubSpine(opf, entries.keys)
+    val title = Regex("<dc:title[^>]*>(.*?)</dc:title>", RegexOption.IGNORE_CASE).find(opf)?.let { decodeXml(it.groupValues[1]) }.orEmpty()
+    val ordered = epubSpine(opf, entries.keys).filter { href ->
+        val name = href.substringAfterLast('/')
+        name != "nav.xhtml" && name != "toc.ncx" && !name.endsWith(".ncx")
+    }
     val parts = ArrayList<String>()
     val used = LinkedHashSet<String>()
     for (href in ordered) {
@@ -125,10 +152,30 @@ fun extractEpub(bytes: ByteArray): String {
             .values
             .forEach { parts.add(xmlText(it)) }
     }
-    return parts.joinToString("\n\n")
+    return listOf(title).filter { it.isNotBlank() }.plus(parts).joinToString("\n\n")
+}
+
+fun epubTitle(bytes: ByteArray): String {
+    val opf = zipTexts(bytes).entries.firstOrNull { it.key.endsWith(".opf") }?.value.orEmpty()
+    return Regex("<dc:title[^>]*>(.*?)</dc:title>", RegexOption.IGNORE_CASE).find(opf)?.let { decodeXml(it.groupValues[1]) }.orEmpty()
 }
 
 fun extractPdfTextLayer(bytes: ByteArray): String {
+    val legacy = legacyUtf16Pages(bytes)
+    val modern = try {
+        extractPdfPages(bytes)
+    } catch (_: Throwable) {
+        emptyList()
+    }
+    val chosen = if (cjkStops(legacy) > cjkStops(modern)) legacy else modern
+    if (chosen.none { it.isNotBlank() }) return ""
+    return chosen.joinToString("\n\u000c\n")
+}
+
+private fun cjkStops(pages: List<String>): Int = pages.sumOf { page -> page.count { it == '。' } }
+
+/** Some hand-made PDFs store UTF-16 text in hex Tj of a simple font. PdfBox reads those as character codes. */
+private fun legacyUtf16Pages(bytes: ByteArray): List<String> {
     val pages = ArrayList<String>()
     val streamMark = "stream".toByteArray(Charsets.ISO_8859_1)
     val endMark = "endstream".toByteArray(Charsets.ISO_8859_1)
@@ -136,7 +183,7 @@ fun extractPdfTextLayer(bytes: ByteArray): String {
     while (cursor < bytes.size) {
         val streamAt = indexOfBytes(bytes, streamMark, cursor)
         if (streamAt < 0) break
-        val dictStart = maxOf(0, streamAt - 240)
+        val dictStart = maxOf(0, streamAt - 2000)
         val dict = bytes.copyOfRange(dictStart, streamAt).toString(Charsets.ISO_8859_1)
         var dataStart = streamAt + streamMark.size
         if (dataStart < bytes.size && bytes[dataStart] == '\r'.code.toByte()) dataStart++
@@ -144,39 +191,110 @@ fun extractPdfTextLayer(bytes: ByteArray): String {
         val end = indexOfBytes(bytes, endMark, dataStart)
         if (end < 0) break
         val slice = bytes.copyOfRange(dataStart, end)
-        val body = if (dict.contains("FlateDecode")) inflatePdf(slice) else slice
-        val text = pdfOperators(body.toString(Charsets.ISO_8859_1))
+        val flate = dict.contains("FlateDecode") || (slice.size > 2 && slice[0] == 0x78.toByte())
+        val body = if (flate) inflatePdf(slice) else slice
+        val text = utf16HexOperators(body.toString(Charsets.ISO_8859_1))
         if (text.isNotBlank()) pages.add(text)
         cursor = end + endMark.size
     }
-    return pages.joinToString("\n\u000c\n")
+    return pages
 }
 
-/** A tiny text-layer PDF. Scanned pages have no operators, so this fixture is the supported kind. */
+private fun utf16HexOperators(stream: String): String {
+    val lines = Regex("<(FEFF[0-9A-Fa-f\\s]*)>\\s*Tj").findAll(stream).map { decodePdfHex(it.groupValues[1]).trim() }.filter { it.isNotBlank() }
+    return lines.joinToString("\n")
+}
+
+/** A one-page text-layer PDF PdfBox can open. Scanned pages have no text operators. */
 fun textLayerPdf(sentence: String): ByteArray {
     val hex = "FEFF" + sentence.toByteArray(Charsets.UTF_16BE).joinToString("") { "%02X".format(it) }
-    val stream = "<$hex> Tj\n".toByteArray(Charsets.US_ASCII)
-    val head = "%PDF-1.4\n1 0 obj\n<< /Length ${stream.size} >>\nstream\n".toByteArray(Charsets.US_ASCII)
-    val tail = "endstream\nendobj\ntrailer\n<< >>\n%%EOF\n".toByteArray(Charsets.US_ASCII)
-    return head + stream + tail
+    val stream = "BT /F1 12 Tf <$hex> Tj ET\n".toByteArray(Charsets.US_ASCII)
+    val objects = listOf(
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        "<< /Length ${stream.size} >>\nstream\n",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    )
+    val out = StringBuilder("%PDF-1.4\n")
+    val offsets = ArrayList<Int>()
+    offsets.add(0)
+    objects.forEachIndexed { index, body ->
+        offsets.add(out.length)
+        out.append("${index + 1} 0 obj\n")
+        out.append(body)
+        if (index == 3) {
+            out.append(stream.toString(Charsets.US_ASCII))
+            out.append("endstream\nendobj\n")
+        } else {
+            out.append("\nendobj\n")
+        }
+    }
+    val xref = out.length
+    out.append("xref\n0 ${objects.size + 1}\n")
+    out.append("0000000000 65535 f \n")
+    for (index in 1..objects.size) {
+        out.append("%010d 00000 n \n".format(offsets[index]))
+    }
+    out.append("trailer\n<< /Size ${objects.size + 1} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n")
+    return out.toString().toByteArray(Charsets.US_ASCII)
 }
 
 fun splitChapters(text: String): List<Pair<String, String>> {
-    val matches = chapterHead.findAll(text).toList()
-    if (matches.isEmpty()) return listOf("正文" to text.trim())
+    val lines = separateHeadings(text).split('\n')
     val out = ArrayList<Pair<String, String>>()
-    if (matches.first().range.first > 0) {
-        val preface = text.substring(0, matches.first().range.first).trim()
-        if (preface.isNotBlank()) out.add("正文" to preface)
+    var title = "正文"
+    val body = StringBuilder()
+    fun flush() {
+        val chunk = body.toString().trim()
+        if (chunk.isNotBlank()) out.add(title to chunk)
+        body.clear()
     }
-    matches.forEachIndexed { index, match ->
-        val start = match.range.last + 1
-        val end = if (index + 1 < matches.size) matches[index + 1].range.first else text.length
-        val body = text.substring(start, end).trim()
-        val title = match.value.trim().trimStart('#').trim()
-        if (body.isNotBlank()) out.add(title to body)
+    for (raw in lines) {
+        if ('\u000c' in raw) {
+            body.append('\u000c')
+            val rest = raw.replace("\u000c", "").trim()
+            if (rest.isNotEmpty()) {
+                if (body.isNotEmpty() && body.last() != '\u000c') body.append('\n')
+                body.append(rest)
+            }
+            continue
+        }
+        val line = raw.trim()
+        val heading = headingTitle(line)
+        if (heading != null) {
+            flush()
+            title = heading
+        } else if (line.isNotEmpty()) {
+            if (body.isNotEmpty()) body.append('\n')
+            body.append(line)
+        }
     }
+    flush()
     return out.ifEmpty { listOf("正文" to text.trim()) }
+}
+
+/** A heading glued to the paragraph that follows is split, so the body is not thrown away. */
+fun separateHeadings(text: String): String {
+    return text.replace("\r\n", "\n").split('\n').joinToString("\n") { line ->
+        val trimmed = line.trim()
+        val mark = chapterMark.find(trimmed) ?: return@joinToString line
+        val title = (mark.groupValues[1] + " " + mark.groupValues[2]).replace(Regex("\\s+"), " ").trim()
+        val rest = trimmed.substring(mark.range.last + 1).trim()
+        if (rest.length < 8) trimmed else "$title\n$rest"
+    }
+}
+
+fun headingTitle(line: String): String? {
+    val trimmed = line.trim()
+    if (trimmed.isEmpty() || trimmed.length > 40) return null
+    if (trimmed.contains('。') || trimmed.contains('！') || trimmed.contains('？')) return null
+    val mark = chapterMark.find(trimmed)
+    if (mark != null && mark.range.last + 1 >= trimmed.length - 1) {
+        return (mark.groupValues[1] + " " + mark.groupValues[2]).replace(Regex("\\s+"), " ").trim()
+    }
+    if (otherHead.matches(trimmed)) return trimmed.trimStart('#').trim()
+    return null
 }
 
 fun chunkPassages(text: String, chapter: String = "正文", page: Int = 1): List<DocChunk> {
@@ -237,7 +355,11 @@ fun extractKeyPoints(
     val out = ArrayList<DocPoint>()
     for ((chapter, body) in chapters) {
         if (out.size >= totalCap) break
-        val fromLlm = if (ask != null) parseKeyLines(ask(chapterPrompt(chapter, body))) else emptyList()
+        val fromLlm = if (ask != null) {
+            promptsForChapter(chapter, body).flatMap { prompt -> parseKeyLines(ask(prompt)) }
+        } else {
+            emptyList()
+        }
         val lines = (if (fromLlm.isNotEmpty()) fromLlm else heuristicKeys(body)).take(perChapter)
         for (line in lines) {
             if (out.size >= totalCap) break
@@ -258,17 +380,28 @@ fun retrieveDocs(
     val scored = if (queryVector != null && vectors != null && vectors.size == chunks.size) {
         chunks.mapIndexed { index, chunk -> DocHit(chunk, cosineSimilarity(queryVector, vectors[index])) }
     } else {
-        chunks.map { chunk -> DocHit(chunk, lexicalScore(query, chunk.text)) }
+        chunks.map { chunk ->
+            val sentence = sentencesOf(chunk.text).maxOfOrNull { lexicalScore(query, it) } ?: 0.0
+            DocHit(chunk, maxOf(lexicalScore(query, chunk.text), sentence))
+        }
     }
     return scored.sortedByDescending { it.score }.take(3)
 }
 
 fun groundDocument(query: String, hits: List<DocHit>, title: String, minScore: Double): Pair<String, List<DocChip>>? {
-    val useful = hits.filter { it.score >= minScore }
+    val runs = salientRuns(query)
+    val useful = hits.filter { hit ->
+        hit.score >= minScore && runs.all { run -> runCovered(run, hit.chunk.text) }
+    }
     if (useful.isEmpty()) return null
-    val best = useful.first().chunk
-    val sentence = bestSentence(query, best.text)
-    val chips = useful.map { hit ->
+    val picked = useful
+        .flatMap { hit -> sentencesOf(hit.chunk.text).map { it to hit } }
+        .maxBy { (line, _) ->
+            lexicalScore(query, line) + if (asksForYear(query) && Regex("\\d{3,4}").containsMatchIn(line)) 0.4 else 0.0
+        }
+    val sentence = picked.first
+    val ordered = listOf(picked.second) + useful.filter { it.chunk.id != picked.second.chunk.id }
+    val chips = ordered.map { hit ->
         val where = if (hit.chunk.page > 0) "第${hit.chunk.page}页" else hit.chunk.chapter
         val chapter = hit.chunk.chapter.takeIf { it.isNotBlank() && it != "正文" }?.let { " · $it" }.orEmpty()
         DocChip("《$title》$where$chapter", hit.chunk.text, "")
@@ -317,11 +450,18 @@ private fun heuristicKeys(body: String): List<String> {
         .take(5)
 }
 
+private fun sentencesOf(passage: String): List<String> {
+    return passage.split(Regex("[。！!\n]+")).map { it.trim() }.filter { it.length >= 4 }
+        .map { if (it.endsWith("。")) it else "$it。" }
+}
+
+private fun asksForYear(query: String): Boolean = "年" in query || "何时" in query || "什么时候" in query
+
 private fun bestSentence(query: String, passage: String): String {
-    val parts = passage.split(Regex("[。！!\n]+")).map { it.trim() }.filter { it.length >= 4 }
+    val parts = sentencesOf(passage)
     if (parts.isEmpty()) return passage.trim()
     val q = normalizeFactKey(query)
-    return parts.maxBy { lexicalScore(q, normalizeFactKey(it)) }.let { if (it.endsWith("。")) it else "$it。" }
+    return parts.maxBy { lexicalScore(q, normalizeFactKey(it)) }
 }
 
 internal fun lexicalScore(query: String, text: String): Double {
@@ -361,10 +501,19 @@ private fun zipTexts(bytes: ByteArray): Map<String, String> {
     return out
 }
 
+private fun docxParagraphs(xml: String): List<String> {
+    return Regex("<w:p[\\s>][\\s\\S]*?</w:p>").findAll(xml).map { para ->
+        val style = Regex("""w:pStyle[^>]*w:val="([^"]+)"""").find(para.value)?.groupValues?.get(1).orEmpty()
+        val text = Regex("<w:t[^>]*>(.*?)</w:t>").findAll(para.value).joinToString("") { decodeXml(it.groupValues[1]) }.trim()
+        if (text.isBlank()) return@map ""
+        if (style.startsWith("Heading", ignoreCase = true)) text else text
+    }.filter { it.isNotBlank() }.toList()
+}
+
 private fun xmlText(xml: String): String {
-    val chunks = Regex("<(?:w:t|title|h1|h2|h3|p)[^>]*>(.*?)</(?:w:t|title|h1|h2|h3|p)>", RegexOption.IGNORE_CASE)
+    val chunks = Regex("<(h[1-6]|p)[^>]*>(.*?)</\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         .findAll(xml)
-        .map { decodeXml(it.groupValues[1]) }
+        .map { decodeXml(it.groupValues[2].replace(Regex("<[^>]+>"), "")) }
         .filter { it.isNotBlank() }
         .toList()
     if (chunks.isNotEmpty()) return chunks.joinToString("\n")
@@ -531,25 +680,31 @@ fun documentMiss(title: String, lang: String): String {
 fun searchDocuments(query: String, docs: List<IndexedDoc>, queryVector: FloatArray?): DocSearch {
     if (docs.isEmpty() || query.isBlank()) return DocSearch(null, 0.0, false)
     val titleHit = docs.any { it.title.length >= 2 && query.contains(it.title) }
+    val runs = salientRuns(query)
+    val missingTerm = runs.any { run ->
+        docs.none { doc -> doc.chunks.any { chunk -> runCovered(run, chunk.text) } }
+    }
     var bestScore = 0.0
     var best: DocGround? = null
-    for (doc in docs) {
-        val vectors = doc.vectors
-        val usedVectors = queryVector != null && vectors != null && vectors.size == doc.chunks.size
-        val hits = retrieveDocs(query, doc.chunks, if (usedVectors) vectors else null, if (usedVectors) queryVector else null)
-        val score = hits.firstOrNull()?.score ?: 0.0
-        if (score > bestScore) bestScore = score
-        val grounded = groundDocument(query, hits, doc.title, docMinScore(usedVectors)) ?: continue
-        if (best == null || score >= bestScore) {
-            best = DocGround(
-                grounded.first,
-                grounded.second.map { it.copy(docId = doc.id) },
-                doc.expert,
-                doc.id,
-            )
+    if (!missingTerm) {
+        for (doc in docs) {
+            val vectors = doc.vectors
+            val usedVectors = queryVector != null && vectors != null && vectors.size == doc.chunks.size
+            val hits = retrieveDocs(query, doc.chunks, if (usedVectors) vectors else null, if (usedVectors) queryVector else null)
+            val score = hits.firstOrNull()?.score ?: 0.0
+            if (score > bestScore) bestScore = score
+            val grounded = groundDocument(query, hits, doc.title, docMinScore(usedVectors)) ?: continue
+            if (best == null || score >= bestScore) {
+                best = DocGround(
+                    grounded.first,
+                    grounded.second.map { it.copy(docId = doc.id) },
+                    doc.expert,
+                    doc.id,
+                )
+            }
         }
     }
-    return DocSearch(best, bestScore, titleHit)
+    return DocSearch(best, bestScore, titleHit, missingTerm)
 }
 
 /**
@@ -558,9 +713,48 @@ fun searchDocuments(query: String, docs: List<IndexedDoc>, queryVector: FloatArr
  */
 fun admitNoPassage(search: DocSearch, minScore: Double = 0.18, usedVectors: Boolean = false): Boolean {
     if (search.ground != null) return false
-    if (search.titleHit) return true
+    if (search.missingTerm || search.titleHit) return true
     if (usedVectors) return false
     return search.bestScore > 0.08 && search.bestScore < minScore
+}
+
+/** CJK in the prompt is about one token per character. Chat stays at 512; extraction must fit the prompt. */
+fun extractContextSize(prompt: String): Int = (prompt.length + 200).coerceIn(1024, 4096)
+
+fun promptsForChapter(chapter: String, body: String): List<String> {
+    val prompts = ArrayList<String>()
+    var rest = body.trim()
+    while (rest.isNotEmpty()) {
+        val window = rest.take(1200)
+        val cut = if (rest.length <= 1200) {
+            rest.length
+        } else {
+            window.lastIndexOf('。').takeIf { it > 400 }?.plus(1) ?: 1200
+        }
+        val prompt = chapterPrompt(chapter, rest.substring(0, cut))
+        prompts.add(prompt)
+        rest = rest.substring(cut).trim()
+    }
+    return prompts
+}
+
+internal fun salientRuns(query: String): List<String> {
+    var text = query.trim().replace(Regex("[\\s?？。，,！!、]"), "")
+    val stops = listOf(
+        "什么时候", "哪一年", "哪一天", "哪里", "哪儿", "为什么", "怎么", "多少", "什么", "谁",
+        "吗", "呢", "的", "是", "在", "有", "叫", "和", "与", "了",
+    ).sortedByDescending { it.length }
+    for (stop in stops) text = text.replace(stop, "\u0001")
+    return text.split('\u0001').map { it.trim() }.filter { it.length >= 2 }
+}
+
+internal fun runCovered(run: String, text: String): Boolean {
+    if (run in text) return true
+    if (run.length < 3) return false
+    for (index in 0..run.length - 3) {
+        if (run.substring(index, index + 3) in text) return true
+    }
+    return false
 }
 
 fun loadIndexedDocs(root: File): List<IndexedDoc> {
@@ -610,7 +804,7 @@ fun runDocumentImport(
     val resume = prior.source == source.absolutePath && prior.docId.isNotBlank() &&
         prior.phase in setOf("parse", "split", "index", "points")
     val id = if (resume) prior.docId else UUID.randomUUID().toString().take(8)
-    val title = docTitleOf(source.name)
+    var title = docTitleOf(source.name)
     val dir = File(root, id)
     dir.mkdirs()
     fun report(phase: String, percent: Int, message: String = "") {
@@ -631,7 +825,9 @@ fun runDocumentImport(
                 report("error", 8, "这份文件太大。")
                 return
             }
-            val text = extractDocument(source.name, source.readBytes())
+            val named = documentTitle(source)
+            if (named.isNotBlank()) title = named
+            val text = extractDocumentFile(source)
             if (text.isBlank()) {
                 val message = if (source.name.lowercase().endsWith(".pdf")) PDF_NO_TEXT else "没有读出文字。"
                 report("error", 8, message)

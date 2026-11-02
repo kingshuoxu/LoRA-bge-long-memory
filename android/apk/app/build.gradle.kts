@@ -13,7 +13,7 @@ fun releaseVersionCode(versionName: String): Int {
     return parts[0].toInt() * 1_000_000 + parts[1].toInt() * 1_000 + parts[2].toInt()
 }
 
-val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.30"
+val appVersion = (findProperty("lorabge.versionName") as String?) ?: "0.1.31"
 val skipNative = findProperty("lorabge.skipNative") == "true"
 fun secretOr(name: String, fallback: String): String =
     System.getenv(name)?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
@@ -120,6 +120,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
@@ -132,7 +133,55 @@ dependencies {
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
 
+val compilePdfboxStub = tasks.register<JavaCompile>("compilePdfboxStub") {
+    source = fileTree("src/pdfboxStub/java")
+    classpath = files()
+    destinationDirectory.set(layout.buildDirectory.dir("pdfbox-stub-classes"))
+    sourceCompatibility = JavaVersion.VERSION_17.toString()
+    targetCompatibility = JavaVersion.VERSION_17.toString()
+}
+
 tasks.withType<Test> {
     // 单元测试跑在 JVM 上,android.jar 里的 org.json 是空壳。换成真正的实现。
-    classpath = files(classpath.filter { file -> !file.name.contains("android.jar") })
+    if (name != "pdfboxUnitTest") {
+        classpath = files(classpath.filter { file ->
+            !file.name.contains("android.jar")
+        })
+    }
+    jvmArgs("-XX:ErrorFile=/tmp/hs_err_pid%p.log", "-XX:+HeapDumpOnOutOfMemoryError")
+    testLogging {
+        showStandardStreams = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        events("failed", "standardError")
+    }
+}
+
+// PdfBox 的文字抽取会 new android.graphics.Path。layoutlib 的 Path 要原生库，
+// 普通单元测试没有。换成纯 Java 的 Path 又会让 Paparazzi 崩，所以这条任务单独带上。
+afterEvaluate {
+    tasks.register<Test>("pdfboxUnitTest") {
+        group = "verification"
+        description = "PDF, EPUB and DOCX extractors with a pure-Java android.graphics.Path."
+        dependsOn(compilePdfboxStub)
+        dependsOn("transformDebugUnitTestClassesWithAsm", "processDebugUnitTestJavaRes", "bundleDebugClassesToRuntimeJar", "bundleDebugClassesToCompileJar")
+        val unit = tasks.named<Test>("testDebugUnitTest")
+        val stubClasses = layout.buildDirectory.dir("pdfbox-stub-classes")
+        setTestClassesDirs(files(stubClasses))
+        setClasspath(files(stubClasses))
+        doFirst {
+            val unitTask = unit.get()
+            setTestClassesDirs(files(unitTask.testClassesDirs))
+            setClasspath(files(stubClasses) + files(unitTask.classpath))
+        }
+        filter {
+            includeTestsMatching("com.lorabge.memory.WugangBookTest")
+            includeTestsMatching("com.lorabge.memory.DocumentBookTest")
+        }
+    }
+    tasks.named<Test>("testDebugUnitTest") {
+        filter {
+            excludeTestsMatching("com.lorabge.memory.WugangBookTest")
+            excludeTestsMatching("com.lorabge.memory.DocumentBookTest")
+        }
+    }
 }

@@ -40,6 +40,7 @@ class DocumentService : Service() {
         Thread {
             try {
                 File(filesDir, "docs/cancel").delete()
+                initPdfBox(this)
                 val store = MemoryStore(File(filesDir, "memory"))
                 store.ensure()
                 val engine = Engine(this, store)
@@ -49,7 +50,7 @@ class DocumentService : Service() {
                     null
                 }
                 val ask = if (engine.binariesReady() && (engine.baseModel()?.length() ?: 0L) > 1_000_000L) {
-                    { prompt: String -> engine.answer(prompt, null) }
+                    { prompt: String -> engine.answerExtract(prompt) }
                 } else {
                     null
                 }
