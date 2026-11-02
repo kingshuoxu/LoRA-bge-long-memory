@@ -329,30 +329,32 @@ class ChatFlowTest {
     /** The step label is rewritten every second, so the node from findObject can already be stale. */
     private fun progressLabel(): String {
         repeat(5) {
-            try {
-                return device.findObject(By.desc("trainProgress"))?.text.orEmpty()
-            } catch (_: StaleObjectException) {
-                Thread.sleep(80)
-            }
+            val text = stable { device.findObject(By.desc("trainProgress"))?.text.orEmpty() }
+            if (text != null) return text
+            Thread.sleep(80)
         }
         return ""
+    }
+
+    private fun <T> stable(block: () -> T): T? {
+        return try {
+            block()
+        } catch (_: StaleObjectException) {
+            null
+        }
     }
 
     private fun clickDesc(desc: String) {
         val deadline = System.currentTimeMillis() + 8_000
         while (System.currentTimeMillis() < deadline) {
             dismissEmulatorOverlays(device)
-            val node = device.findObject(By.desc(desc))
+            val node = stable { device.findObject(By.desc(desc)) }
             if (node == null) {
                 Thread.sleep(200)
                 continue
             }
-            try {
-                node.click()
-                return
-            } catch (_: StaleObjectException) {
-                Thread.sleep(200)
-            }
+            if (stable { node.click(); true } == true) return
+            Thread.sleep(200)
         }
         error("missing $desc\n" + visibleNodes())
     }
@@ -361,7 +363,7 @@ class ChatFlowTest {
         val deadline = System.currentTimeMillis() + 8_000
         while (System.currentTimeMillis() < deadline) {
             dismissEmulatorOverlays(device)
-            val node = device.findObject(By.desc(desc)) ?: device.findObject(By.text(text))
+            val node = stable { device.findObject(By.desc(desc)) ?: device.findObject(By.text(text)) }
             if (node == null) {
                 device.swipe(
                     device.displayWidth / 2,
@@ -373,12 +375,8 @@ class ChatFlowTest {
                 Thread.sleep(250)
                 continue
             }
-            try {
-                node.click()
-                return
-            } catch (_: StaleObjectException) {
-                Thread.sleep(200)
-            }
+            if (stable { node.click(); true } == true) return
+            Thread.sleep(200)
         }
         error("missing $text\n" + visibleNodes())
     }
@@ -389,7 +387,7 @@ class ChatFlowTest {
 
     /** 底栏在键盘打开时会收起。「巩固」也不能用包含匹配，否则会点到「待巩固」。 */
     private fun clickTab(desc: String) {
-        if (imeTopOrNull() != null || device.findObject(By.desc(desc)) == null) {
+        if (imeTopOrNull() != null || stable { device.findObject(By.desc(desc)) } == null) {
             device.pressBack()
             Thread.sleep(300)
         }

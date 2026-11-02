@@ -396,9 +396,9 @@ private fun PhoneApp(
                 val next = acceptTrainStatus(trainSnap, after, fileExists = true)
                 if (next != null && next.state != "running") {
                     trainSnap = next
-                    return@LaunchedEffect
+                    break
                 }
-                if (!shouldRemarkFailedTrain(afterSnap.state)) return@LaunchedEffect
+                if (!shouldRemarkFailedTrain(afterSnap.state)) break
             }
         }
         var chained = false

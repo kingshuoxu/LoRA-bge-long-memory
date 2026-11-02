@@ -37,10 +37,12 @@ class DocumentImportE2eTest {
         File(setup, "e2e").writeText("1")
         File(setup, "e2e-draft.txt").delete()
         File(context.filesDir, "docs").deleteRecursively()
+        File(context.filesDir, "memory/conversations").deleteRecursively()
         File(context.filesDir, "memory/train").mkdirs()
         File(context.filesDir, "memory/train/simulate").writeText("1")
         File(context.filesDir, "memory/train/status.json").delete()
         File(context.filesDir, "memory/train/job.json").delete()
+        File(context.filesDir, "memory/train/batch.json").delete()
         shots.mkdirs()
         listOf(
             "doc-01-picker.png", "doc-02-imported.png", "doc-03-year.png", "doc-04-salt.png",
