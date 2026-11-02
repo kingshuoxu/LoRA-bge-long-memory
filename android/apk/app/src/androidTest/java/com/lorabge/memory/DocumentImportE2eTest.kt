@@ -102,7 +102,11 @@ class DocumentImportE2eTest {
         waitText("四十二米", 8_000)
         waitText("霜降", 8_000)
         waitText("阿哨", 8_000)
-        if (device.hasObject(By.textContains("年，塔高"))) error("tower fact was split\n" + dump())
+        val towerWhole = device.findObjects(By.clazz("android.widget.TextView")).any { node ->
+            val text = node.text.orEmpty()
+            text.contains("1873年") && text.contains("四十二米")
+        }
+        if (!towerWhole) error("tower fact was split\n" + dump())
         shot("doc-08-pending.png")
         clickTab("tab-library")
         waitText("导入文档", 8_000)
