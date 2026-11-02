@@ -387,11 +387,20 @@ class ChatFlowTest {
 
     /** 底栏在键盘打开时会收起。「巩固」也不能用包含匹配，否则会点到「待巩固」。 */
     private fun clickTab(desc: String) {
-        if (imeTopOrNull() != null || stable { device.findObject(By.desc(desc)) } == null) {
-            device.pressBack()
-            Thread.sleep(300)
+        val deadline = System.currentTimeMillis() + 10_000
+        var backed = 0
+        while (System.currentTimeMillis() < deadline) {
+            dismissEmulatorOverlays(device)
+            if (imeTopOrNull() != null) device.pressBack()
+            val node = stable { device.findObject(By.desc(desc)) }
+            if (node != null && stable { node.click(); true } == true) return
+            if (backed < 2) {
+                device.pressBack()
+                backed += 1
+            }
+            Thread.sleep(400)
         }
-        clickDesc(desc)
+        error("missing $desc\n" + visibleNodes())
     }
 
     private fun scrollToText(text: String): UiObject2 {

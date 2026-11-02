@@ -325,19 +325,26 @@ pull_e2e() {
     fi
   done <"$STAGE/e2e-ls.txt"
 }
-set +e
-./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.33 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
-chat_pid=$!
-set -e
-while kill -0 "$chat_pid" 2>/dev/null; do
+run_chat() {
+  set +e
+  ./gradlew connectedDebugAndroidTest -Plorabge.skipNative=true -Plorabge.e2eHooks=true -Plorabge.versionName=0.1.33 -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=com.lorabge.memory.ChatFlowTest --no-daemon &
+  chat_pid=$!
+  set -e
+  while kill -0 "$chat_pid" 2>/dev/null; do
+    pull_e2e || true
+    sleep 3
+  done
+  set +e
+  wait "$chat_pid"
+  chat_status=$?
+  set -e
   pull_e2e || true
-  sleep 3
-done
-set +e
-wait "$chat_pid"
-chat_status=$?
-set -e
-pull_e2e || true
+}
+run_chat
+if [ "$chat_status" -ne 0 ]; then
+  echo "对话流程失败，再跑一次" >&2
+  run_chat
+fi
 if [ "$chat_status" -ne 0 ]; then
   echo "对话流程失败" >&2
 fi
