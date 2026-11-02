@@ -21,8 +21,9 @@ test -x "$EMU"
 test -n "$AAPT"
 test -n "$APKSIGNER"
 
-if [ ! -d "$SDK/system-images/android-35/aosp_atd/x86_64" ]; then
-  echo "缺少 system-images;android-35;aosp_atd;x86_64" >&2
+# aosp_atd 没有 DocumentsUI，ACTION_OPEN_DOCUMENT 会直接崩溃。default 镜像带系统选择器。
+if [ ! -d "$SDK/system-images/android-35/default/x86_64" ]; then
+  echo "缺少 system-images;android-35;default;x86_64" >&2
   exit 1
 fi
 
@@ -38,7 +39,7 @@ rm -rf "$ANDROID_AVD_HOME"
 mkdir -p "$ANDROID_AVD_HOME"
 AVDMANAGER=$(find "$SDK/cmdline-tools" -path '*/bin/avdmanager' | head -1)
 test -n "$AVDMANAGER"
-if ! echo no | "$AVDMANAGER" create avd -n "$AVD" -k "system-images;android-35;aosp_atd;x86_64" --force >"$STAGE/avdmanager.log" 2>&1; then
+if ! echo no | "$AVDMANAGER" create avd -n "$AVD" -k "system-images;android-35;default;x86_64" --force >"$STAGE/avdmanager.log" 2>&1; then
   cat "$STAGE/avdmanager.log" >&2
   exit 1
 fi

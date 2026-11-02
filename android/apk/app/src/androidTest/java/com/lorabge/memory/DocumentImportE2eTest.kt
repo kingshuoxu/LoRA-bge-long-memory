@@ -122,12 +122,18 @@ class DocumentImportE2eTest {
             if (file != null) {
                 shot("doc-01-picker.png")
                 file.click()
-                Thread.sleep(400)
+                Thread.sleep(500)
+                val open = device.findObject(By.text("Open"))
+                    ?: device.findObject(By.text("OPEN"))
+                    ?: device.findObject(By.text("选择"))
+                    ?: device.findObject(By.text("打开"))
+                open?.click()
                 val again = device.findObject(By.textContains("wugang_chrome"))
-                if (again != null && device.findObject(By.desc("composer")) == null) again.click()
+                if (again != null && device.findObject(By.desc("composer")) == null && open == null) again.click()
                 return
             }
-            val downloads = device.findObject(By.textContains("Download"))
+            val downloads = device.findObject(By.textContains("Downloads"))
+                ?: device.findObject(By.textContains("Download"))
                 ?: device.findObject(By.text("下载"))
                 ?: device.findObject(By.textContains("下载"))
             if (downloads != null) {
