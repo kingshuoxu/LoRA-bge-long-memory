@@ -120,6 +120,15 @@ class DocumentBookTest {
     }
 
     @Test
+    fun batchKeepsTheWholeDocumentSentence() {
+        val line = "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。"
+        val kept = keepWholeStatement(line)
+        assertTrue(kept.statement.contains("1873年"))
+        assertTrue(kept.statement.contains("四十二米"))
+        assertEquals(listOf(line), collapseStatementGroup(listOf(line)))
+    }
+
+    @Test
     fun chosenPointsStayWholeAndOutrankScenery() {
         val body = normalizeDocPunctuation(
             "老街两旁是青灰色的瓦房,屋檐下挂着风干的鱼,孩子们在巷子里追逐。" +

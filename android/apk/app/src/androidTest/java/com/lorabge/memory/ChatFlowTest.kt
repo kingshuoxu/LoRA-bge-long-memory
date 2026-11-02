@@ -389,7 +389,10 @@ class ChatFlowTest {
 
     /** 底栏在键盘打开时会收起。「巩固」也不能用包含匹配，否则会点到「待巩固」。 */
     private fun clickTab(desc: String) {
-        if (imeTopOrNull() != null) device.pressBack()
+        if (imeTopOrNull() != null || device.findObject(By.desc(desc)) == null) {
+            device.pressBack()
+            Thread.sleep(300)
+        }
         clickDesc(desc)
     }
 

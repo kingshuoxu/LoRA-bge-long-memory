@@ -1277,13 +1277,21 @@ internal fun collapseShownPending(rows: List<SkyPending>): List<SkyPending> {
     }
 }
 
+/** A document sentence is already one fact. The chat splitter must not cut the year off it. */
+internal fun keepWholeStatement(original: String): FactDraft {
+    val line = original.trim()
+    val parsed = FactNotice.draft(line)
+    if (parsed == null || normalizeFactKey(parsed.statement).length + 1 < normalizeFactKey(line).length) {
+        return FactDraft(parsed?.entity.orEmpty(), parsed?.attr.orEmpty(), line, line, parsed?.question.orEmpty(), line)
+    }
+    return parsed
+}
+
 internal fun collapseShownBatch(items: List<SkyBatchItem>): List<SkyBatchItem> {
     val drafts = ArrayList<FactDraft>()
     val status = ArrayList<String>()
     for (item in items) {
-        val parsed = FactNotice.draft(item.statement.trim())
-        val draft = (parsed ?: FactDraft("", "", item.statement.trim(), item.statement.trim(), "", ""))
-            .copy(merged = item.merged.coerceAtLeast(1))
+        val draft = keepWholeStatement(item.statement).copy(merged = item.merged.coerceAtLeast(1))
         val at = drafts.indexOfFirst { samePendingFact(it, draft) }
         if (at < 0) {
             drafts.add(draft)
@@ -1299,9 +1307,7 @@ internal fun collapseShownBatch(items: List<SkyBatchItem>): List<SkyBatchItem> {
 }
 
 internal fun collapseStatementGroup(lines: List<String>): List<String> {
-    val drafts = lines.map { line ->
-        FactNotice.draft(line.trim()) ?: FactDraft("", "", line.trim(), line.trim(), "", "")
-    }
+    val drafts = lines.map { keepWholeStatement(it) }
     return dedupePendingFacts(drafts).map { it.statement }
 }
 
