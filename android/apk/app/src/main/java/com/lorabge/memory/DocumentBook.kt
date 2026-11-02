@@ -107,7 +107,7 @@ fun extractDocument(name: String, bytes: ByteArray): String {
         lower.endsWith(".docx") -> extractDocx(bytes)
         else -> decodePlain(bytes)
     }
-    return text.replace("\u0000", "").trim()
+    return normalizeDocPunctuation(text.replace("\u0000", "").trim())
 }
 
 fun pdfHasTextLayer(bytes: ByteArray): Boolean = extractPdfTextLayer(bytes).isNotBlank()
@@ -169,8 +169,27 @@ fun extractPdfTextLayer(bytes: ByteArray): String {
     }
     val chosen = if (cjkStops(legacy) > cjkStops(modern)) legacy else modern
     if (chosen.none { it.isNotBlank() }) return ""
-    return chosen.joinToString("\n\u000c\n")
+    return normalizeDocPunctuation(chosen.joinToString("\n\u000c\n"))
 }
+
+/** ASCII commas between Chinese characters become the full-width comma. */
+fun normalizeDocPunctuation(text: String): String {
+    val out = StringBuilder(text.length)
+    for (index in text.indices) {
+        val ch = text[index]
+        if (ch == ',') {
+            val prev = text.getOrNull(index - 1)
+            val next = text.getOrNull(index + 1)
+            val cjk = (prev != null && isDocCjk(prev)) || (next != null && isDocCjk(next))
+            out.append(if (cjk) '，' else ',')
+        } else {
+            out.append(ch)
+        }
+    }
+    return out.toString()
+}
+
+private fun isDocCjk(ch: Char): Boolean = ch in '\u4e00'..'\u9fff'
 
 private fun cjkStops(pages: List<String>): Int = pages.sumOf { page -> page.count { it == '。' } }
 
@@ -442,12 +461,33 @@ private fun parseKeyLines(raw: String): List<String> {
 }
 
 private fun heuristicKeys(body: String): List<String> {
-    val cues = listOf("是", "叫", "成立", "位于", "称为", "定义", "因此", "结论", "总部")
     return body.split(Regex("[。！!\n]+"))
         .map { it.trim() }
-        .filter { line -> line.length in 8..80 && cues.any { it in line } && "什么" !in line && "吗" !in line }
+        .filter { isKeyFact(it) }
         .distinct()
+        .sortedByDescending { keyFactScore(it) }
         .take(5)
+}
+
+/** Numbers, names and definitions. A scenic sentence with only 「是」 is not a key fact. */
+internal fun isKeyFact(line: String): Boolean {
+    if (line.length !in 8..120) return false
+    if ("什么" in line || "吗" in line || line.endsWith("？") || line.endsWith("?")) return false
+    if (listOf("名叫", "建于", "成立", "位于", "称为", "定义", "总部").any { it in line }) return true
+    if (Regex("[0-9０-９]{2,}").containsMatchIn(line)) return true
+    if (Regex("[一二三四五六七八九十百千零两]{1,4}(米|年|面|只|条|岁)").containsMatchIn(line)) return true
+    if ("叫" in line && line.length <= 48) return true
+    val scene = listOf("瓦房", "屋檐", "巷子", "两旁", "风干", "追逐")
+    if ("是" in line && line.length <= 40 && scene.none { it in line }) return true
+    return false
+}
+
+private fun keyFactScore(line: String): Int {
+    var score = 0
+    if ("名叫" in line || "建于" in line || "成立" in line) score += 3
+    if (Regex("[0-9０-９]{3,}").containsMatchIn(line)) score += 2
+    if ("叫" in line) score += 1
+    return score
 }
 
 private fun sentencesOf(passage: String): List<String> {
@@ -979,13 +1019,14 @@ fun docPointDraft(store: MemoryStore, line: String): FactDraft? {
         } ?: continue
         val statement = line.trim().trimEnd('。', '.').let { if (it.isEmpty()) it else "$it。" }
         if (statement.isEmpty()) return null
+        val named = Regex("名叫([^，。！!]{1,12})").find(statement)?.groupValues?.get(1)?.trim().orEmpty()
         return FactDraft(
-            meta.title,
+            named.ifBlank { meta.title },
             hit.chapter.ifBlank { "文档" },
             statement,
-            hit.text.take(24),
-            "《${meta.title}》里提到什么？",
-            hit.text,
+            statement,
+            "《${meta.title}》里说了什么？",
+            statement,
         )
     }
     return null
@@ -1023,7 +1064,15 @@ fun deleteDocument(store: MemoryStore, docId: String) {
     val dir = File(root, docId)
     val meta = readDocMeta(File(dir, "meta.json"))
     val points = loadDocPoints(File(dir, "points.json"))
-    if (meta != null) store.deleteExpert(meta.expert)
+    if (meta != null) {
+        val kept = store.readReviewedFacts(meta.expert).filter { !it.statement.startsWith("已导入《") }
+        if (kept.isEmpty()) {
+            store.deleteExpert(meta.expert)
+        } else {
+            val record = store.listExperts().firstOrNull { it.expert == meta.expert }
+            if (record != null) store.registerExpert(record.copy(nFacts = kept.size), kept)
+        }
+    }
     val conv = store.loadConversation("c-docs")
     if (conv != null && points.isNotEmpty()) {
         val kept = conv.messages.filter { message ->

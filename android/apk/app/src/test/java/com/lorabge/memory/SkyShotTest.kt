@@ -514,7 +514,7 @@ class SkyShotTest {
         wifiOnly = false,
         manifestUrl = "",
         storageLabel = "1.8 GB",
-        versionName = "0.1.31",
+        versionName = "0.1.32",
     )
 
     private fun fourPending() = SkyState(

@@ -706,7 +706,12 @@ class TrainService : Service() {
             val doc = docExpertFor(store, facts.map { it.statement })
             val title = if (doc != null) docTitleForExpert(store, doc) else ""
             val adjusted = if (doc != null && title.isNotBlank()) {
-                facts.map { it.copy(entity = title, attr = it.attr.ifBlank { "文档" }) }
+                facts.map { fact ->
+                    fact.copy(
+                        entity = fact.entity.ifBlank { title },
+                        attr = fact.attr.ifBlank { "文档" },
+                    )
+                }
             } else {
                 facts
             }

@@ -120,6 +120,72 @@ class DocumentBookTest {
     }
 
     @Test
+    fun chosenPointsStayWholeAndOutrankScenery() {
+        val body = normalizeDocPunctuation(
+            "老街两旁是青灰色的瓦房,屋檐下挂着风干的鱼,孩子们在巷子里追逐。" +
+                "柯岚在雾港守护的第一座灯塔名叫白鹭塔,建于1873年,塔高四十二米。" +
+                "雾港的特产是一种蓝色海盐,名叫星砂盐,每年霜降那天开始晾晒。",
+        )
+        assertFalse(body.contains(','))
+        val points = extractKeyPoints(listOf("第一章" to body))
+        assertTrue(points.none { it.text.contains("瓦房") || it.text.contains("巷子") })
+        val tower = points.first { it.text.contains("白鹭塔") }
+        val salt = points.first { it.text.contains("星砂盐") }
+        assertTrue(tower.text.contains("1873"))
+        assertTrue(salt.text.contains("霜降"))
+        val root = File.createTempFile("docs-whole", "").apply { delete(); mkdirs() }
+        val store = MemoryStore(File(root, "memory"))
+        store.ensure()
+        val book = File(root, "雾港灯塔志.pdf")
+        book.writeBytes(textLayerPdf("第一章 塔\n$body"))
+        runDocumentImport(book, store)
+        val record = listDocRecords(docsRoot(store), store).single()
+        queueDocPoints(store, record.id, points.map { it.copy(selected = true) })
+        val pending = gatherPendingDrafts(store, emptyList(), null).map { it.statement }
+        assertEquals(points.size, pending.size)
+        points.forEach { point ->
+            assertTrue(pending.any { it.contains(point.text.trimEnd('。')) })
+        }
+        val rows = openConsolidateRows(
+            pending,
+            listOf("佐雷公司成立于1979年。" to "done"),
+        )
+        assertEquals(pending.size, rows.size)
+        assertTrue(rows.none { it.second == "done" })
+    }
+
+    @Test
+    fun consolidatedDocFactSurvivesDeletingTheFile() {
+        val root = File.createTempFile("docs-keep", "").apply { delete(); mkdirs() }
+        val store = MemoryStore(File(root, "memory"))
+        store.ensure()
+        val book = File(root, "雾港.pdf")
+        book.writeBytes(textLayerPdf("第一章 塔\n白鹭塔建于1873年。"))
+        runDocumentImport(book, store)
+        val record = listDocRecords(docsRoot(store), store).single()
+        val expert = store.listExperts().first { it.expert.startsWith("doc_") }
+        store.registerExpert(
+            expert,
+            listOf(
+                ReviewedFact(
+                    "白鹭塔",
+                    "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年。",
+                    "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年。",
+                    listOf("白鹭塔建于哪一年？" to "1873"),
+                    emptyList(),
+                    attr = "第一章",
+                ),
+            ),
+        )
+        deleteDocument(store, record.id)
+        assertTrue(loadIndexedDocs(docsRoot(store)).isEmpty())
+        val kept = store.readReviewedFacts(expert.expert)
+        assertTrue(kept.any { it.statement.contains("1873") })
+        val answer = EntityGround.reply("白鹭塔建于哪一年？", EntityGround.load(store))
+        assertTrue(answer!!.answer.contains("1873"))
+    }
+
+    @Test
     fun importIndexesAndDeleteClearsTheExpert() {
         val root = File.createTempFile("docs", "").apply { delete(); mkdirs() }
         val memory = File(root, "memory")

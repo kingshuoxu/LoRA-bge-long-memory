@@ -387,7 +387,7 @@ fun skyText(lang: String, key: String): String {
         "docReview" to "选择要巩固的重点",
         "docTrain" to "加入待巩固",
         "docSkip" to "先不加入",
-        "docDeleteAsk" to "删除这份文档？索引、待巩固和对应的记忆会一起去掉。",
+        "docDeleteAsk" to "删除这份文档？索引和还没巩固的条目会去掉。已经巩固的记忆还留着。",
         "docKeep" to "留下",
         "docCancel" to "取消",
         "advanced" to "高级",
@@ -493,7 +493,7 @@ fun skyText(lang: String, key: String): String {
         "docReview" to "Choose key points",
         "docTrain" to "Add to consolidate",
         "docSkip" to "Not now",
-        "docDeleteAsk" to "Delete this document? Its index, pending items, and memory go with it.",
+        "docDeleteAsk" to "Delete this document? The index and items not yet consolidated go away. Consolidated memory stays.",
         "docKeep" to "Keep",
         "docCancel" to "Cancel",
         "advanced" to "Advanced",
@@ -1409,19 +1409,24 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                 keyboardActions = KeyboardActions(onSend = { onEvent(SkyEvent.Send) }),
                 trailingIcon = {
                     val ready = state.draft.isNotBlank()
-                    Box(
-                        Modifier
-                            .padding(end = 6.dp)
-                            .size(40.dp)
-                            .background(if (ready) Accent else SurfaceHi, CircleShape)
-                            .semantics { contentDescription = "send" }
-                            .clickable {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onEvent(SkyEvent.Send)
-                            },
-                        contentAlignment = Alignment.Center,
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp,
                     ) {
-                        SkyIcon("send", if (ready) CanvasBg else Muted, Modifier.size(16.dp))
+                        Box(
+                            Modifier
+                                .padding(end = 6.dp)
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (ready) Accent else SurfaceHi)
+                                .semantics { contentDescription = "send" }
+                                .clickable {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onEvent(SkyEvent.Send)
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            SkyIcon("send", if (ready) CanvasBg else Muted, Modifier.size(16.dp))
+                        }
                     }
                 },
                 maxLines = 4,
@@ -1714,12 +1719,16 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
         val waitingNow = batchWaitingNow(state, snap)
         val shownPending = collapseShownPending(state.pendingDrafts)
         val shownBatch = collapseShownBatch(state.batchItems)
-        val queueRows = if (shownBatch.isNotEmpty()) {
-            shownBatch
-        } else {
-            shownPending.map { SkyBatchItem(it.statement, "", it.merged) }
+        val openRows = openConsolidateRows(
+            shownPending.map { it.statement },
+            shownBatch.map { it.statement to it.status },
+        )
+        val queueRows = openRows.map { (line, status) ->
+            val merged = shownPending.firstOrNull { it.statement == line }?.merged ?: 1
+            SkyBatchItem(line, status, merged)
         }
-        val showTrainAll = !runningNow && !waitingNow && shownBatch.isEmpty() && shownPending.size >= 2 && snap.state != "error"
+        val trainable = queueRows.count { it.status.isBlank() }
+        val showTrainAll = !runningNow && !waitingNow && trainable >= 2 && snap.state != "error"
         val showRun = chartLoss.isNotEmpty() || state.training || snap.step > 0 || snap.state == "error"
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             if (showRun) {
@@ -1754,7 +1763,7 @@ private fun ConsolidatePane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                 }
                 Spacer(Modifier.height(8.dp))
             }
-            val multi = queueRows.size >= 2
+            val multi = queueRows.size >= 2 || (queueRows.size == 1 && state.statement.isBlank() && state.entity.isBlank())
             if (multi) {
                 PendingQueue(state, queueRows, onEvent)
             } else if (state.statement.isBlank() && state.entity.isBlank()) {

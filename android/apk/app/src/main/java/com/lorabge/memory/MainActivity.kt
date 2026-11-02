@@ -157,6 +157,11 @@ private fun PhoneApp(
     var tick by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf("") }
     var toast by remember { mutableStateOf("") }
+    LaunchedEffect(toast) {
+        if (toast.isBlank()) return@LaunchedEffect
+        delay(3500)
+        toast = ""
+    }
     var cpuNoticeShown by remember { mutableStateOf(false) }
     var updatePhase by remember { mutableStateOf("") }
     var updateVersion by remember { mutableStateOf("") }
@@ -319,7 +324,7 @@ private fun PhoneApp(
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.31"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.32"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -1252,6 +1257,17 @@ internal fun mergedCaption(lang: String, count: Int): String {
 }
 
 /** The queue on screen. Raw rows from an older batch still collapse here. */
+/**
+ * A finished batch must not hide facts that are still waiting.
+ * Rows already marked done stay out of the open list.
+ */
+internal fun openConsolidateRows(pending: List<String>, batch: List<Pair<String, String>>): List<Pair<String, String>> {
+    val active = batch.filter { it.second != "done" }
+    val covered = active.map { it.first.trim() }.toSet()
+    val extra = pending.map { it.trim() }.filter { it.isNotEmpty() && it !in covered }.map { it to "" }
+    return active + extra
+}
+
 internal fun collapseShownPending(rows: List<SkyPending>): List<SkyPending> {
     val drafts = rows.map {
         FactDraft(it.entity, it.attr, it.statement, it.value, it.question, it.answer, it.merged.coerceAtLeast(1))
@@ -1301,9 +1317,13 @@ internal fun gatherNotedDrafts(store: MemoryStore, form: FactDraft?): List<FactD
         val full = store.loadConversation(conv.id) ?: continue
         for (message in full.messages) {
             if (message.role != "user") continue
+            val fromDoc = docPointDraft(store, message.content)
+            if (fromDoc != null) {
+                noted.add(fromDoc)
+                continue
+            }
             val drafts = FactNotice.drafts(message.content)
             if (drafts.isNotEmpty()) noted.addAll(drafts)
-            else docPointDraft(store, message.content)?.let { noted.add(it) }
         }
     }
     if (form != null && form.statement.isNotBlank() && noted.none { samePendingFact(it, form) }) noted.add(form)

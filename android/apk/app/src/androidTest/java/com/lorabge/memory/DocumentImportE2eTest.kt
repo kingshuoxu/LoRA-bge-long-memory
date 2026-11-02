@@ -37,16 +37,19 @@ class DocumentImportE2eTest {
         File(setup, "e2e").writeText("1")
         File(setup, "e2e-draft.txt").delete()
         File(context.filesDir, "docs").deleteRecursively()
+        File(context.filesDir, "memory/train").mkdirs()
+        File(context.filesDir, "memory/train/simulate").writeText("1")
         shots.mkdirs()
         listOf(
             "doc-01-picker.png", "doc-02-imported.png", "doc-03-year.png", "doc-04-salt.png",
             "doc-05-gull.png", "doc-06-mayor.png", "doc-07-review.png", "doc-08-pending.png",
-            "doc-09-library.png", "doc-10-deleted.png", "e2e-report.md", "picker.xml",
+            "doc-09-library.png", "doc-10-deleted.png", "doc-11-trained.png", "doc-12-memory.png",
+            "e2e-report.md", "picker.xml",
         ).forEach { File(shots, it).delete() }
         device.executeShellCommand("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
     }
 
-    @Test(timeout = 240_000)
+    @Test(timeout = 360_000)
     fun importChromePdfAndAsk() {
         val listed = device.executeShellCommand("ls /sdcard/Download/wugang_chrome.pdf")
         if (!listed.contains("wugang_chrome.pdf")) {
@@ -92,19 +95,38 @@ class DocumentImportE2eTest {
         shot("doc-07-review.png")
         val add = waitText("加入待巩固", 8_000)
         add.click()
-        waitText("待巩固", 15_000)
+        clickTab("tab-consolidate")
+        waitText("1873", 15_000)
+        waitText("霜降", 8_000)
+        waitText("阿哨", 8_000)
         shot("doc-08-pending.png")
         clickTab("tab-library")
-        waitText("文档", 8_000)
+        waitText("1873", 8_000)
+        waitText("霜降", 8_000)
         waitText("雾港灯塔志", 8_000)
         shot("doc-09-library.png")
+        clickTab("tab-consolidate")
+        clickDesc("trainAll")
+        val trained = waitUntil(90_000) {
+            device.hasObject(By.textContains("已登记"))
+        }
+        shot("doc-11-trained.png")
+        if (!trained) error("consolidate did not finish\n" + dump())
+        clickTab("tab-library")
+        waitText("雾港灯塔志", 8_000)
         clickDesc("deleteDoc")
         waitText("删除这份文档", 8_000)
         clickDesc("confirmDeleteDoc")
-        File(shots, "e2e-report.md").writeText(report.toString())
         val gone = waitUntil(12_000) { !device.hasObject(By.text("雾港灯塔志")) }
         shot("doc-10-deleted.png")
         if (!gone) error("document stayed in the library\n" + dump())
+        clickTab("tab-chat")
+        clickDesc("newChat")
+        ask("白鹭塔建于哪一年？", "1873", null, "doc-12-memory.png")
+        if (device.hasObject(By.textContains("没有找到"))) {
+            error("year came from a missing-document reply\n" + dump())
+        }
+        File(shots, "e2e-report.md").writeText(report.toString() + "\n训练在模拟器上走 simulate（4 步，没有真 LoRA）。\n")
     }
 
     private fun importReady(): Boolean {

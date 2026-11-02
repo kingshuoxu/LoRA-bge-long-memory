@@ -222,7 +222,7 @@ object EntityGround {
     }
 
     internal fun factKind(statement: String): String = when {
-        statement.contains("成立") -> "year"
+        statement.contains("成立") || Regex("\\d{3,4}\\s*年").containsMatchIn(statement) -> "year"
         statement.contains("总部") || statement.contains("位于") || statement.contains("住在") -> "place"
         statement.contains("产品") || statement.contains("旗舰") -> "product"
         statement.contains("首席") || statement.contains("执行官") || statement.contains("总裁") -> "ceo"
