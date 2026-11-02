@@ -442,10 +442,22 @@ class ChatFlowTest {
     }
 
     private fun visibleNodes(): String {
-        return device.findObjects(By.pkg(context.packageName)).take(40).joinToString("\n") { node ->
-            val desc = node.contentDescription?.take(60).orEmpty()
-            val text = node.text?.take(60).orEmpty()
-            "${node.className} desc=$desc text=$text"
+        return try {
+            device.findObjects(By.pkg(context.packageName)).take(40).joinToString("\n") { node ->
+                val desc = try {
+                    node.contentDescription?.take(60).orEmpty()
+                } catch (_: StaleObjectException) {
+                    ""
+                }
+                val text = try {
+                    node.text?.take(60).orEmpty()
+                } catch (_: StaleObjectException) {
+                    ""
+                }
+                "${node.className} desc=$desc text=$text"
+            }
+        } catch (_: StaleObjectException) {
+            ""
         }
     }
 }

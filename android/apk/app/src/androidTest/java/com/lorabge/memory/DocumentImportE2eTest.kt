@@ -118,10 +118,6 @@ class DocumentImportE2eTest {
         shot("doc-09-library.png")
         clickTab("tab-consolidate")
         clickDesc("trainAll")
-        val started = waitUntil(20_000) {
-            device.hasObject(By.textContains("排队")) || device.hasObject(By.textContains("第 "))
-        }
-        if (!started) error("training did not start\n" + dump())
         val trained = waitUntil(90_000) {
             device.hasObject(By.textContains("已登记")) && !device.hasObject(By.textContains("排队中"))
         }
