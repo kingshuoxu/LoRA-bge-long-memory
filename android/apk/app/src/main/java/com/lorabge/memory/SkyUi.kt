@@ -2143,67 +2143,6 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             }
             Spacer(Modifier.height(8.dp))
         }
-        Text(
-            skyText(state.lang, "docs"),
-            color = Muted,
-            fontSize = 13.sp,
-            modifier = Modifier.semantics { contentDescription = "documents" }.padding(bottom = 8.dp),
-        )
-        Text(
-            skyText(state.lang, "importDoc"),
-            color = Ink,
-            fontSize = 14.sp,
-            modifier = Modifier
-                .padding(bottom = 8.dp)
-                .background(Surface, Pill)
-                .semantics { contentDescription = "importDocument" }
-                .clickable { onEvent(SkyEvent.ImportDocument) }
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-        )
-        if (docJobActive(state.docJob) || state.docJob.phase == "error") {
-            DocProgress(state, onEvent)
-            Spacer(Modifier.height(8.dp))
-        }
-        if (state.docs.isEmpty() && !docJobActive(state.docJob)) {
-            Text(
-                skyText(state.lang, "docEmpty"),
-                color = Muted,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
-        state.docs.forEach { doc ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-                    .background(Surface, RoundedCornerShape(14.dp))
-                    .clickable { onEvent(SkyEvent.OpenDoc(doc.id)) }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(doc.title, color = Ink, fontSize = 16.sp)
-                    Text(
-                        docStat(state.lang, doc),
-                        color = Muted,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-                Text(
-                    skyText(state.lang, "delete"),
-                    color = Muted,
-                    fontSize = 13.sp,
-                    modifier = Modifier
-                        .padding(start = 8.dp)
-                        .semantics { contentDescription = "deleteDoc" }
-                        .clickable { onEvent(SkyEvent.DeleteDoc(doc.id)) },
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
         if (state.rememberedFacts.isNotEmpty()) {
             Text(
                 skyText(state.lang, "rememberedHead"),
@@ -2259,8 +2198,97 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
                     )
                 }
             }
+            item(key = "documents") {
+                Column(Modifier.padding(top = 6.dp)) {
+                    Text(
+                        skyText(state.lang, "docs"),
+                        color = Muted,
+                        fontSize = 13.sp,
+                        modifier = Modifier.semantics { contentDescription = "documents" }.padding(bottom = 8.dp),
+                    )
+                    Text(
+                        skyText(state.lang, "importDoc"),
+                        color = Ink,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .padding(bottom = 8.dp)
+                            .background(Surface, Pill)
+                            .semantics { contentDescription = "importDocument" }
+                            .clickable { onEvent(SkyEvent.ImportDocument) }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    )
+                    if (docJobActive(state.docJob) || state.docJob.phase == "error") {
+                        DocProgress(state, onEvent)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (state.docs.isEmpty() && !docJobActive(state.docJob)) {
+                        Text(
+                            skyText(state.lang, "docEmpty"),
+                            color = Muted,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                    state.docs.forEach { doc ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .background(Surface, RoundedCornerShape(14.dp))
+                                .clickable { onEvent(SkyEvent.OpenDoc(doc.id)) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(doc.title, color = Ink, fontSize = 16.sp)
+                                Text(
+                                    docStat(state.lang, doc),
+                                    color = Muted,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
+                            Text(
+                                skyText(state.lang, "delete"),
+                                color = Muted,
+                                fontSize = 13.sp,
+                                modifier = Modifier
+                                    .padding(start = 8.dp)
+                                    .semantics { contentDescription = "deleteDoc" }
+                                    .clickable { onEvent(SkyEvent.DeleteDoc(doc.id)) },
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun DocSteps(lang: String, phase: String, percent: Int) {
+    val phases = listOf("parse", "split", "index", "points")
+    val current = phases.indexOf(phase)
+    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        phases.forEachIndexed { index, key ->
+            if (index > 0) {
+                Text(" · ", color = Muted, fontSize = 13.sp)
+            }
+            val on = index == current
+            Text(
+                docPhaseLabel(key, lang),
+                color = if (on) Accent else Muted,
+                fontSize = if (on) 14.sp else 13.sp,
+            )
+        }
+    }
+    Text(
+        "$percent%",
+        color = Accent,
+        fontSize = 12.sp,
+        modifier = Modifier.padding(top = 4.dp),
+    )
 }
 
 private fun docJobActive(job: DocJob): Boolean {
@@ -2291,7 +2319,11 @@ private fun DocProgress(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(job.title, color = Ink, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(label, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        if (docJobActive(job)) {
+            DocSteps(state.lang, job.phase, job.percent)
+        } else {
+            Text(label, color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        }
         if (docJobActive(job)) {
             Box(
                 Modifier

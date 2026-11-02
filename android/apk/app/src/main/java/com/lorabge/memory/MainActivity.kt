@@ -247,6 +247,7 @@ private fun PhoneApp(
     var deleteDocId by remember { mutableStateOf("") }
     var deleteDocTitle by remember { mutableStateOf("") }
     var docShown by remember { mutableStateOf("") }
+    var importLive by remember { mutableStateOf(false) }
     var docPulse by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         val pendingJob = readDocJob(File(docsRoot(store), "job.json"))
@@ -264,16 +265,19 @@ private fun PhoneApp(
     val docJob = remember(docPulse) { readDocJob(File(docRoot, "job.json")) }
     val docRecords = remember(docPulse, tick) { listDocRecords(docRoot, store) }
     LaunchedEffect(docJob.phase, docJob.docId) {
-        if (docJob.phase == "done" && docJob.docId.isNotBlank() && docShown != docJob.docId) {
-            val points = loadDocPoints(File(docRoot, "${docJob.docId}/points.json"))
-            if (points.isNotEmpty()) {
-                docReview = points
-                docReviewId = docJob.docId
-                docReviewTitle = docJob.title
-                tab = SkyTab.Library
-            }
-            docShown = docJob.docId
+        // A book that was already finished before this launch must not cover the chat.
+        // The review opens only after this session sees the import move, then finish.
+        if (docJob.phase in setOf("parse", "split", "index", "points")) importLive = true
+        if (!importLive || docJob.phase != "done" || docJob.docId.isBlank() || docShown == docJob.docId) return@LaunchedEffect
+        val points = loadDocPoints(File(docRoot, "${docJob.docId}/points.json"))
+        if (points.isNotEmpty()) {
+            docReview = points
+            docReviewId = docJob.docId
+            docReviewTitle = docJob.title
+            tab = SkyTab.Library
         }
+        docShown = docJob.docId
+        importLive = false
     }
     var force by remember { mutableStateOf(true) }
     var waitSeconds by remember { mutableIntStateOf(0) }
