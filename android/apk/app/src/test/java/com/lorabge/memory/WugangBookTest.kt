@@ -19,6 +19,13 @@ class WugangBookTest {
     fun chromePdfKeepsPagesAndChapters() {
         assertTrue(pdfDocumentTitle(File(root, "wugang_chrome.pdf")).contains("雾港灯塔志"))
         assertPdf("wugang_chrome.pdf")
+        val page3 = extractPdfTextLayer(File(root, "wugang_chrome.pdf").readBytes()).split('\u000c')[2]
+        assertTrue(page3.contains("1873年"))
+        assertTrue(page3.contains("四十二米"))
+        val tower = extractKeyPoints(splitChapters(extractPdfTextLayer(File(root, "wugang_chrome.pdf").readBytes())))
+            .first { it.text.contains("白鹭塔") }
+        assertTrue(tower.text.contains("1873年"))
+        assertTrue(tower.text.contains("四十二米"))
     }
 
     @Test

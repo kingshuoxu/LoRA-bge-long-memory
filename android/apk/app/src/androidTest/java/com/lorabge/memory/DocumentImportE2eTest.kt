@@ -39,6 +39,8 @@ class DocumentImportE2eTest {
         File(context.filesDir, "docs").deleteRecursively()
         File(context.filesDir, "memory/train").mkdirs()
         File(context.filesDir, "memory/train/simulate").writeText("1")
+        File(context.filesDir, "memory/train/status.json").delete()
+        File(context.filesDir, "memory/train/job.json").delete()
         shots.mkdirs()
         listOf(
             "doc-01-picker.png", "doc-02-imported.png", "doc-03-year.png", "doc-04-salt.png",
@@ -96,19 +98,26 @@ class DocumentImportE2eTest {
         val add = waitText("加入待巩固", 8_000)
         add.click()
         clickTab("tab-consolidate")
-        waitText("1873", 15_000)
+        waitText("1873年", 15_000)
+        waitText("四十二米", 8_000)
         waitText("霜降", 8_000)
         waitText("阿哨", 8_000)
+        if (device.hasObject(By.textContains("年，塔高"))) error("tower fact was split\n" + dump())
         shot("doc-08-pending.png")
         clickTab("tab-library")
-        waitText("1873", 8_000)
+        waitText("导入文档", 8_000)
+        waitText("1873年", 8_000)
         waitText("霜降", 8_000)
         waitText("雾港灯塔志", 8_000)
         shot("doc-09-library.png")
         clickTab("tab-consolidate")
         clickDesc("trainAll")
+        val started = waitUntil(20_000) {
+            device.hasObject(By.textContains("排队")) || device.hasObject(By.textContains("第 "))
+        }
+        if (!started) error("training did not start\n" + dump())
         val trained = waitUntil(90_000) {
-            device.hasObject(By.textContains("已登记"))
+            device.hasObject(By.textContains("已登记")) && !device.hasObject(By.textContains("排队中"))
         }
         shot("doc-11-trained.png")
         if (!trained) error("consolidate did not finish\n" + dump())

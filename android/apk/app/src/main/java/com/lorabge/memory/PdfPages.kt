@@ -48,14 +48,22 @@ internal fun joinWrappedLines(text: String): String {
         val line = raw.trim()
         if (line.isEmpty()) continue
         val prev = out.lastOrNull()
-        val wrap = prev != null && prev.length >= 12 && headingTitle(prev) == null && headingTitle(line) == null &&
-            prev.last() !in "。！？；：" && isCjk(prev.last()) && isCjk(line.first())
+        val wrap = prev != null && prev.length >= 8 && headingTitle(prev) == null && headingTitle(line) == null &&
+            continuesWrapped(prev.last(), line.first())
         if (wrap) out[out.lastIndex] = prev + line else out.add(line)
     }
     return out.joinToString("\n")
 }
 
 private fun isCjk(ch: Char): Boolean = ch in '\u4e00'..'\u9fff'
+
+/** A line that ends on a digit is still the same sentence when the next line starts with 年 or more digits. */
+private fun continuesWrapped(prev: Char, next: Char): Boolean {
+    if (prev in "。！？；：") return false
+    if (isCjk(prev) && (isCjk(next) || next.isDigit())) return true
+    if (prev.isDigit() && (isCjk(next) || next.isDigit())) return true
+    return false
+}
 
 private fun readPages(doc: PDDocument): List<String> {
     if (doc.numberOfPages <= 0) return emptyList()
