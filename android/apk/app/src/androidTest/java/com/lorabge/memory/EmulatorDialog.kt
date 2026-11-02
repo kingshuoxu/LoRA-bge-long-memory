@@ -9,8 +9,11 @@ internal fun dismissEmulatorOverlays(device: UiDevice) {
         val nested = device.findObject(By.textContains("nested virtualization"))
         val never = device.findObject(By.textContains("Never show this again"))
         if (nested == null && never == null) return
-        never?.click()
-        device.findObject(By.text("OK"))?.click()
+        try {
+            never?.click()
+            device.findObject(By.text("OK"))?.click()
+        } catch (_: androidx.test.uiautomator.StaleObjectException) {
+        }
         Thread.sleep(400)
     }
 }

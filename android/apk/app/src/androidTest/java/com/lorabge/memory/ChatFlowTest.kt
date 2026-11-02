@@ -175,8 +175,7 @@ class ChatFlowTest {
         clickFresh("confirmTrain", "确认并训练")
         var polls = 0
         val progress = waitUntil(25_000) {
-            val node = device.findObject(By.desc("trainProgress"))
-            val text = node?.text.orEmpty()
+            val text = progressLabel()
             val stepping = text.contains("第 ") && text.contains("步") && !text.contains("0 步")
             val finished = text.contains("已完成") || text.contains("已登记") || text.contains("Finished")
             if (stepping || finished) {
@@ -198,17 +197,17 @@ class ChatFlowTest {
         val statusFile = File(context.filesDir, "memory/train/status.json")
         val status = if (statusFile.exists()) statusFile.readText() else "(no status)"
         assertTrue("training never left 0 steps\n$status\n" + visibleNodes(), progress)
-        val shown = device.findObject(By.desc("trainProgress"))?.text.orEmpty()
+        val shown = progressLabel()
         val alreadyDone = shown.contains("已完成") || shown.contains("已登记") || shown.contains("Finished")
         assertFalse(shown.contains("0 步"))
         assertTrue(shown, alreadyDone || Regex("第 \\d+/\\d+ 步").containsMatchIn(shown))
         shot("05-train.png")
         val registered = waitUntil(30_000) {
-            val text = device.findObject(By.desc("trainProgress"))?.text.orEmpty()
+            val text = progressLabel()
             text.contains("已完成") || text.contains("已登记") || text.contains("Finished")
         }
         assertTrue(
-            "expert was not registered before recall\n" + device.findObject(By.desc("trainProgress"))?.text.orEmpty(),
+            "expert was not registered before recall\n" + progressLabel(),
             registered,
         )
 
@@ -325,6 +324,18 @@ class ChatFlowTest {
 
     private fun waitDesc(desc: String, timeoutMs: Long): UiObject2 {
         return device.wait(Until.findObject(By.desc(desc)), timeoutMs) ?: error("missing $desc")
+    }
+
+    /** The step label is rewritten every second, so the node from findObject can already be stale. */
+    private fun progressLabel(): String {
+        repeat(5) {
+            try {
+                return device.findObject(By.desc("trainProgress"))?.text.orEmpty()
+            } catch (_: StaleObjectException) {
+                Thread.sleep(80)
+            }
+        }
+        return ""
     }
 
     private fun clickDesc(desc: String) {
