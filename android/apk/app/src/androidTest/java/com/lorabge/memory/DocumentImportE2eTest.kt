@@ -128,7 +128,14 @@ class DocumentImportE2eTest {
             val file = device.findObject(By.textContains("wugang_chrome"))
                 ?: device.findObject(By.textContains("wugang"))
             val recent = device.findObject(By.text("Recent"))
-            if (clicked && file == null && recent == null && device.findObject(By.desc("composer")) != null) return
+            val imported = device.hasObject(By.textContains("选择要巩固的重点")) ||
+                device.hasObject(By.textContains("白鹭塔")) ||
+                device.hasObject(By.textContains("建索引")) ||
+                device.hasObject(By.textContains("提取重点")) ||
+                device.hasObject(By.textContains("没有文字层"))
+            val backInApp = file == null && recent == null &&
+                (device.findObject(By.desc("composer")) != null || device.findObject(By.desc("tab-chat")) != null)
+            if (clicked && (imported || backInApp)) return
             if (file != null) {
                 if (!shotTaken) {
                     shot("doc-01-picker.png")
