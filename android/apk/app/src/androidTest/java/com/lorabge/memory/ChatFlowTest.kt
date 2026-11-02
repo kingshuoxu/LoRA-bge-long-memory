@@ -52,10 +52,6 @@ class ChatFlowTest {
             listOf(ExpertRecord("expert_0", 0, 1, 32, "experts/expert_0/router_key.f32", "experts/expert_0/adapter.gguf")),
         )
         shots.mkdirs()
-        listOf(
-            "01-ime.png", "02-typing.png", "03-ack.png", "04-pending.png",
-            "05-train.png", "06-recall-cat.png", "07-zore.png", "ime-window.txt",
-        ).forEach { File(shots, it).delete() }
         device.executeShellCommand("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
         device.executeShellCommand("settings put secure show_ime_with_hard_keyboard 1")
         device.executeShellCommand("ime enable com.android.inputmethod.latin/.LatinIME")
@@ -100,6 +96,10 @@ class ChatFlowTest {
 
     @Test(timeout = 180_000)
     fun keyboardProgressAndRecall() {
+        listOf(
+            "01-ime.png", "02-typing.png", "03-ack.png", "04-pending.png",
+            "05-train.png", "06-recall-cat.png", "07-zore.png", "ime-window.txt",
+        ).forEach { File(shots, it).delete() }
         val intent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         context.startActivity(intent)
@@ -235,6 +235,7 @@ class ChatFlowTest {
 
     @Test(timeout = 90_000)
     fun documentAnswersFromImportedPdf() {
+        File(shots, "09-doc.png").delete()
         File(context.filesDir, "docs").deleteRecursively()
         val store = MemoryStore(File(context.filesDir, "memory"))
         val book = File(context.filesDir, "docs/inbox/佩莫灯录.pdf")
