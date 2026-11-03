@@ -45,10 +45,18 @@ async function api(path, options = {}) {
 function showToast(text) {
   const toast = $("toast");
   if (!toast) return;
-  toast.textContent = text;
-  toast.hidden = !text;
   window.clearTimeout(showToast.timer);
-  if (text) showToast.timer = window.setTimeout(() => { toast.hidden = true; }, 3200);
+  showToast.timer = 0;
+  if (!text) {
+    toast.textContent = "";
+    toast.hidden = true;
+    return;
+  }
+  toast.textContent = text;
+  toast.hidden = false;
+  showToast.timer = window.setTimeout(() => {
+    toast.hidden = true;
+  }, 2800);
 }
 
 function showError(error) {
@@ -83,6 +91,9 @@ function setView(view) {
   const labels = { chat: "nav.chat", consolidate: "nav.consolidate", nebula: "nav.nebula", memory: "nav.memory" };
   $("eyebrow").textContent = t(labels[view] || "nav.chat");
   document.body.classList.toggle("sky-on", view === "nebula");
+  const comet = $("recall-comet");
+  if (comet && view !== "nebula") comet.hidden = true;
+  showToast("");
   if (state.nebula) state.nebula.resize();
 }
 
@@ -650,8 +661,11 @@ async function playRecall(trace, fromEl, streamNode, fullText) {
   showRecallBanner(trace);
   if (!state.nebula) return;
   const lit = state.nebula.highlight(trace);
-  if (streamNode && fullText) revealText(streamNode, fullText);
-  if (!lit.mounted) return;
+  if (!lit.mounted || state.view !== "nebula") {
+    const comet = $("recall-comet");
+    if (comet) comet.hidden = true;
+    return;
+  }
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const points = lit.nodeIds.map((id) => state.nebula.screenPoint(id)).filter(Boolean);
   flyToStars(fromEl, points);
@@ -744,12 +758,23 @@ async function loadMemory() {
   }</section>`;
   const experts = (data.experts || []).map((expert) => {
     const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.value || fact.statement || fact.question || "")}</li>`).join("");
-    const sources = (expert.sources || []).map((src) => String(src.title || "").replace(/[。．.!?！？]+$/u, "")).filter(Boolean).join(t("list.sep")) || t("fact.noSource");
+    const titles = [];
+    (expert.sources || []).forEach((src) => {
+      const name = String(src.title || "").replace(/[。．.!?！？]+$/u, "").trim();
+      if (name && !titles.includes(name)) titles.push(name);
+    });
+    (expert.facts || []).forEach((fact) => {
+      (fact.source_conversations || []).forEach((src) => {
+        const name = String(src.title || "").replace(/[。．.!?！？]+$/u, "").trim();
+        if (name && !titles.includes(name)) titles.push(name);
+      });
+    });
     const title = expert.self || expert.display_name === "关于你" ? t("nebula.self") : (expert.display_name || "");
+    const sourceLine = titles.length ? `<p>${esc(t("fact.sources", { names: titles.join(t("list.sep")) }))}</p>` : "";
     return `<article class="card">
       <h3>${esc(title)}</h3>
       <div class="muted">${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
-      <p>${esc(t("fact.sources", { names: sources }))}</p>
+      ${sourceLine}
       <ul>${facts || `<li>${esc(t("empty.factText"))}</li>`}</ul>
       <button class="danger" type="button" data-del="${esc(expert.name)}">${esc(t("action.delete"))}</button>
     </article>`;
@@ -916,7 +941,8 @@ async function openDocReview(docId) {
   if (!doc) return;
   state.reviewDoc = doc;
   const list = $("doc-review-list");
-  list.innerHTML = (doc.points || []).map((point) => `<label class="pending-item"><input type="checkbox" data-point="${esc(point.id)}" ${point.selected === false ? "" : "checked"} /> ${esc(point.text)}</label>`).join("") || `<div class="empty">${esc(t("docs.empty"))}</div>`;
+  list.innerHTML = (doc.points || []).map((point) => `<label class="doc-point"><input type="checkbox" data-point="${esc(point.id)}" ${point.selected === false ? "" : "checked"} /><span>${esc(point.text)}</span></label>`).join("") || `<div class="empty">${esc(t("docs.empty"))}</div>`;
+  showToast("");
   $("doc-review").hidden = false;
 }
 
@@ -947,6 +973,7 @@ async function finishDocImport() {
     if (job.title) showToast(t("docs.reading", { title: job.title || "" }));
     return;
   }
+  showToast("");
   state.docPolling = false;
   const doc = state.documents.find((item) => item.id === job.doc_id) || state.documents[state.documents.length - 1];
   if (doc) await openDocReview(doc.id);
@@ -1203,7 +1230,10 @@ $("composer").onsubmit = async (event) => {
   } finally {
     state.sending = false;
     $("send").disabled = false;
-    $("typing").hidden = true;
+    const typing = $("typing");
+    if (typing) typing.hidden = true;
+    const comet = $("recall-comet");
+    if (comet && state.view !== "nebula") comet.hidden = true;
     $("input").focus();
   }
 };

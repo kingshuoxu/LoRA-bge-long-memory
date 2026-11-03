@@ -448,11 +448,9 @@ class MemoryService:
         return None
 
     def _covered_reply(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
-        from memory_core.documents import run_covered, salient_runs
+        """整句文档事实。问句必须同时点到主体和属性，不能只因为人名相同就拿别的事实来答。"""
+        from memory_core.documents import attribute_in_statement
 
-        runs = salient_runs(content)
-        if not runs:
-            return None
         best = None
         best_len = 10**9
         for record in experts:
@@ -460,11 +458,15 @@ class MemoryService:
             for fact in memory.get("facts") or []:
                 if not isinstance(fact, dict) or fact.get("superseded"):
                     continue
-                statement = str(fact.get("statement") or fact.get("value") or "")
-                if not statement or not all(run_covered(run, statement) for run in runs):
+                if str(fact.get("source") or "") != "document":
+                    continue
+                statement = str(fact.get("statement") or "")
+                entity = str(fact.get("entity") or "")
+                if not attribute_in_statement(content, entity, statement):
                     continue
                 if len(statement) < best_len:
-                    best = (statement if statement.endswith("。") else statement + "。", record, fact)
+                    spoken = statement if statement.endswith("。") else statement + "。"
+                    best = (spoken, record, fact)
                     best_len = len(statement)
         if best is None:
             return None
@@ -585,6 +587,16 @@ class MemoryService:
                     return self._ack_turn(conv_id, user_msg, note, "statement_ack")
             experts = self.expert_records()
             asked = self_ask(content)
+            if asked == "assistant":
+                text = "I'm Yingyu. I remember what you tell me." if self._ui_locale() == "en" else "我是萤语，帮你记住你告诉我的事。"
+                recall = statement_trace()
+                recall["reason"] = "assistant_intro"
+                recall["reason_text"] = "这是在问助手自己，不使用关于你的记忆"
+                decision = route_with_trace(content, [], None)[0]
+                decision.reason = "assistant_intro"
+                decision.label = "基座"
+                decision.fired = False
+                return self._finish_turn(conv_id, user_msg, text, decision, recall)
             if asked and asked != "assistant":
                 answered = self_reply(content, experts, english=self._ui_locale() == "en")
                 if answered is not None:
@@ -1146,7 +1158,10 @@ class MemoryService:
                 training.append(item)
             seen_sources: set[str] = set()
             group_sources = []
-            for src in list(prior_sources) + list(sources):
+            fact_sources = []
+            for fact in training:
+                fact_sources.extend(list(fact.get("source_conversations") or []))
+            for src in list(prior_sources) + list(sources) + fact_sources:
                 if not isinstance(src, dict):
                     continue
                 sid = str(src.get("id") or "")
@@ -1184,6 +1199,7 @@ class MemoryService:
             item["gate"] = str(fact.get("gate") or "")
             item["id"] = fact.get("id") or ""
             item["raw"] = fact.get("raw") or ""
+            item["source"] = fact.get("source") or ""
             item["source_conversations"] = fact.get("source_conversations") or []
             item["gate_reason"] = fact.get("gate_reason") or ""
             expanded.append(item)

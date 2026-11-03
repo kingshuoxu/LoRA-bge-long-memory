@@ -576,11 +576,36 @@ def salient_runs(query: str) -> list[str]:
 
 
 def run_covered(run: str, text: str) -> bool:
+    """检索用。三字片段只说明这段文字沾边，不能拿来回忆一条事实。"""
     if run in text:
         return True
     if len(run) < 3:
         return False
     return any(run[index:index + 3] in text for index in range(0, len(run) - 2))
+
+
+_ASK_PARTICLES = (
+    "什么时候", "哪一年", "哪一天", "哪里", "哪儿", "为什么", "怎么", "多少", "什么", "哪天",
+    "吗", "呢", "谁", "了",
+)
+
+
+def attribute_in_statement(query: str, entity: str, statement: str) -> bool:
+    """主体和属性都要落在这句话里。只点到人名，或只剩「名字」这种共有字，都不算。"""
+    compact_statement = re.sub(r"[\s，,。.!！？?、]", "", statement or "")
+    asked = re.sub(r"[\s，,。.!！？?、]", "", query or "")
+    if not compact_statement or not asked:
+        return False
+    if entity and entity not in asked and entity not in compact_statement:
+        return False
+    if entity and entity in asked:
+        asked = asked.replace(entity, "")
+    for particle in _ASK_PARTICLES:
+        asked = asked.replace(particle, "")
+    asked = re.sub(r"[的是叫]", "", asked)
+    if len(asked) < 1:
+        return False
+    return asked in compact_statement
 
 
 def _bigrams(text: str) -> list[str]:

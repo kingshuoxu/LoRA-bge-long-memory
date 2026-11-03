@@ -28,6 +28,21 @@ async function waitText(page, text, timeout = 120000) {
   await page.getByText(text, { exact: false }).first().waitFor({ timeout });
 }
 
+async function assertAnswer(page, text) {
+  const body = page.locator("#messages .bubble.assistant .body").last();
+  await body.waitFor({ timeout: 120000 });
+  await page.waitForFunction((needle) => {
+    const nodes = [...document.querySelectorAll("#messages .bubble.assistant .body")];
+    const last = nodes[nodes.length - 1];
+    return last && last.textContent.includes(needle);
+  }, text);
+  const content = (await body.innerText()).trim();
+  if (!content) throw new Error(`回答是空的，期望包含「${text}」`);
+  if (!content.includes(text)) throw new Error(`回答没有「${text}」：${content}`);
+  const box = await body.boundingBox();
+  if (!box || box.height < 8 || box.width < 8) throw new Error(`回答没有画出来：${content}`);
+}
+
 async function send(page, text) {
   const input = page.locator("#input");
   await input.fill(text);
@@ -52,7 +67,7 @@ async function main() {
     LORA_MEMORY_HOME: home,
     LORA_MEMORY_MODELS: path.join(home, "models"),
     LORA_MEMORY_E2E_FAST: "1",
-    LORA_MEMORY_E2E_FILE: pdf,
+    LORA_MEMORY_E2E_FILES: [pdf, path.join(root, "tests/fixtures/wugang/wugang.docx"), path.join(root, "tests/fixtures/wugang/wugang.epub")].join("\n"),
     LORA_MEMORY_REPO_EXPERTS: "/tmp/yingyu-no-repo-experts",
   };
   const unpackedDir = path.join(root, "desktop", "dist", "linux-unpacked");
@@ -111,17 +126,43 @@ async function main() {
 
     await page.locator("#new-chat").click();
     await send(page, "我是谁？");
-    await page.waitForFunction(() => {
-      const body = document.querySelector("#messages .bubble.assistant .body");
-      return body && body.textContent.includes("你是徐金朔");
-    });
+    await assertAnswer(page, "你是徐金朔");
     await page.locator("#messages .recall-chip").getByText("关于你").waitFor();
     const who = await page.locator("#messages .bubble.assistant").last().innerText();
-    if (!who.includes("徐金朔")) throw new Error(`我是谁没有答出名字：${who}`);
     if (who.includes("通义") || who.includes("李华")) throw new Error(`基座编造了身份：${who}`);
     await shot(page, "06-who-am-i.png");
     note("Q: 我是谁？");
     note(`screen: ${who.replace(/\s+/g, " ").slice(0, 180)}`);
+
+    await send(page, "我叫什么名字？");
+    await assertAnswer(page, "徐金朔");
+    await shot(page, "06b-my-name.png");
+    await send(page, "我的名字是什么？");
+    await assertAnswer(page, "徐金朔");
+    await shot(page, "06c-name-what.png");
+    await send(page, "你是谁？");
+    await assertAnswer(page, "萤语");
+    const assistant = await page.locator("#messages .bubble.assistant .body").last().innerText();
+    if (assistant.includes("我是徐金朔") || assistant.includes("徐金朔")) {
+      throw new Error(`「你是谁」不该用用户的名字：${assistant}`);
+    }
+    await shot(page, "06d-who-are-you.png");
+    note("Q: 你是谁？ 没有把用户的名字当成助手");
+
+    await page.locator("#nav-nebula").click();
+    await page.waitForFunction(() => {
+      return [...document.querySelectorAll(".nebula-label")].some((node) => {
+        const text = node.textContent || "";
+        return text.includes("徐金朔") && !text.includes("我叫");
+      });
+    }, null, { timeout: 20000 });
+    await shot(page, "06e-nebula-value.png");
+    note("星云节点显示徐金朔，不是整句");
+
+    await page.locator("#open-settings").click();
+    await page.locator("#settings").waitFor({ state: "visible" });
+    await shot(page, "06f-settings.png");
+    await page.locator("#settings-close").click();
 
     await page.locator("#import-doc").click();
     await page.locator("#doc-review").waitFor({ state: "visible", timeout: 180000 });
@@ -155,16 +196,12 @@ async function main() {
     await shot(page, "09-salt.png");
 
     await send(page, "柯小满的海鸥叫什么？");
-    await page.waitForFunction(() => {
-      const bodies = [...document.querySelectorAll("#messages .bubble.assistant .body")];
-      const last = bodies[bodies.length - 1];
-      return last && last.textContent.includes("阿哨");
-    });
+    await assertAnswer(page, "阿哨");
     await waitText(page, "第9页");
     await shot(page, "10-gull.png");
 
     await send(page, "雾港的市长是谁？");
-    await waitText(page, "没有找到相关内容");
+    await assertAnswer(page, "没有找到相关内容");
     await waitText(page, "雾港灯塔志");
     await shot(page, "11-mayor.png");
     note("Q: 雾港的市长是谁？ → 《雾港灯塔志》里没有找到相关内容。");
@@ -203,16 +240,23 @@ async function main() {
 
     await page.locator("#new-chat").click();
     await send(page, "白鹭塔建于哪一年？");
-    await page.waitForFunction(() => {
-      const bodies = [...document.querySelectorAll("#messages .bubble.assistant .body")];
-      const last = bodies[bodies.length - 1];
-      return last && last.textContent.includes("1873") && last.textContent.includes("四十二米");
-    });
-    const memory = await page.locator("#messages .bubble.assistant").last().innerText();
+    await assertAnswer(page, "1873");
+    const memory = await page.locator("#messages .bubble.assistant .body").last().innerText();
     if (memory.includes("没有找到")) throw new Error("删书之后年份不该说找不到");
+    if (!memory.includes("四十二米")) throw new Error(`年份答句不完整：${memory}`);
     await shot(page, "16-year-from-memory.png");
     note("删书之后仍从记忆答出 1873");
     note(`screen: ${memory.replace(/\s+/g, " ").slice(0, 180)}`);
+
+    await page.locator("#import-doc").click();
+    await page.locator("#doc-review").waitFor({ state: "visible", timeout: 120000 });
+    await shot(page, "17-docx.png");
+    await page.locator("#doc-review-skip").click();
+    await page.locator("#import-doc").click();
+    await page.locator("#doc-review").waitFor({ state: "visible", timeout: 120000 });
+    await shot(page, "18-epub.png");
+    await page.locator("#doc-review-skip").click();
+    note("DOCX 和 EPUB 都能打开重点复核");
 
     fs.writeFileSync(path.join(shotDir, "e2e-report.md"), `${report.join("\n")}\n`, "utf8");
     note("E2E_OK");

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from memory_core.documents import (
+    attribute_in_statement,
     chunk_book,
     document_miss,
     extract_document,
@@ -71,6 +72,20 @@ class SelfRecallTests(unittest.TestCase):
         cat = pattern_extract("我的猫叫咪咪")[0]
         self.assertEqual(cat["entity"], "咪咪")
         self.assertNotEqual(cat["entity"], "我")
+
+
+class AttributeMatchTests(unittest.TestCase):
+    def test_subject_alone_does_not_count(self):
+        address = "沈星河的住址是青岚镇。"
+        bike = "沈星河的自行车颜色是朱红色。"
+        cat = "沈星河的猫的名字是云朵。"
+        self.assertFalse(attribute_in_statement("沈星河的狗叫什么？", "沈星河", address))
+        self.assertFalse(attribute_in_statement("沈星河的狗的名字是什么？", "沈星河", cat))
+        self.assertFalse(attribute_in_statement("沈星河的汽车颜色是什么？", "沈星河", bike))
+        self.assertFalse(attribute_in_statement("沈星河多大了？", "沈星河", address))
+        self.assertFalse(attribute_in_statement("沈星河喜欢吃什么？", "沈星河", address))
+        tower = "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。"
+        self.assertTrue(attribute_in_statement("白鹭塔建于哪一年？", "白鹭塔", tower))
 
 
 class WugangTests(unittest.TestCase):

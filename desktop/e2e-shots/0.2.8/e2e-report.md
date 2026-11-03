@@ -7,7 +7,14 @@ Q: 我叫徐金朔 → 记成使用者的名字
 截图 desktop/e2e-shots/0.2.8/05-name-trained.png
 截图 desktop/e2e-shots/0.2.8/06-who-am-i.png
 Q: 我是谁？
-screen: 你是徐金朔 回忆自 关于你 · 徐金朔 · 我叫徐金朔 记忆 · 关于你
+screen: 你是徐金朔。 回忆自 关于你 · 徐金朔 · 我叫徐金朔 记忆 · 关于你
+截图 desktop/e2e-shots/0.2.8/06b-my-name.png
+截图 desktop/e2e-shots/0.2.8/06c-name-what.png
+截图 desktop/e2e-shots/0.2.8/06d-who-are-you.png
+Q: 你是谁？ 没有把用户的名字当成助手
+截图 desktop/e2e-shots/0.2.8/06e-nebula-value.png
+星云节点显示徐金朔，不是整句
+截图 desktop/e2e-shots/0.2.8/06f-settings.png
 重点保持整句
 截图 desktop/e2e-shots/0.2.8/07-review.png
 截图 desktop/e2e-shots/0.2.8/08-year-page.png
@@ -22,4 +29,7 @@ Q: 雾港的市长是谁？ → 《雾港灯塔志》里没有找到相关内容
 截图 desktop/e2e-shots/0.2.8/15-doc-deleted.png
 截图 desktop/e2e-shots/0.2.8/16-year-from-memory.png
 删书之后仍从记忆答出 1873
-screen: 柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。 回忆自 白鹭塔 · 柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米 · 雾港灯塔志 记忆 · 白鹭塔
+screen: 柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。
+截图 desktop/e2e-shots/0.2.8/17-docx.png
+截图 desktop/e2e-shots/0.2.8/18-epub.png
+DOCX 和 EPUB 都能打开重点复核

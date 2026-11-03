@@ -481,6 +481,7 @@ main {
   gap: 5px;
   padding: 0 28px 8px;
 }
+.typing[hidden] { display: none !important; }
 .typing span {
   width: 7px;
   height: 7px;
@@ -492,16 +493,42 @@ main {
 .typing span:nth-child(3) { animation-delay: 0.3s; }
 .toast {
   position: fixed;
-  top: 16px;
-  left: 16px;
+  top: 76px;
+  left: 292px;
   z-index: 40;
-  width: min(220px, 30vw);
-  padding: 10px 12px;
+  width: min(360px, 46vw);
+  padding: 10px 14px;
   border-radius: 12px;
   background: #2a2b32;
   border: 1px solid var(--line);
   pointer-events: none;
 }
+.toast[hidden] { display: none !important; }
+#memory-view { padding: 8px 28px 32px; }
+#doc-review .sheet {
+  width: min(760px, 94vw);
+  display: flex;
+  flex-direction: column;
+  max-height: min(78vh, 720px);
+}
+#doc-review-list {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.doc-point {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  line-height: 1.65;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #1a1b1f;
+}
+.doc-point input { margin-top: 6px; flex: none; }
+.doc-point span { flex: 1; min-width: 0; white-space: normal; }
 .pending-box { padding: 0 4px 8px; }
 .pending-head, .doc-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
 .pending-list { display: flex; flex-direction: column; gap: 8px; }

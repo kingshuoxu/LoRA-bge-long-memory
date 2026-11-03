@@ -226,6 +226,13 @@ ipcMain.handle("update:check", () => updater.checkForUpdates());
 ipcMain.handle("update:install", () => updater.installUpdate());
 
 ipcMain.handle("docs:pick", async () => {
+  const queued = String(process.env.LORA_MEMORY_E2E_FILES || "");
+  if (queued.trim()) {
+    const parts = queued.split("\n").map((item) => item.trim()).filter(Boolean);
+    const next = parts.shift() || "";
+    process.env.LORA_MEMORY_E2E_FILES = parts.join("\n");
+    if (next) return next;
+  }
   if (process.env.LORA_MEMORY_E2E_FILE) return process.env.LORA_MEMORY_E2E_FILE;
   const result = await dialog.showOpenDialog({
     title: readLocale() === "en" ? "Import a document" : "导入文档",
