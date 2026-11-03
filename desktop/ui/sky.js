@@ -163,18 +163,28 @@
   }
 
   function draw(now) {
+    if ((canvas.clientWidth || 0) < 2 || (canvas.clientHeight || 0) < 2) return false;
     resize();
     gl.uniform2f(uRes, canvas.width, canvas.height);
     const frozen = staticSky || mode === "dim";
     gl.uniform1f(uTime, frozen ? 2.4 : (now - start) / 1000);
     gl.uniform1f(uDim, frozen ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return true;
   }
 
   function frame(now) {
     if (!running) return;
+    const painted = draw(now);
+    if (!painted) {
+      if (!document.body.classList.contains("sky-on")) {
+        running = false;
+        return;
+      }
+      requestAnimationFrame(frame);
+      return;
+    }
     if (staticSky || mode === "dim") {
-      draw(now);
       running = false;
       return;
     }
@@ -182,25 +192,20 @@
     if (document.hidden) return;
     if (now - last < 16) return;
     last = now;
-    draw(now);
   }
 
   function resume() {
-    if (staticSky || mode === "dim") {
-      draw(performance.now());
-      running = false;
-      return;
-    }
-    if (!running) {
-      running = true;
-      requestAnimationFrame(frame);
-    }
+    running = true;
+    requestAnimationFrame(frame);
   }
 
   window.addEventListener("resize", () => draw(performance.now()));
   window.sky = {
     setMode(next) {
       mode = next === "dim" ? "dim" : "full";
+      resume();
+    },
+    poke() {
       resume();
     },
   };

@@ -81,7 +81,9 @@ jobs:
 
       - name: Migration and extraction tests
         shell: bash
-        run: python -m unittest tests.test_legacy_wal tests.test_extract
+        run: |
+          python -m pip install pypdf
+          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs
 
       - name: Build embedded CPython and PyTorch
         shell: bash
@@ -157,6 +159,33 @@ jobs:
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
         run: bash packaging/appimage-upgrade.sh
+
+      - name: Full mode document check
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          PYTHONUNBUFFERED: "1"
+          HF_HUB_DISABLE_TELEMETRY: "1"
+        run: |
+          set -euo pipefail
+          script=""
+          for candidate in $(find desktop/dist -type f -name e2e-check.sh); do
+            script="$candidate"
+            break
+          done
+          if [ -z "$script" ]; then
+            echo "packaged runtime was not found" >&2
+            exit 1
+          fi
+          root="$(dirname "$script")"
+          export PYTHONPATH="$root/app${PYTHONPATH:+:$PYTHONPATH}"
+          export LD_LIBRARY_PATH="$root/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          unset LORA_MEMORY_E2E_FAST
+          "$root/runtime/bin/python3" -m memory_core.full_mode_check \
+            --models "$LORA_MEMORY_MODELS" \
+            --book "${GITHUB_WORKSPACE}/tests/fixtures/wugang/wugang_chrome.pdf" \
+            --device cpu
 
       - name: Packaged training check
         shell: bash

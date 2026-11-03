@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from memory_core.extract import speaker_pronoun
+from memory_core.extract import is_self_entity, speaker_pronoun
 from memory_core.prompts import has_cjk
 
 
@@ -40,7 +40,7 @@ def self_ask(query: str) -> str | None:
 
 def _is_user_name(fact: dict) -> bool:
     entity = str(fact.get("entity") or "").strip()
-    if not speaker_pronoun(entity):
+    if not is_self_entity(entity):
         return False
     attr = str(fact.get("attr") or "")
     if "猫" in attr or "狗" in attr:
@@ -66,7 +66,7 @@ def _active(experts: list[Any]) -> list[dict]:
 
 
 def self_facts(experts: list[Any]) -> list[dict]:
-    return [fact for fact in _active(experts) if speaker_pronoun(str(fact.get("entity") or ""))]
+    return [fact for fact in _active(experts) if is_self_entity(str(fact.get("entity") or ""))]
 
 
 def _finish(text: str) -> str:
@@ -80,7 +80,10 @@ def _finish(text: str) -> str:
 
 def _voice(statement: str, entity: str) -> str:
     text = str(statement or "").strip()
-    if not speaker_pronoun(entity) and not text.startswith("我"):
+    text = re.sub(r"^(用户|user|关于你)(的名字是|的姓名是|叫|是)", r"我\2", text, flags=re.IGNORECASE)
+    if text.startswith("用户"):
+        text = "我" + text[len("用户"):]
+    if not speaker_pronoun(entity) and not is_self_entity(entity) and not text.startswith("我"):
         return _finish(text)
     if not has_cjk(text):
         spoken = text
