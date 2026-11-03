@@ -61,12 +61,12 @@ GitHub Actions 工作流 `.github/workflows/desktop-packages.yml` 会打出这�
 
 ### 用 AppImage（不需要 root）
 
-1. 从工作流产物 `lora-memory-linux-appimage-deb` 里取出 `LoRA-bge-memory-0.2.0-linux-x86_64.AppImage`（文件名里的架构是 `x86_64`，不是 `x64`）。
+1. 从工作流产物 `lora-memory-linux-appimage-deb` 里取出 `Yingyu-0.2.0-linux-x86_64.AppImage`（文件名里的架构是 `x86_64`，不是 `x64`）。
 2. 在 x86_64 的 Ubuntu 22.04 或 24.04 上：
 
 ```bash
-chmod +x LoRA-bge-memory-*-linux-x86_64.AppImage
-./LoRA-bge-memory-*-linux-x86_64.AppImage --appimage-extract
+chmod +x Yingyu-*-linux-x86_64.AppImage
+./Yingyu-*-linux-x86_64.AppImage --appimage-extract
 bash squashfs-root/resources/e2e-check.sh
 ```
 
@@ -81,8 +81,8 @@ sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
 没有 `libfuse2` / `libfuse2t64`、又不想装时，用下面这条启动，它会把包解到临时目录再运行，不挂 FUSE：
 
 ```bash
-chmod +x LoRA-bge-memory-*-linux-x86_64.AppImage
-APPIMAGE_EXTRACT_AND_RUN=1 ./LoRA-bge-memory-*-linux-x86_64.AppImage
+chmod +x Yingyu-*-linux-x86_64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./Yingyu-*-linux-x86_64.AppImage
 ```
 
 脚本结束时看这几行：
@@ -104,17 +104,17 @@ E2E_CORRECTION 1/1
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ./LoRA-bge-memory-*-linux-amd64.deb
+sudo apt-get install -y ./Yingyu-*-linux-amd64.deb
 lora-bge-memory-e2e
 ```
 
-`apt` 会装上 Electron 依赖的图形库。deb 的依赖写成 `libgtk-3-0 | libgtk-3-0t64` 这一类二选一，Ubuntu 22.04 和 24.04 都能解析；24.04 上已实际安装通过。安装脚本会放两个命令：`/usr/bin/lora-bge-memory` 指向 `/opt/LoRA-bge-memory/lora-bge-memory`，`lora-bge-memory-e2e` 跑无界面验收。验收命令本身仍然不打开窗口。
+`apt` 会装上 Electron 依赖的图形库。deb 的依赖写成 `libgtk-3-0 | libgtk-3-0t64` 这一类二选一，Ubuntu 22.04 和 24.04 都能解析；24.04 上已实际安装通过。安装脚本会放两个命令：`/usr/bin/lora-bge-memory` 指向 `/opt/Yingyu/lora-bge-memory`，`lora-bge-memory-e2e` 跑无界面验收。验收命令本身仍然不打开窗口。
 
-同一条安装脚本把 `/opt/LoRA-bge-memory/chrome-sandbox` 设成 `4755`（root setuid）。没有这个权限时，普通用户开窗口可能报 sandbox 错误。可以再执行一次：
+同一条安装脚本把 `/opt/Yingyu/chrome-sandbox` 设成 `4755`（root setuid）。没有这个权限时，普通用户开窗口可能报 sandbox 错误。可以再执行一次：
 
 ```bash
-sudo chown root:root /opt/LoRA-bge-memory/chrome-sandbox
-sudo chmod 4755 /opt/LoRA-bge-memory/chrome-sandbox
+sudo chown root:root /opt/Yingyu/chrome-sandbox
+sudo chmod 4755 /opt/Yingyu/chrome-sandbox
 ```
 
 或者临时用 `lora-bge-memory --no-sandbox`。
@@ -241,7 +241,7 @@ DirectML 不用于训练。研究记录里它的 loss 和 CPU 对不上。
 Linux / Windows 安装包里的 PyTorch 是 CPU 轮子，`torch.cuda.is_available()` 为假。有 NVIDIA GPU、又想用 CUDA 时，在安装包自带的解释器里换成 CUDA 轮子，例如：
 
 ```bash
-/opt/LoRA-bge-memory/resources/runtime/bin/python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 --force-reinstall
+/opt/Yingyu/resources/runtime/bin/python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 --force-reinstall
 ```
 
 这一步体积大，而且这次提交没有在 GPU 上跑过。

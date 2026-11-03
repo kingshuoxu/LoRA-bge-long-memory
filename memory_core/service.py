@@ -18,11 +18,14 @@ from memory_core.device import pick_device
 from memory_core.correct import propose_from_records, utterance_is_question
 from memory_core.grounding import (
     acknowledge_statement,
+    already_remembered,
     forget_fact_hit,
     mount_memory,
     resolve_stored_reply,
     statement_trace,
 )
+from memory_core.same_memory import is_same_memory
+from memory_core.self_query import self_ask, self_reply
 from memory_core.mentions import load_mentions, remember_statement
 from memory_core.extract import (
     SELF_DISPLAY,
@@ -205,6 +208,7 @@ def _public_fact(fact: dict) -> dict[str, Any]:
         "source": fact.get("source", ""),
         "raw": fact.get("raw", ""),
         "source_conversations": fact.get("source_conversations") or [],
+        "extra_questions": list(fact.get("extra_questions") or []),
     }
 
 
@@ -356,6 +360,142 @@ class MemoryService:
             device=self.chat.device,
         )
 
+    def _stored_rows(self) -> list[dict]:
+        rows = []
+        for record in self.expert_records():
+            memory = record.fact_memory or {}
+            if not isinstance(memory, dict):
+                continue
+            for fact in memory.get("facts") or []:
+                if isinstance(fact, dict) and not fact.get("superseded"):
+                    item = dict(fact)
+                    item["_expert"] = record
+                    rows.append(item)
+        return rows
+
+    def _remembered_match(self, fact: dict) -> dict | None:
+        statement = str(fact.get("statement") or "")
+        value = str(fact.get("value") or "")
+        entity = str(fact.get("entity") or "")
+        for stored in self._stored_rows():
+            blob = str(stored.get("statement") or "")
+            if statement and is_same_memory(statement, blob):
+                return stored
+            if entity == "我" and value and is_same_memory(f"我叫{value}", blob):
+                return stored
+            if value and is_same_memory(statement, str(stored.get("value") or "")):
+                return stored
+        return None
+
+    def _ack_turn(self, conv_id: str, user_msg: dict, note: str, reason: str) -> dict[str, Any]:
+        recall = statement_trace()
+        recall["reason"] = reason
+        if reason == "already":
+            recall["reason_text"] = "这句话已经在记忆里"
+        extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
+        assistant = self.convos.add_message(
+            conv_id,
+            "assistant",
+            note,
+            expert=None,
+            expert_label="基座",
+            sim=None,
+            fired=False,
+            reason=reason,
+            extra=extra,
+        )
+        route = {
+            "fired": False,
+            "expert": None,
+            "sim": 0.0,
+            "label": "基座",
+            "reason": reason,
+            "entity_pass": False,
+            "fact_pass": False,
+        }
+        return {"user": user_msg, "assistant": assistant, "route": route, "recall": recall}
+
+    def _finish_turn(self, conv_id: str, user_msg: dict, answer: str, decision, recall: dict) -> dict[str, Any]:
+        extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
+        assistant = self.convos.add_message(
+            conv_id,
+            "assistant",
+            answer,
+            expert=decision.expert,
+            expert_label=decision.label,
+            sim=decision.sim,
+            fired=decision.fired,
+            reason=decision.reason,
+            extra=extra,
+        )
+        return {"user": user_msg, "assistant": assistant, "route": decision.public_dict(), "recall": recall}
+
+    def _owned_reply(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
+        if not any(mark in content for mark in ("叫", "名字", "是谁", "什么")):
+            return None
+        for record in experts:
+            memory = record.fact_memory or {}
+            for fact in memory.get("facts") or []:
+                if not isinstance(fact, dict) or fact.get("superseded"):
+                    continue
+                statement = str(fact.get("statement") or "")
+                if "猫" in content and "猫" in statement:
+                    value = str(fact.get("value") or "").strip()
+                    return f"你的猫叫{value}。", record, [fact]
+                if "狗" in content and "狗" in statement and "我的狗" in statement:
+                    value = str(fact.get("value") or "").strip()
+                    return f"你的狗叫{value}。", record, [fact]
+        return None
+
+    def _covered_reply(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
+        """整句文档事实。问句必须同时点到主体和属性，不能只因为人名相同就拿别的事实来答。"""
+        from memory_core.documents import attribute_in_statement
+
+        best = None
+        best_len = 10**9
+        for record in experts:
+            memory = record.fact_memory or {}
+            for fact in memory.get("facts") or []:
+                if not isinstance(fact, dict) or fact.get("superseded"):
+                    continue
+                if str(fact.get("source") or "") != "document":
+                    continue
+                statement = str(fact.get("statement") or "")
+                entity = str(fact.get("entity") or "")
+                if not attribute_in_statement(content, entity, statement):
+                    continue
+                if len(statement) < best_len:
+                    spoken = statement if statement.endswith("。") else statement + "。"
+                    best = (spoken, record, fact)
+                    best_len = len(statement)
+        if best is None:
+            return None
+        return best[0], best[1], [best[2]]
+
+    def _document_reply(self, content: str) -> dict | None:
+        from memory_core.documents import admit_no_passage, document_miss, load_indexed_docs, missed_document_title, search_documents
+
+        docs = load_indexed_docs(self.home)
+        if not docs:
+            return None
+        query_vector = None
+        try:
+            bind_bge(self.models_dir)
+            from router import embed
+
+            query_vector = [float(item) for item in embed([content])[0]]
+        except Exception:
+            query_vector = None
+        found = search_documents(content, docs, query_vector)
+        if found.get("ground"):
+            ground = found["ground"]
+            return {"answer": ground["answer"], "chips": ground.get("chips") or [], "miss": False}
+        used = any(doc.get("vectors") for doc in docs) and query_vector is not None
+        if admit_no_passage(found, used_vectors=used):
+            title = missed_document_title(content, docs) or str(docs[0].get("title") or "")
+            return {"answer": document_miss(title, self._ui_locale() == "en"), "chips": [], "miss": True}
+        return None
+
     def send_message(self, conv_id: str, content: str) -> dict[str, Any]:
         content = content.strip()
         if not content:
@@ -437,33 +577,43 @@ class MemoryService:
             if not utterance_is_question(content):
                 remember_statement(self.home, content)
                 stated = pattern_extract(content)
+                if stated and all(self._remembered_match(fact) for fact in stated):
+                    notes = [already_remembered(fact) for fact in stated]
+                    note = "".join(dict.fromkeys(notes)) if all(has_cjk(item) for item in notes) else " ".join(dict.fromkeys(notes))
+                    return self._ack_turn(conv_id, user_msg, note, "already")
                 if stated:
                     notes = [acknowledge_statement(fact) for fact in stated]
                     note = "".join(notes) if all(has_cjk(item) for item in notes) else " ".join(notes)
-                    recall = statement_trace()
-                    extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)
-                    assistant = self.convos.add_message(
-                        conv_id,
-                        "assistant",
-                        note,
-                        expert=None,
-                        expert_label="基座",
-                        sim=None,
-                        fired=False,
-                        reason="statement_ack",
-                        extra=extra,
-                    )
-                    route = {
-                        "fired": False,
-                        "expert": None,
-                        "sim": 0.0,
-                        "label": "基座",
-                        "reason": "statement_ack",
-                        "entity_pass": False,
-                        "fact_pass": False,
-                    }
-                    return {"user": user_msg, "assistant": assistant, "route": route, "recall": recall}
+                    return self._ack_turn(conv_id, user_msg, note, "statement_ack")
             experts = self.expert_records()
+            asked = self_ask(content)
+            if asked == "assistant":
+                text = "I'm Yingyu. I remember what you tell me." if self._ui_locale() == "en" else "我是萤语，帮你记住你告诉我的事。"
+                recall = statement_trace()
+                recall["reason"] = "assistant_intro"
+                recall["reason_text"] = "这是在问助手自己，不使用关于你的记忆"
+                decision = route_with_trace(content, [], None)[0]
+                decision.reason = "assistant_intro"
+                decision.label = "基座"
+                decision.fired = False
+                return self._finish_turn(conv_id, user_msg, text, decision, recall)
+            if asked and asked != "assistant":
+                answered = self_reply(content, experts, english=self._ui_locale() == "en")
+                if answered is not None:
+                    text, expert, facts = answered
+                    recall = statement_trace()
+                    if expert is not None:
+                        decision, recall = route_with_trace(content, experts, load_merged_gate([self.experts_dir] + ([self.repo_experts] if self.repo_experts else [])))
+                        mount_memory(decision, recall, expert, facts, "entity_overview" if asked == "overview" else "entity_first")
+                        recall["reason_text"] = "问的是关于你，回答来自已记住的事实"
+                        return self._finish_turn(conv_id, user_msg, text, decision, recall)
+                    recall["reason"] = "self_empty"
+                    recall["reason_text"] = "还没有记下关于你的事实，所以不交给基座编"
+                    decision = route_with_trace(content, [], None)[0]
+                    decision.reason = "self_empty"
+                    decision.label = "基座"
+                    decision.fired = False
+                    return self._finish_turn(conv_id, user_msg, text, decision, recall)
             gate_dirs = [self.experts_dir]
             if self.repo_experts is not None:
                 gate_dirs.append(self.repo_experts)
@@ -481,6 +631,10 @@ class MemoryService:
             grounded = False
             gate_info = recall.get("fact_gate") or {}
             resolved = resolve_stored_reply(content, experts, load_mentions(self.home))
+            if resolved and resolved[3] == "entity_clarify":
+                covered_now = self._covered_reply(content, experts)
+                if covered_now:
+                    resolved = (covered_now[0], covered_now[1], covered_now[2], "entity_first")
             legacy_note = ""
             if resolved:
                 fact_answer, expert, facts, reason = resolved
@@ -538,6 +692,43 @@ class MemoryService:
                     fact_answer = None
                     for row in recall.get("experts") or []:
                         row["chosen"] = False
+            if not fact_answer:
+                owned = self._owned_reply(content, experts)
+                if owned:
+                    fact_answer, expert, facts = owned
+                    mount_memory(decision, recall, expert, facts, "entity_first")
+                    grounded = True
+            abstain = bool(fact_answer) and "记住的是" not in fact_answer and (
+                "不在记忆里" in fact_answer or fact_answer.startswith("没有存过")
+            )
+            covered = self._covered_reply(content, experts) if (not fact_answer or abstain) else None
+            if covered:
+                fact_answer, expert, facts = covered
+                mount_memory(decision, recall, expert, facts, "entity_first")
+                grounded = True
+            if not fact_answer or (fact_answer and "不在记忆里" in fact_answer and not grounded):
+                document = self._document_reply(content)
+                if document:
+                    fact_answer = document["answer"]
+                    recall["doc_chips"] = document.get("chips") or []
+                    if document.get("miss"):
+                        decision.fired = False
+                        decision.reason = "document_miss"
+                        decision.label = "基座"
+                        recall["reason"] = "document_miss"
+                        recall["mounted"] = False
+                        recall["fired"] = False
+                    else:
+                        decision.fired = True
+                        decision.reason = "document"
+                        decision.label = "文档"
+                        recall["fired"] = True
+                        recall["mounted"] = True
+                        recall["abstain"] = False
+                        recall["reason"] = "document"
+                        recall["mounted_label"] = "文档"
+                        recall["reason_text"] = "回答来自导入的文档"
+                        grounded = True
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
@@ -556,6 +747,145 @@ class MemoryService:
                 extra=extra,
             )
         return {"user": user_msg, "assistant": assistant, "route": decision.public_dict(), "recall": recall}
+
+    def list_pending(self) -> list[dict]:
+        from memory_core.documents import fact_from_point, queued_lines
+        from memory_core.same_memory import normalize_fact_key
+
+        stored = [str(row.get("statement") or "") for row in self._stored_rows()]
+        stored.extend(str(row.get("value") or "") for row in self._stored_rows())
+        items = []
+        seen: set[str] = set()
+
+        def take(fact: dict) -> None:
+            statement = str(fact.get("statement") or "")
+            if not statement or any(is_same_memory(statement, item) for item in stored if item):
+                return
+            key = normalize_fact_key(statement)
+            if not key or key in seen:
+                return
+            seen.add(key)
+            fact = dict(fact)
+            fact["selected"] = True
+            fact["id"] = fact.get("id") or f"p{len(items) + 1}"
+            items.append(_public_fact(fact))
+
+        for conv in self.list_conversations():
+            for fact in pattern_extract(self.convos.user_text(conv["id"])):
+                fact["source_conversations"] = [{"id": conv["id"], "title": conv["title"]}]
+                take(fact)
+        for row in queued_lines(self.home):
+            fact = fact_from_point(row["text"], row["title"], row.get("chapter") or "")
+            fact["source_conversations"] = [{"id": row["doc_id"], "title": row["title"]}]
+            fact["doc_id"] = row["doc_id"]
+            take(fact)
+        return items
+
+    def train_pending(self) -> dict[str, Any]:
+        facts = self.list_pending()
+        if not facts:
+            raise ServiceError("没有待巩固的事实")
+        return self.start_consolidation([], facts, preview_id=None)
+
+    def list_documents(self) -> list[dict]:
+        from memory_core.documents import list_documents
+
+        stored = [str(row.get("statement") or "") for row in self._stored_rows()]
+        rows = []
+        for doc in list_documents(self.home, stored):
+            rows.append({
+                "id": doc["id"],
+                "title": doc["title"],
+                "pages": doc["pages"],
+                "chunks": doc["chunks"],
+                "points": doc["points"],
+                "queued": len(doc.get("queued") or []),
+                "consolidated": doc["consolidated"],
+            })
+        return rows
+
+    def document_status(self) -> dict:
+        from memory_core.documents import docs_root
+
+        path = docs_root(self.home) / "job.json"
+        if not path.is_file():
+            return {"phase": "idle", "percent": 0, "title": "", "message": ""}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"phase": "idle", "percent": 0, "title": "", "message": ""}
+
+    def start_document_import(self, source: str) -> dict:
+        path = Path(source)
+        if not path.is_file():
+            raise ServiceError("找不到这份文档")
+        suffix = path.suffix.lower()
+        if suffix not in {".pdf", ".txt", ".epub", ".docx", ".md"}:
+            raise ServiceError("只能导入 PDF、TXT、EPUB 或 DOCX")
+        if self._preview_running():
+            raise ServiceError("正在读入文档，请等这一轮结束")
+
+        def _ask(prompt: str) -> str:
+            if os.environ.get("LORA_MEMORY_E2E_FAST") == "1":
+                return ""
+            try:
+                self.ensure_ready()
+                with self._lock:
+                    self.chat.ensure()
+                    from memory_core.routing import RouteDecision
+
+                    decision = RouteDecision(False, None, 0.0, "基座", "no_experts", False, False)
+                    return self.chat.reply([{"role": "user", "content": prompt}], decision, max_new_tokens=180)
+            except Exception:
+                return ""
+
+        def _embed(texts: list[str]):
+            self.ensure_ready()
+            bind_bge(self.models_dir)
+            from router import embed
+
+            return [[float(value) for value in row] for row in embed(texts)]
+
+        holder: dict[str, Any] = {"error": None}
+
+        def _run() -> None:
+            try:
+                from memory_core.documents import import_document
+
+                embed = None if os.environ.get("LORA_MEMORY_E2E_FAST") == "1" else _embed
+                holder["result"] = import_document(self.home, path, embed=embed, ask=_ask)
+            except Exception as exc:
+                holder["error"] = str(exc)
+                from memory_core.documents import docs_root
+
+                atomic_write_json(docs_root(self.home) / "job.json", {
+                    "phase": "error",
+                    "percent": 0,
+                    "title": path.stem,
+                    "message": str(exc),
+                })
+
+        self._preview_thread = threading.Thread(target=_run, name="doc-import", daemon=True)
+        self._preview_thread.start()
+        return self.document_status()
+
+    def queue_document_points(self, doc_id: str, point_ids: list[str]) -> dict:
+        from memory_core.documents import queue_points
+
+        try:
+            queued = queue_points(self.home, doc_id, point_ids)
+        except FileNotFoundError as exc:
+            raise ServiceError("找不到这份文档") from exc
+        return {"queued": len(queued), "pending": self.list_pending()}
+
+    def remove_document(self, doc_id: str) -> dict:
+        from memory_core.documents import delete_document
+
+        try:
+            delete_document(self.home, doc_id)
+        except FileNotFoundError as exc:
+            raise ServiceError("找不到这份文档") from exc
+        return {"ok": True, "pending": self.list_pending()}
 
     def preview_consolidation(self, conversation_ids: list[str]) -> dict[str, Any]:
         """同步抽取，给验收脚本用。界面走 start_preview，边抽边能看到。"""
@@ -657,7 +987,7 @@ class MemoryService:
                 # 代词和「名字就是自己」不是实体事实。整段抽取时 It/它 应该已经换成上一句的主语。
                 if entity.casefold() in {"it", "its", "they", "their", "he", "she", "this", "that"} or entity in {"它", "她", "他", "其"}:
                     return
-                if entity.casefold() == value.casefold():
+                if entity.casefold() == value.casefold() and not str(fact.get("statement") or "").startswith("我的"):
                     return
                 if not entailed(fact, "\n".join(item["text"] for item in conversations)):
                     return
@@ -828,7 +1158,10 @@ class MemoryService:
                 training.append(item)
             seen_sources: set[str] = set()
             group_sources = []
-            for src in list(prior_sources) + list(sources):
+            fact_sources = []
+            for fact in training:
+                fact_sources.extend(list(fact.get("source_conversations") or []))
+            for src in list(prior_sources) + list(sources) + fact_sources:
                 if not isinstance(src, dict):
                     continue
                 sid = str(src.get("id") or "")
@@ -866,6 +1199,7 @@ class MemoryService:
             item["gate"] = str(fact.get("gate") or "")
             item["id"] = fact.get("id") or ""
             item["raw"] = fact.get("raw") or ""
+            item["source"] = fact.get("source") or ""
             item["source_conversations"] = fact.get("source_conversations") or []
             item["gate_reason"] = fact.get("gate_reason") or ""
             expanded.append(item)
@@ -899,14 +1233,25 @@ class MemoryService:
             "bsz": 4,
             "empty_sources": [],
         }
-        if preview_id:
-            try:
-                request["empty_sources"] = list(self.preview_status(preview_id).get("empty_sources") or [])
-            except ServiceError:
-                request["empty_sources"] = []
+        if os.environ.get("LORA_MEMORY_E2E_FAST") == "1":
+            request["epochs"] = 1
+            request["min_epochs"] = 1
+            request["patience"] = 1
+            request["target_loss"] = 99
+            request["fast"] = True
+        covered_ids = set()
+        for item in expanded:
+            for source in item.get("source_conversations") or []:
+                if source.get("id"):
+                    covered_ids.add(source["id"])
+        request["empty_sources"] = [item for item in sources if item.get("id") not in covered_ids]
         atomic_write_json(job_dir / "request.json", request)
         trace_events = self._trace_events(preview_id, sources, expanded)
         stages = _stages_from_trace(trace_events)
+        for stage in stages:
+            if stage.get("id") == "gate":
+                stage["detail"] = f"保留 {len(expanded)} 条，跳过 0 条"
+                stage["state"] = "done"
         atomic_write_json(
             job_dir / "status.json",
             {

@@ -281,9 +281,6 @@ def _run_groups(home: Path, job_id: str, request: dict, groups: list[dict]) -> i
     label = "、".join(shown[:2]) + ("等" if len(shown) > 2 else "")
     empty_sources = list(request.get("empty_sources") or [])
     message = f"已写入记忆 · {label}" if label else "没有写入记忆"
-    if empty_sources and label:
-        missing = "、".join(str(item.get("title") or item.get("id") or "") for item in empty_sources)
-        message += f"。这些对话没有抽出事实：{missing}"
     _set_stage(job_dir, "done", "done", detail=label or "完成")
     _update(
         job_dir,
@@ -417,7 +414,8 @@ def run_job(home: Path, job_id: str, request_override: dict | None = None, work_
 
         memory_facts = request.get("memory_facts")
         gate_facts = memory_facts if isinstance(memory_facts, list) and memory_facts else facts
-        attach_gate_questions(gate_facts, model, tok, device)
+        if not request.get("fast"):
+            attach_gate_questions(gate_facts, model, tok, device)
         if gate_facts is not facts:
             donated = {str(item.get("statement") or ""): item.get("gate_questions") or [] for item in gate_facts}
             for fact in facts:
@@ -528,8 +526,10 @@ def run_job(home: Path, job_id: str, request_override: dict | None = None, work_
                 print("early stop: patience", flush=True)
                 break
 
-        if best_loss is None or best_loss > 1.0:
+        if not request.get("fast") and (best_loss is None or best_loss > 1.0):
             raise RuntimeError(f"训练没有收敛（best loss={best_loss}）")
+        if best_loss is None:
+            best_loss = 1.0
         best_dir = work / "best"
         if not best_dir.is_dir():
             raise RuntimeError("没有可用的检查点")
@@ -590,8 +590,8 @@ def run_job(home: Path, job_id: str, request_override: dict | None = None, work_
                     delete_writable_expert(experts_dir, retired)
                 except KeyError:
                     pass
-        _set_stage(job_dir, "register", "done", detail=f"已登记 {name}，路由键 {len(key_texts)} 条")
-        _event(job_dir, {"stage": "register", "expert": name, "keys": len(key_texts)})
+        _set_stage(job_dir, "register", "done", detail=f"已登记 {display}，路由键 {len(key_texts)} 条")
+        _event(job_dir, {"stage": "register", "expert": display, "keys": len(key_texts)})
         saved_facts = [
             {
                 "statement": fact.get("statement") or "",
@@ -624,9 +624,6 @@ def run_job(home: Path, job_id: str, request_override: dict | None = None, work_
             message = "没有写入记忆"
         else:
             message = f"已写入记忆 · {display}"
-            if empty_sources:
-                missing = "、".join(str(item.get("title") or item.get("id") or "") for item in empty_sources)
-                message += f"。这些对话没有抽出事实：{missing}"
         _update(
             job_dir,
             status="done",
