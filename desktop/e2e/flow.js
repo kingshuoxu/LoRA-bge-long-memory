@@ -39,6 +39,7 @@ async function assertAnswer(page, text) {
   const content = (await body.innerText()).trim();
   if (!content) throw new Error(`回答是空的，期望包含「${text}」`);
   if (!content.includes(text)) throw new Error(`回答没有「${text}」：${content}`);
+  await body.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
   const box = await body.boundingBox();
   if (!box || box.height < 8 || box.width < 8) throw new Error(`回答没有画出来：${content}`);
   await page.locator("#typing").waitFor({ state: "hidden", timeout: 20000 });
