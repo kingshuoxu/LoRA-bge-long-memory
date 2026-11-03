@@ -619,6 +619,14 @@ def resolve_stored_reply(
         value = str(fact.get("value") or fact.get("answer") or "").strip()
         if value:
             return value, expert, [fact], "entity_first"
+    from memory_core.documents import covered_fact
+
+    hit = covered_fact(content, facts)
+    if hit is not None:
+        statement = str(hit.get("statement") or hit.get("value") or "").strip()
+        if statement and statement[-1] not in "。.!！？?":
+            statement += "。"
+        return statement, expert, [hit], "entity_first"
     return _unmatched(name, content, expert)
 
 

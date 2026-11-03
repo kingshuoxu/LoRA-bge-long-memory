@@ -8,7 +8,7 @@ const path = require("path");
 const { _electron: electron } = require("playwright");
 
 const root = path.resolve(__dirname, "..", "..");
-const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.8");
+const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.9");
 const pdf = path.join(root, "tests", "fixtures", "wugang", "wugang_chrome.pdf");
 const report = [];
 
@@ -41,6 +41,7 @@ async function assertAnswer(page, text) {
   if (!content.includes(text)) throw new Error(`回答没有「${text}」：${content}`);
   const box = await body.boundingBox();
   if (!box || box.height < 8 || box.width < 8) throw new Error(`回答没有画出来：${content}`);
+  await page.locator("#typing").waitFor({ state: "hidden", timeout: 20000 });
 }
 
 async function send(page, text) {
@@ -156,11 +157,20 @@ async function main() {
         return text.includes("徐金朔") && !text.includes("我叫");
       });
     }, null, { timeout: 20000 });
+    const nebulaText = await page.locator("#nebula-view").innerText();
+    if (nebulaText.includes("未调用记忆")) throw new Error("星云页不该出现「未调用记忆」");
     await shot(page, "06e-nebula-value.png");
     note("星云节点显示徐金朔，不是整句");
 
+    await page.locator("#nav-chat").click();
     await page.locator("#open-settings").click();
-    await page.locator("#settings").waitFor({ state: "visible" });
+    await page.locator("#settings .sheet").waitFor({ state: "visible" });
+    const sheetColor = await page.locator("#settings .sheet").evaluate((el) => getComputedStyle(el).backgroundColor);
+    const parts = (sheetColor.match(/rgba?\(([^)]+)\)/) || ["", ""])[1].split(",").map((item) => item.trim());
+    const alpha = parts.length >= 4 ? Number(parts[3]) : 1;
+    if (!sheetColor || !(alpha >= 0.95)) throw new Error(`设置面板不够实：${sheetColor}`);
+    const hint = await page.locator("#settings").innerText();
+    if (/latest-|blockmap/i.test(hint)) throw new Error("设置里不该出现安装包的技术文件名");
     await shot(page, "06f-settings.png");
     await page.locator("#settings-close").click();
 
@@ -249,12 +259,15 @@ async function main() {
     note(`screen: ${memory.replace(/\s+/g, " ").slice(0, 180)}`);
 
     await page.locator("#import-doc").click();
-    await page.locator("#doc-review").waitFor({ state: "visible", timeout: 120000 });
+    await page.locator("#doc-review-source").getByText("DOCX").waitFor({ timeout: 120000 });
     await shot(page, "17-docx.png");
     await page.locator("#doc-review-skip").click();
     await page.locator("#import-doc").click();
-    await page.locator("#doc-review").waitFor({ state: "visible", timeout: 120000 });
+    await page.locator("#doc-review-source").getByText("EPUB").waitFor({ timeout: 120000 });
     await shot(page, "18-epub.png");
+    const docxShot = fs.readFileSync(path.join(shotDir, "17-docx.png"));
+    const epubShot = fs.readFileSync(path.join(shotDir, "18-epub.png"));
+    if (docxShot.equals(epubShot)) throw new Error("DOCX 和 EPUB 的复核截图不能是同一张");
     await page.locator("#doc-review-skip").click();
     note("DOCX 和 EPUB 都能打开重点复核");
 

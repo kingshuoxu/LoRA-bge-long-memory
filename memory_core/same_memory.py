@@ -15,6 +15,11 @@ def fold_statement(text: str) -> str:
 
 def normalize_fact_key(text: str) -> str:
     key = fold_statement(text)
+    key = re.sub(r"^(用户|user|关于你)(的名字是|的姓名是|叫|是)", "我叫", key)
+    if key.startswith("我的名字是"):
+        key = "我叫" + key[len("我的名字是"):]
+    if key.startswith("我的姓名是"):
+        key = "我叫" + key[len("我的姓名是"):]
     if key.startswith("我是"):
         key = "我叫" + key[len("我是"):]
     return key
