@@ -104,8 +104,24 @@ function installMenu() {
       ],
     },
   ];
+  template.push({
+    label: en ? "Help" : "帮助",
+    submenu: [{
+      label: en ? "About Yingyu" : "关于萤语",
+      click: () => {
+        dialog.showMessageBox({
+          type: "info",
+          title: en ? "About Yingyu" : "关于萤语",
+          message: en ? "Yingyu" : "萤语",
+          detail: en
+            ? "Yingyu keeps what you tell it on this computer. Chats, memory and models stay in your user folder when the app updates."
+            : "萤语把你告诉它的事记在这台电脑上。更新时，对话、记忆和模型都留在原来的用户目录里。",
+        });
+      },
+    }],
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-  if (mainWindow) mainWindow.setTitle(en ? "LoRA Long Memory" : "LoRA 长记忆");
+  if (mainWindow) mainWindow.setTitle(en ? "Yingyu" : "萤语");
 }
 
 async function createWindow(port) {
@@ -114,8 +130,8 @@ async function createWindow(port) {
     height: 900,
     minWidth: 1100,
     minHeight: 700,
-    title: readLocale() === "en" ? "LoRA Long Memory" : "LoRA 长记忆",
-    backgroundColor: "#070910",
+    title: readLocale() === "en" ? "Yingyu" : "萤语",
+    backgroundColor: "#16171a",
     icon: path.join(findUi(), "icon.png"),
     webPreferences: {
       contextIsolation: true,
@@ -209,6 +225,17 @@ ipcMain.handle("update:get", () => updater.state());
 ipcMain.handle("update:check", () => updater.checkForUpdates());
 ipcMain.handle("update:install", () => updater.installUpdate());
 
+ipcMain.handle("docs:pick", async () => {
+  if (process.env.LORA_MEMORY_E2E_FILE) return process.env.LORA_MEMORY_E2E_FILE;
+  const result = await dialog.showOpenDialog({
+    title: readLocale() === "en" ? "Import a document" : "导入文档",
+    properties: ["openFile"],
+    filters: [{ name: "PDF / TXT / EPUB / DOCX", extensions: ["pdf", "txt", "epub", "docx"] }],
+  });
+  if (result.canceled || !result.filePaths.length) return "";
+  return result.filePaths[0];
+});
+
 app.on("before-quit", stopBackend);
 app.on("window-all-closed", () => {
   stopBackend();
@@ -266,10 +293,10 @@ app.whenReady().then(async () => {
       setTimeout(() => updater.checkForUpdates().catch((err) => console.error(err)), 4000);
     }
   } catch (err) {
-    dialog.showErrorBox("LoRA 长记忆", String(err && err.message ? err.message : err));
+    dialog.showErrorBox("萤语", String(err && err.message ? err.message : err));
     app.exit(1);
   }
   }).catch((err) => {
-  dialog.showErrorBox("LoRA 长记忆", String(err && err.message ? err.message : err));
+  dialog.showErrorBox("萤语", String(err && err.message ? err.message : err));
   app.exit(1);
 });

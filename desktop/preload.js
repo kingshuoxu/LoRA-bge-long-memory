@@ -1,6 +1,6 @@
 "use strict";
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("desktop", {
   platform: process.platform,
@@ -17,5 +17,11 @@ contextBridge.exposeInMainWorld("desktop", {
     const wrapped = (_event, payload) => listener(payload);
     ipcRenderer.on("update:state", wrapped);
     return () => ipcRenderer.removeListener("update:state", wrapped);
+  },
+  pickDocument() {
+    return ipcRenderer.invoke("docs:pick");
+  },
+  pathForFile(file) {
+    try { return webUtils.getPathForFile(file); } catch (err) { return ""; }
   },
 });

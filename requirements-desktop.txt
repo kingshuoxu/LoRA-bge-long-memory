@@ -4,4 +4,5 @@ safetensors>=0.4
 huggingface_hub>=0.26
 sentencepiece>=0.2
 numpy>=1.26
+pypdf>=5.1,<7
 tokenizers>=0.20

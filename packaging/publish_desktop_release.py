@@ -122,6 +122,8 @@ def assemble(artifacts: Path, out: Path, tag: str, notes: str) -> dict:
     digests = {name: _sha256(path) for name, path in installers.items()}
     manifest = release_manifest(version, tag, notes, sorted(installers), digests)
     (out / "desktop-release.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    sums = "".join(f"{digest}  {name}\n" for name, digest in sorted(digests.items()))
+    (out / "SHA256SUMS").write_text(sums, encoding="utf-8")
     return manifest
 
 
