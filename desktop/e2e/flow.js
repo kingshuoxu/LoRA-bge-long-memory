@@ -29,26 +29,37 @@ async function waitText(page, text, timeout = 120000) {
 }
 
 async function assertAnswer(page, text) {
-  const body = page.locator("#messages .bubble.assistant .body").last();
-  await body.waitFor({ timeout: 120000 });
-  await page.waitForFunction((needle) => {
-    const nodes = [...document.querySelectorAll("#messages .bubble.assistant .body")];
-    const last = nodes[nodes.length - 1];
-    return last && last.textContent.includes(needle);
-  }, text);
-  const content = (await body.innerText()).trim();
-  if (!content) throw new Error(`回答是空的，期望包含「${text}」`);
-  if (!content.includes(text)) throw new Error(`回答没有「${text}」：${content}`);
-  const shown = await body.evaluate((node) => {
-    const scroller = document.getElementById("messages");
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    node.scrollIntoView({ block: "center", inline: "nearest" });
-    return { width: node.offsetWidth, height: node.offsetHeight };
-  });
-  if (!shown || shown.height < 8 || shown.width < 8) {
-    throw new Error(`回答没有画出来：${content} ${shown ? `${shown.width}x${shown.height}` : ""}`);
+  let last = null;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    last = await page.evaluate((needle) => {
+      const nodes = [...document.querySelectorAll("#messages .bubble.assistant .body")];
+      const node = [...nodes].reverse().find((item) => (item.textContent || "").includes(needle));
+      if (!node) return { missing: true };
+      const scroller = document.getElementById("messages");
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      node.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const style = getComputedStyle(node);
+      const hidden = node.closest("[hidden]");
+      return {
+        text: (node.textContent || "").trim(),
+        width: node.offsetWidth || node.scrollWidth,
+        height: node.offsetHeight || node.scrollHeight,
+        display: style.display,
+        visibility: style.visibility,
+        hidden: hidden ? hidden.id : "",
+      };
+    }, text);
+    const ok = last && !last.missing && last.text.includes(text)
+      && last.display !== "none" && last.visibility !== "hidden" && !last.hidden
+      && last.height >= 8 && last.width >= 8;
+    if (ok) {
+      await page.locator("#typing").waitFor({ state: "hidden", timeout: 20000 });
+      return;
+    }
+    await page.waitForTimeout(250);
   }
-  await page.locator("#typing").waitFor({ state: "hidden", timeout: 20000 });
+  throw new Error(`回答没有画出来：${text} ${JSON.stringify(last)}`);
 }
 
 async function send(page, text) {
