@@ -8,7 +8,7 @@ const path = require("path");
 const { _electron: electron } = require("playwright");
 
 const root = path.resolve(__dirname, "..", "..");
-const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.9");
+const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.10");
 const pdf = path.join(root, "tests", "fixtures", "wugang", "wugang_chrome.pdf");
 const report = [];
 
@@ -166,6 +166,7 @@ async function main() {
     await page.locator("#nav-chat").click();
     await page.locator("#open-settings").click();
     await page.locator("#settings .sheet").waitFor({ state: "visible" });
+    await page.waitForTimeout(350);
     const sheetColor = await page.locator("#settings .sheet").evaluate((el) => getComputedStyle(el).backgroundColor);
     const parts = (sheetColor.match(/rgba?\(([^)]+)\)/) || ["", ""])[1].split(",").map((item) => item.trim());
     const alpha = parts.length >= 4 ? Number(parts[3]) : 1;

@@ -489,7 +489,9 @@ class MemoryService:
         """没教过的个人问题不交给基座编。常识题仍走基座。"""
         if self_ask(content) or not utterance_is_question(content):
             return None
-        personal = bool(re.search(r"我的|我最|我比较|我非常|我喜欢", content)) or bool(re.search(r"\bmy\b", content.casefold()))
+        personal = bool(re.search(r"我的|我最|我比较|我非常|我喜欢|我在哪|我在什么", content)) or bool(re.search(r"\bmy\b", content.casefold()))
+        if re.search(r"我", content) and re.search(r"公司|上班", content) and "我们" not in content:
+            personal = True
         if not personal:
             return None
         if not re.search(r"什么|谁|哪|多少|几|吗|what|who|which", content, flags=re.IGNORECASE):
@@ -499,7 +501,7 @@ class MemoryService:
         return "这件事不在记忆里。你可以告诉我。"
 
     def _memory_quote(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
-        from memory_core.documents import covered_fact
+        from memory_core.fact_recall import fact_blob, recall_fact, touches_memory
 
         rows = []
         owners = []
@@ -509,8 +511,23 @@ class MemoryService:
                 if isinstance(fact, dict) and not fact.get("superseded"):
                     rows.append(fact)
                     owners.append(record)
-        hit = covered_fact(content, rows)
+        query_vector = None
+        fact_vectors = None
+        if rows:
+            try:
+                bind_bge(self.models_dir)
+                from router import embed
+
+                vectors = embed([content] + [fact_blob(fact) for fact in rows])
+                query_vector = [float(value) for value in vectors[0]]
+                fact_vectors = [[float(value) for value in row] for row in vectors[1:]]
+            except Exception:
+                query_vector = None
+                fact_vectors = None
+        hit = recall_fact(content, rows, query_vector, fact_vectors)
         if hit is None:
+            if touches_memory(content, rows) and utterance_is_question(content):
+                return ("这件事不在记忆里。", None, [])
             return None
         statement = str(hit.get("statement") or "").strip()
         if not statement:
@@ -698,6 +715,17 @@ class MemoryService:
                     legacy_note = fact_answer
                     fact_answer = None
                     recall["legacy_retrain"] = True
+                elif reason == "entity_grounded":
+                    grounded = False
+                    decision.fired = False
+                    decision.expert = expert.name if expert is not None else None
+                    decision.reason = reason
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = reason
+                    recall["matched_facts"] = []
+                    recall["reason_text"] = "问的是已记住的人或事物，这个取值不在记忆里"
                 elif expert is not None and reason not in {"entity_clarify", "legacy_retrain"}:
                     mount_memory(decision, recall, expert, facts, reason)
                     grounded = True
@@ -790,8 +818,22 @@ class MemoryService:
                 quoted = self._memory_quote(content, experts)
                 if quoted:
                     fact_answer, expert, facts = quoted
-                    mount_memory(decision, recall, expert, facts, "entity_first")
-                    grounded = True
+                    if expert is None:
+                        grounded = False
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里"
+                    else:
+                        mount_memory(decision, recall, expert, facts, "entity_first")
+                        recall["reason_text"] = "回答来自已记住的原句"
+                        grounded = True
             if not fact_answer:
                 unknown = self._personal_unknown(content)
                 if unknown:

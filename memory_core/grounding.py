@@ -490,6 +490,11 @@ def _pick_fact(query: str, facts: list[dict]) -> dict | None:
             continue
         if property_conflict(query, attr):
             continue
+        from memory_core.fact_recall import possessed_name_query
+
+        owned = possessed_name_query(query)
+        if owned and str(fact.get("entity") or "") in {"我", "用户"} and "名" in attr and owned not in statement:
+            continue
         heads = _object_heads(attr)
         entity = str(fact.get("entity") or "")
         short = bool(heads and _short_object(query, heads))
@@ -619,9 +624,19 @@ def resolve_stored_reply(
         value = str(fact.get("value") or fact.get("answer") or "").strip()
         if value:
             return value, expert, [fact], "entity_first"
-    from memory_core.documents import covered_fact
+    from memory_core.fact_recall import recall_fact
 
-    hit = covered_fact(content, facts)
+    pool = list(facts)
+    for expert_item in experts:
+        memory = getattr(expert_item, "fact_memory", None) or {}
+        for row in memory.get("facts") or []:
+            if isinstance(row, dict) and row not in pool:
+                pool.append(row)
+    hit = recall_fact(content, pool)
+    if hit is None:
+        from memory_core.documents import covered_fact
+
+        hit = covered_fact(content, facts)
     if hit is not None:
         statement = str(hit.get("statement") or hit.get("value") or "").strip()
         if statement and statement[-1] not in "。.!！？?":

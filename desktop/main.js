@@ -121,7 +121,10 @@ function installMenu() {
     }],
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-  if (mainWindow) mainWindow.setTitle(en ? "Yingyu" : "萤语");
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.setTitle(en ? "Yingyu" : "萤语");
+  }
 }
 
 async function createWindow(port) {
@@ -131,6 +134,7 @@ async function createWindow(port) {
     minWidth: 1100,
     minHeight: 700,
     title: readLocale() === "en" ? "Yingyu" : "萤语",
+    autoHideMenuBar: true,
     backgroundColor: "#16171a",
     icon: path.join(findUi(), "icon.png"),
     webPreferences: {
