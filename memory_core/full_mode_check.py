@@ -160,7 +160,7 @@ def _wait_job(service: MemoryService, job_id: str, timeout: float = 1800) -> dic
 
 def _declined(answer: str) -> bool:
     text = answer or ""
-    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "还没告诉过我", "没提到", "不记得", "还没告诉", "没记过")):
+    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我", "没提到", "不记得", "还没告诉", "没记过")):
         return True
     return False
 

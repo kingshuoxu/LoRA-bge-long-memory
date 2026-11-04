@@ -314,16 +314,17 @@ def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     asked = query or ""
     kind = question_type(asked)
     focus_person = any(mark in asked for mark in ("父亲", "爸爸", "母亲", "妈妈", "主人"))
+    focus_child = any(mark in asked for mark in ("闺女", "女儿")) and "养" not in asked
     focus_place = kind == "place" or any(mark in asked for mark in ("产地", "哪里的特产", "什么地方的特产"))
     focus_nation = kind == "nationality"
-    if kind in {"time", "number", "colour", "name"} and not focus_person and not focus_nation:
+    if kind in {"time", "number", "colour", "name"} and not focus_person and not focus_nation and not focus_child:
         return None
     for fact in facts:
         text = statement_of(fact)
         parent = re.search(r"([\u4e00-\u9fff]{2,4})的女儿([\u4e00-\u9fff]{2,3})", text)
         if parent and any(mark in asked for mark in ("父亲", "爸爸")) and parent.group(2) in asked:
             return parent.group(1), fact
-        if parent and "女儿" in asked and "叫什么" in asked and parent.group(1) in asked and "养" not in asked:
+        if parent and any(mark in asked for mark in ("女儿", "闺女")) and any(mark in asked for mark in ("叫什么", "是谁")) and parent.group(1) in asked and "养" not in asked:
             return parent.group(2), fact
         owned = re.search(r"([\u4e00-\u9fff]{2,3})养了", text)
         named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
@@ -334,6 +335,33 @@ def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:
             return origin.group(1), fact
         if origin and named and any(mark in asked for mark in ("特产",)) and kind == "place" and origin.group(1) in asked:
             return named.group(1), fact
+        if (
+            any(mark in asked for mark in ("闺女", "女儿"))
+            and any(mark in asked for mark in ("叫什么", "是谁"))
+            and "养" not in asked
+            and parent is None
+        ):
+            tower = re.search(r"([\u4e00-\u9fff]{2,3}).*名叫([\u4e00-\u9fff]{2,8})", text)
+            if tower and "守护" in text and tower.group(2) in asked:
+                for other in facts:
+                    child = re.search(
+                        re.escape(tower.group(1)) + r"的女儿([\u4e00-\u9fff]{2,3})",
+                        statement_of(other),
+                    )
+                    if child:
+                        return child.group(1), other
+        if "塔" in asked and any(mark in asked for mark in ("叫什么", "叫啥")) and any(mark in asked for mark in ("父亲", "爸爸")):
+            pet = re.search(r"名叫([\u4e00-\u9fff]{1,8})", text)
+            keeper = re.search(r"([\u4e00-\u9fff]{2,3})养了", text)
+            if pet and keeper and pet.group(1) in asked:
+                for other in facts:
+                    elder = re.search(r"([\u4e00-\u9fff]{2,4})的女儿" + re.escape(keeper.group(1)), statement_of(other))
+                    if not elder:
+                        continue
+                    for tower_fact in facts:
+                        named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", statement_of(tower_fact))
+                        if named and elder.group(1) in statement_of(tower_fact) and "塔" in statement_of(tower_fact):
+                            return named.group(1), tower_fact
         country = next((item for item in _COUNTRIES if item in text), "")
         craft = re.search(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
         if country and focus_nation and (
@@ -344,12 +372,12 @@ def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     return None
 
 
-def accept_aligned(query: str, span: str, fact: dict) -> str:
+def accept_aligned(query: str, span: str, fact: dict, require_predicate: bool = True) -> str:
     text = statement_of(fact)
     aligned = align_span(span, text)
     if not aligned or not types_match(query, aligned):
         return ""
-    if not predicate_covered(query, text):
+    if require_predicate and not predicate_covered(query, text):
         return ""
     if len(aligned) > 12:
         return ""

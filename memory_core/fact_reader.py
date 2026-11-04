@@ -472,7 +472,7 @@ def read_memory(
     linked = relation_answer(query, facts)
     if linked:
         span, fact = linked
-        checked = accept_aligned(query, span, fact)
+        checked = accept_aligned(query, span, fact, require_predicate=False)
         if checked:
             return {"text": _finish(checked), "fact": fact, "miss": False}
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact))]
