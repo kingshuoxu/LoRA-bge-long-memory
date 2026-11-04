@@ -271,6 +271,11 @@ def unsupported(query: str, pool: list[dict]) -> str:
         return "生日"
     if any(mark in query for mark in ("多少钱", "价格", "几斤")) and not any(mark in blob for mark in ("钱", "价格", "斤")):
         return "多少钱"
+    lowered = query.casefold()
+    if re.search(r"\b(how old|age|email|e-mail|breed)\b", lowered) and not re.search(r"\b(age|email|breed|years old)\b", blob.casefold()):
+        return "that"
+    if "go public" in lowered and "public" not in blob.casefold():
+        return "that"
     return ""
 
 
@@ -408,7 +413,7 @@ def _topic(query: str, missing: str) -> str:
 def natural_refusal(query: str, pool: list[dict], missing: str = "") -> str:
     """说人话：记得哪一句，以及问句里哪一点没写过。"""
     if not has_cjk(query):
-        return "I don't remember being told that."
+        return "That is not in memory."
     if "生日" in query:
         return "我不记得你告诉过我生日。"
     if pool and all(off_topic(query, fact) or clashes(query, fact) for fact in pool):
@@ -460,6 +465,21 @@ def read_memory(
     """
     if not facts or not str(query or "").strip():
         return None
+    from memory_core.fact_span import entity_mentioned, near_miss_span
+    from memory_core.grounding import open_entity_question
+    from memory_core.paraphrase import is_polar
+
+    # 是非题、介绍题、近似名字仍走原来的路径，摘录器不改写成一个取值。
+    if is_polar(query):
+        return None
+    for fact in facts:
+        entity = str(fact.get("entity") or "").strip()
+        if not entity:
+            continue
+        if open_entity_question(query, entity):
+            return None
+        if near_miss_span(entity, query) and not entity_mentioned(entity, query):
+            return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
     if not memory_question(query, facts, best, pool):
         return None
