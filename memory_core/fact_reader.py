@@ -37,6 +37,7 @@ _KIN = (
     frozenset({"妻子", "老婆", "夫人", "太太"}),
     frozenset({"丈夫", "老公"}),
     frozenset({"海鸥", "鸟", "鸟儿", "海鸟"}),
+    frozenset({"猫", "猫咪", "宠物猫"}),
     frozenset({"灯塔", "塔"}),
     frozenset({"海盐", "盐"}),
 )
@@ -75,6 +76,13 @@ def _asked_heads(query: str) -> list[str]:
         head = _normalize_head(re.split(r"的|是", match.group(1))[-1])
         if head and head not in found:
             found.append(head)
+    for word in ("汽车", "自行车", "猫咪", "宠物猫", "古筝"):
+        if word in (query or "") and word not in found:
+            found.append(word)
+    if "狗" in (query or "") and "狗" not in found:
+        found.append("狗")
+    if re.search(r"(?<![自火汽])车", query or "") and "汽车" not in (query or "") and "自行车" not in (query or ""):
+        found.append("车")
     return found
 
 
@@ -164,10 +172,30 @@ def retrieve(query: str, facts: list[dict], query_vector: list[float] | None = N
     return pool[:POOL_LIMIT], best
 
 
-def memory_question(query: str, facts: list[dict], best_sim: float) -> bool:
-    if best_sim >= MEMORY_SIM:
+def _overlaps(query: str, fact: dict) -> bool:
+    """问句和这句除了人名以外还有没有共同的事物。常识题因此不会被算成记忆题。"""
+    statement = _statement(fact)
+    entity = str(fact.get("entity") or "")
+    for token in _link_tokens(fact):
+        if len(token) >= 2 and token != entity and token in query:
+            return True
+    for group in _KIN:
+        if any(word in query for word in group) and any(word in statement for word in group):
+            return True
+    for word in ("颜色", "住址", "地址", "茶", "灯塔", "海盐", "透镜", "电灯", "晒", "晾"):
+        if word in query and word in statement:
+            return True
+    if any(mark in query for mark in ("住哪", "住在", "住哪儿", "居住")) and "住" in statement:
         return True
-    return touches_memory(query, facts)
+    return False
+
+
+def memory_question(query: str, facts: list[dict], best_sim: float, pool: list[dict] | None = None) -> bool:
+    if touches_memory(query, facts):
+        return True
+    if best_sim < MEMORY_SIM:
+        return False
+    return any(_overlaps(query, fact) for fact in (pool or facts[:TOP_K]))
 
 
 def _normalize_head(head: str) -> str:
@@ -216,10 +244,14 @@ def _head_in_statement(head: str, statement: str) -> bool:
 def off_topic(query: str, fact: dict) -> bool:
     """问句点了另一个事物，而这句里没有它，也没有它的通俗说法。"""
     statement = _statement(fact)
-    for head in _asked_heads(query):
-        if _head_in_statement(head, statement):
-            return False
-    return bool(_asked_heads(query))
+    if "吃" in query and "吃" not in statement:
+        return True
+    if "弹" in query and "弹" not in statement:
+        return True
+    heads = _asked_heads(query)
+    if not heads:
+        return False
+    return not any(_head_in_statement(head, statement) for head in heads)
 
 
 def unsupported(query: str, pool: list[dict]) -> str:
@@ -379,6 +411,11 @@ def natural_refusal(query: str, pool: list[dict], missing: str = "") -> str:
         return "I don't remember being told that."
     if "生日" in query:
         return "我不记得你告诉过我生日。"
+    if pool and all(off_topic(query, fact) or clashes(query, fact) for fact in pool):
+        head = _asked_heads(query)
+        if head:
+            return f"我不记得你告诉过我{head[0]}的事。"
+        return "这件事你还没告诉过我。"
     owned = possessed_name_query(query)
     if owned:
         return f"你还没告诉过我你的{owned}叫什么。"
@@ -424,7 +461,7 @@ def read_memory(
     if not facts or not str(query or "").strip():
         return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
-    if not memory_question(query, facts, best):
+    if not memory_question(query, facts, best, pool):
         return None
     hosts = _hosts(query, pool)
     if not hosts:
