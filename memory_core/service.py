@@ -935,6 +935,7 @@ class MemoryService:
                         _use_document(document)
             if not fact_answer and utterance_is_question(content):
                 from memory_core.fact_recall import touches_memory
+                from memory_core.span_guard import fixed_refusal, mentions_stored
 
                 remembered = []
                 for record in experts:
@@ -942,8 +943,8 @@ class MemoryService:
                     for fact in memory.get("facts") or []:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
-                if touches_memory(content, remembered):
-                    fact_answer = "这件事不在记忆里。" if has_cjk(content) else "That isn't in memory."
+                if touches_memory(content, remembered) or mentions_stored(content, remembered):
+                    fact_answer = fixed_refusal(content, remembered)
                     decision.fired = False
                     decision.expert = None
                     decision.label = "基座"

@@ -17,6 +17,13 @@ from memory_core.fact_recall import (
     touches_memory,
 )
 from memory_core.prompts import has_cjk
+from memory_core.span_guard import (
+    accept_aligned,
+    fixed_refusal,
+    mentions_stored,
+    predicate_covered,
+    relation_answer,
+)
 
 TOP_K = 3
 POOL_LIMIT = 6
@@ -191,7 +198,7 @@ def _overlaps(query: str, fact: dict) -> bool:
 
 
 def memory_question(query: str, facts: list[dict], best_sim: float, pool: list[dict] | None = None) -> bool:
-    if touches_memory(query, facts):
+    if touches_memory(query, facts) or mentions_stored(query, facts):
         return True
     if best_sim < MEMORY_SIM:
         return False
@@ -416,38 +423,9 @@ def _topic(query: str, missing: str) -> str:
 
 
 def natural_refusal(query: str, pool: list[dict], missing: str = "") -> str:
-    """说人话：记得哪一句，以及问句里哪一点没写过。"""
-    if not has_cjk(query):
-        return "That is not in memory."
-    if "生日" in query:
-        return "我不记得你告诉过我生日。"
-    if pool and all(off_topic(query, fact) or clashes(query, fact) for fact in pool):
-        head = _asked_heads(query)
-        if head:
-            return f"我不记得你告诉过我{head[0]}的事。"
-        return "这件事你还没告诉过我。"
-    owned = possessed_name_query(query)
-    if owned:
-        return f"你还没告诉过我你的{owned}叫什么。"
-    if any(mark in query for mark in ("住哪", "住在", "住哪儿")) and not any("住" in _statement(fact) for fact in pool):
-        return "我不记得你告诉过我住在哪里。"
-    related = [fact for fact in pool if not clashes(query, fact)] or list(pool)
-    if related:
-        fact = related[0]
-        name = ""
-        for token in sorted(_link_tokens(fact), key=len, reverse=True):
-            if token in query:
-                name = token
-                break
-        if not name:
-            name = str(fact.get("entity") or "").strip() or "这件事"
-        remembered = _brief(fact)
-        topic = _topic(query, missing)
-        lead = "书里关于" if str(fact.get("source") or "") == "document" else "关于"
-        if remembered and topic and topic not in remembered:
-            return f"{lead}{name}我记得{remembered}，但没提到{topic}。"
-        return f"{lead}{name}，这句话你还没告诉过我。"
-    return "这件事你还没告诉过我。"
+    """固定句式。missing 只用于调用方兼容，不拼进句子。"""
+    del missing
+    return fixed_refusal(query, pool)
 
 
 def _finish(span: str) -> str:
@@ -483,12 +461,21 @@ def read_memory(
             continue
         if open_entity_question(query, entity):
             return None
+        # 「白鹭塔建于」里的建是谓语，不是另一个名字。名字本身出现了就继续摘录。
+        if entity in query:
+            continue
         if near_miss_span(entity, query) and not entity_mentioned(entity, query):
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
     if not memory_question(query, facts, best, pool):
         return None
-    hosts = _hosts(query, pool)
+    linked = relation_answer(query, facts)
+    if linked:
+        span, fact = linked
+        checked = accept_aligned(query, span, fact)
+        if checked:
+            return {"text": _finish(checked), "fact": fact, "miss": False}
+    hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact))]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}
     missing = unsupported(query, hosts)
@@ -500,9 +487,12 @@ def read_memory(
         accepted = accept_model_span(query, raw, hosts)
         if accepted:
             span, fact = accepted
-            return {"text": _finish(span), "fact": fact, "miss": False}
+            checked = accept_aligned(query, span, fact)
+            if checked:
+                return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
-        if span:
-            return {"text": _finish(span), "fact": fact, "miss": False}
+        checked = accept_aligned(query, span, fact) if span else ""
+        if checked:
+            return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": hosts[0], "miss": True}

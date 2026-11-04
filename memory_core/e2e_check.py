@@ -143,7 +143,7 @@ def abstain_ok(route: dict, answer: str, expert: str) -> bool:
     """
     if route.get("reason") == "entity_grounded":
         text = answer or ""
-        named = any(mark in text for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得")) or "not in memory" in text.casefold() or "haven't told me" in text.casefold()
+        named = any(mark in text for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得", "没记过")) or "not in memory" in text.casefold() or "haven't told me" in text.casefold()
         return bool(named and route.get("expert") == expert)
     return not (route.get("fired") and route.get("expert") == expert)
 
