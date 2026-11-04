@@ -508,6 +508,51 @@ class MemoryService:
             return "That isn't in memory. You can tell me."
         return "这件事不在记忆里。你可以告诉我。"
 
+    def _read_memory(self, content: str, experts: list) -> tuple[str, Any, list[dict], bool] | None:
+        """bge 取句子，基座只许摘抄。和记忆无关时返回 None。"""
+        from memory_core.fact_reader import read_memory
+        from memory_core.fact_recall import fact_blob
+
+        rows = []
+        owners = []
+        for record in experts:
+            memory = record.fact_memory or {}
+            for fact in memory.get("facts") or []:
+                if isinstance(fact, dict) and not fact.get("superseded"):
+                    rows.append(fact)
+                    owners.append(record)
+        if not rows:
+            return None
+        query_vector = None
+        fact_vectors = None
+        try:
+            bind_bge(self.models_dir)
+            from router import embed
+
+            vectors = embed([content] + [fact_blob(fact) for fact in rows])
+            query_vector = [float(value) for value in vectors[0]]
+            fact_vectors = [[float(value) for value in row] for row in vectors[1:]]
+        except Exception:
+            query_vector = None
+            fact_vectors = None
+
+        def generate(system: str, user: str) -> str:
+            return self.chat.complete_base(system, user, max_new_tokens=32)
+
+        found = read_memory(content, rows, generate, query_vector, fact_vectors)
+        if found is None:
+            return None
+        fact = found.get("fact")
+        if found.get("miss") or fact is None:
+            return found["text"], None, [], True
+        try:
+            owner = owners[rows.index(fact)]
+        except ValueError:
+            owner = None
+        if owner is None:
+            return found["text"], None, [], True
+        return found["text"], owner, [fact], False
+
     def _memory_quote(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
         from memory_core.fact_recall import fact_blob, recall_fact, spoken_fact, touches_memory
 
@@ -669,6 +714,29 @@ class MemoryService:
                 decision.label = "基座"
                 decision.fired = False
                 return self._finish_turn(conv_id, user_msg, text, decision, recall)
+            if utterance_is_question(content) and not asked:
+                read = self._read_memory(content, experts)
+                if read is not None:
+                    text, expert, facts, miss = read
+                    decision, recall = route_with_trace(content, experts, load_merged_gate([self.experts_dir] + ([self.repo_experts] if self.repo_experts else [])))
+                    if miss or expert is None:
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里"
+                        recall["expert"] = None
+                        recall["mounted_expert"] = None
+                        recall["mounted_label"] = "基座"
+                        return self._finish_turn(conv_id, user_msg, text, decision, recall)
+                    mount_memory(decision, recall, expert, facts, "entity_first")
+                    recall["reason_text"] = "回答是从已记住的句子里摘出来的"
+                    return self._finish_turn(conv_id, user_msg, text, decision, recall)
             if asked and asked != "assistant":
                 answered = self_reply(content, experts, english=self._ui_locale() == "en")
                 if answered is not None:

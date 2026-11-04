@@ -423,6 +423,7 @@
     "亮起的星表示这次路由和事实闸对上了这些事实。LoRA 是整份专家一起挂上的，不是每颗星各有一份权重。": "A lit star means routing and the fact gate matched these facts. The LoRA expert is mounted as a whole, not as a separate weight on each star.",
     "问句点名了这个专家登记过的实体": "The question names an entity registered on this expert",
     "问句点到了已经记住的事实，回答用的是那一句里的取值": "The question matches a stored fact, and the answer is the span from that sentence",
+    "回答是从已记住的句子里摘出来的": "The answer is a span copied from a stored sentence",
     "还没有记下你住在哪里": "I have not stored where you live",
     "你还没告诉过我你的狗叫什么。": "You haven't told me what your dog is called.",
     "在参与比较的专家里，路由键相似度最高": "Highest router-key similarity among the experts compared",

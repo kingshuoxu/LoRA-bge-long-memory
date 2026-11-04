@@ -115,7 +115,7 @@ def _score_language(service: MemoryService, spec: dict, language: str) -> dict:
     for question in spec[f"{language}_abstain"]:
         result = _ask(service, fresh["id"], question)
         answer = result["assistant"]["content"]
-        named = any(mark in answer for mark in ("不在记忆里", "还没告诉过我")) or "not in memory" in answer.casefold()
+        named = any(mark in answer for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得")) or "not in memory" in answer.casefold()
         borrowed = _norm(answer).strip("。.") in stored_values
         if borrowed:
             wrong += 1
