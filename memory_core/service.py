@@ -714,29 +714,17 @@ class MemoryService:
                 decision.label = "基座"
                 decision.fired = False
                 return self._finish_turn(conv_id, user_msg, text, decision, recall)
+            memory_block = ""
             if utterance_is_question(content) and not asked:
                 read = self._read_memory(content, experts)
                 if read is not None:
                     text, expert, facts, miss = read
-                    decision, recall = route_with_trace(content, experts, load_merged_gate([self.experts_dir] + ([self.repo_experts] if self.repo_experts else [])))
-                    if miss or expert is None:
-                        decision.fired = False
-                        decision.expert = None
-                        decision.label = "基座"
-                        decision.reason = "memory_miss"
-                        recall["fired"] = False
-                        recall["mounted"] = False
-                        recall["abstain"] = True
-                        recall["reason"] = "memory_miss"
-                        recall["matched_facts"] = []
-                        recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里"
-                        recall["expert"] = None
-                        recall["mounted_expert"] = None
-                        recall["mounted_label"] = "基座"
+                    if not miss and expert is not None:
+                        decision, recall = route_with_trace(content, experts, load_merged_gate([self.experts_dir] + ([self.repo_experts] if self.repo_experts else [])))
+                        mount_memory(decision, recall, expert, facts, "entity_first")
+                        recall["reason_text"] = "回答是从已记住的句子里摘出来的"
                         return self._finish_turn(conv_id, user_msg, text, decision, recall)
-                    mount_memory(decision, recall, expert, facts, "entity_first")
-                    recall["reason_text"] = "回答是从已记住的句子里摘出来的"
-                    return self._finish_turn(conv_id, user_msg, text, decision, recall)
+                    memory_block = text
             if asked and asked != "assistant":
                 answered = self_reply(content, experts, english=self._ui_locale() == "en")
                 if answered is not None:
@@ -933,6 +921,60 @@ class MemoryService:
                     document = self._document_reply(content, allow_miss=True)
                     if document:
                         _use_document(document)
+            if (
+                fact_answer
+                and memory_block
+                and utterance_is_question(content)
+                and recall.get("reason") not in {"entity_overview", "statement_ack", "document", "personal_unknown"}
+            ):
+                from memory_core.fact_reader import clashes, off_topic
+                from memory_core.span_guard import predicate_covered
+
+                needle = fact_answer.strip().rstrip("。")
+                host_fact = None
+                host = ""
+                for record in experts:
+                    for fact in (record.fact_memory or {}).get("facts") or []:
+                        statement = str(fact.get("statement") or "")
+                        if needle and needle in statement:
+                            host_fact = fact
+                            host = statement
+                            break
+                    if host_fact is not None:
+                        break
+                if host_fact is not None and (
+                    clashes(content, host_fact) or off_topic(content, host_fact) or not predicate_covered(content, host)
+                ):
+                    fact_answer = None
+                    grounded = False
+            if (
+                fact_answer
+                and utterance_is_question(content)
+                and len(fact_answer) > 18
+                and recall.get("reason") not in {"entity_overview", "statement_ack", "document"}
+            ):
+                from memory_core.fact_recall import answer_span
+                from memory_core.span_guard import accept_aligned
+
+                short = answer_span(content, fact_answer)
+                checked = accept_aligned(content, short, {"statement": fact_answer}) if short else ""
+                if checked:
+                    fact_answer = checked if checked[-1] in "。." else checked + "。"
+            if not fact_answer and memory_block:
+                fact_answer = memory_block
+                decision.fired = False
+                decision.expert = None
+                decision.label = "基座"
+                decision.reason = "memory_miss"
+                recall["fired"] = False
+                recall["mounted"] = False
+                recall["abstain"] = True
+                recall["reason"] = "memory_miss"
+                recall["matched_facts"] = []
+                recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里"
+                recall["expert"] = None
+                recall["mounted_expert"] = None
+                recall["mounted_label"] = "基座"
             if not fact_answer and utterance_is_question(content):
                 from memory_core.fact_recall import touches_memory
                 from memory_core.span_guard import fixed_refusal, mentions_stored

@@ -165,10 +165,12 @@ def predicate_covered(query: str, statement: str) -> bool:
         return any(mark in text for mark in ("女儿", "父亲", "爸爸"))
     if _near_wh(asked, ("主人",)):
         return "养" in text or "主人" in text
-    if kind == "number" and "多高" in asked:
+    if kind == "number" and "高" in asked:
         return bool(re.search(r"米|塔高", text))
-    if kind == "number":
-        return bool(re.search(r"米|面|条腿|岁", text))
+    if kind == "number" and "面" in asked:
+        return "面" in text
+    if kind == "number" and any(mark in asked for mark in ("几岁", "多大", "年龄")):
+        return bool(re.search(r"岁|年龄", text))
     if kind == "colour":
         return "色" in text
     if kind == "time":
