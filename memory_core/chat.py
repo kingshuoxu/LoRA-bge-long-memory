@@ -108,6 +108,36 @@ class ChatEngine:
                 return _generate()
         return _generate()
 
+    def complete_base(self, system: str, user: str, max_new_tokens: int = 32) -> str:
+        """基座摘录。不挂 LoRA，避免用权重把没写过的答案补出来。"""
+        self.ensure()
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        rendered = self.tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = self.tok(rendered, return_tensors="pt", truncation=True, max_length=1024).to(self.device)
+        im_end = self.tok.convert_tokens_to_ids("<|im_end|>")
+        eos = [self.tok.eos_token_id]
+        if isinstance(im_end, int) and im_end >= 0:
+            eos.append(im_end)
+
+        def _generate() -> str:
+            with torch.no_grad():
+                out = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=self.tok.eos_token_id,
+                    eos_token_id=eos,
+                )
+            return self.tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+        if self._peft:
+            with self.model.disable_adapter():
+                return _generate()
+        return _generate()
+
 
 def _finish_sentence(text: str) -> str:
     """生成被长度截断时，停在句末或词边界，不把半个词留给界面。"""

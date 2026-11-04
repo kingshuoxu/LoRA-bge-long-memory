@@ -605,8 +605,14 @@ function chipLabel(trace) {
     return statement || fact.value || fact.attr;
   }).filter(Boolean).slice(0, 1);
   const source = matched.flatMap((fact) => fact.source_conversations || []).map((item) => item.title).find(Boolean);
-  const label = facts.length ? t("chip.from", { name, facts: facts.join(t("list.sep")) }) : t("chip.whole", { name });
-  return source ? `${label} · ${source}` : label;
+  const norm = (value) => String(value || "").replace(/[。．\s]/g, "");
+  let factText = facts[0] || "";
+  const duplicated = factText && name && (norm(factText) === norm(name) || (norm(factText).includes(norm(name)) && norm(name).includes(norm(factText))));
+  const label = duplicated
+    ? `回忆自 ${factText || name}`
+    : (factText ? t("chip.from", { name, facts: factText }) : t("chip.whole", { name }));
+  if (source && !norm(label).includes(norm(source))) return `${label} · ${source}`;
+  return label;
 }
 
 function chipTitle(trace) {
@@ -621,7 +627,7 @@ function recallChip(msg, extra) {
   const trace = recallTrace(extra);
   if (!trace) return "";
   const text = String(msg.content || "");
-  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里") || text.includes("还没告诉过我")) return "";
+  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里") || text.includes("还没告诉过我") || text.includes("没提到") || text.includes("不记得")) return "";
   if (["memory_miss", "entity_grounded", "personal_unknown", "self_empty"].includes(trace.reason)) return "";
   const idle = trace.mounted ? "" : " idle";
   return `<button type="button" class="recall-chip${idle}" data-recall="${esc(msg.id)}" title="${esc(chipTitle(trace))}">${esc(chipLabel(trace))}</button>`;

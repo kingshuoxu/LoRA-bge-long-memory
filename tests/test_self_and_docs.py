@@ -283,6 +283,25 @@ class WugangTests(unittest.TestCase):
         self.assertFalse(touches_memory("中国的首都在哪里？", facts))
         self.assertIn("柯小满", answer_span("阿哨是谁养的？", facts[2]["statement"]))
         self.assertEqual(possessed_name_query("我的狗叫什么名字？"), "狗")
+        from memory_core.fact_reader import accept_model_span, clashes, read_memory, slot_from_fact
+
+        bike = {"statement": "沈星河的自行车颜色是朱红色。", "entity": "沈星河", "value": "朱红色", "attr": "自行车颜色"}
+        tea = {"statement": "沈星河最喜欢的茶是桂花乌龙。", "entity": "沈星河", "value": "桂花乌龙", "attr": "最喜欢的茶"}
+        self.assertTrue(clashes("沈星河的汽车颜色是什么？", bike))
+        self.assertEqual(slot_from_fact("沈星河的汽车颜色是什么？", tea), "")
+        missed = read_memory(
+            "沈星河的汽车颜色是什么？",
+            [bike, tea],
+            lambda _system, _user: "朱红色",
+            [1.0, 0.0],
+            [[0.9, 0.1], [0.4, 0.8]],
+        )
+        self.assertIsNotNone(missed)
+        self.assertTrue(missed["miss"], missed)
+        self.assertNotIn("朱红色", missed["text"])
+        copied = accept_model_span("阿哨是谁养的？", "柯岚", [facts[2]])
+        self.assertIsNotNone(copied)
+        self.assertEqual(copied[0], "柯小满")
         bike = {"statement": "沈星河的自行车颜色是朱红色。", "entity": "沈星河"}
         self.assertIsNone(recall_fact("沈星河的汽车颜色是什么？", [bike]))
         self.assertIsNone(recall_fact("沈星河的车是什么颜色？", [bike]))
