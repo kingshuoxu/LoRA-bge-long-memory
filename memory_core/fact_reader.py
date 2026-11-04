@@ -45,6 +45,7 @@ _KIN = (
     frozenset({"丈夫", "老公"}),
     frozenset({"海鸥", "鸟", "鸟儿", "海鸟"}),
     frozenset({"猫", "猫咪", "宠物猫"}),
+    frozenset({"汽车", "车"}),
     frozenset({"灯塔", "塔"}),
     frozenset({"海盐", "盐"}),
 )

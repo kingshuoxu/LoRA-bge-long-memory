@@ -74,7 +74,7 @@ def span_type(span: str) -> str:
     return ""
 
 
-def types_match(query: str, span: str) -> bool:
+def types_match(query: str, span: str, fact: dict | None = None) -> bool:
     wanted = question_type(query)
     got = span_type(span)
     if not wanted:
@@ -82,9 +82,12 @@ def types_match(query: str, span: str) -> bool:
     if wanted == "time":
         return got == "time"
     if wanted == "number":
-        return got == "number"
+        return got == "number" or bool(fact and str(fact.get("value") or "").startswith(span))
     if wanted == "colour":
-        return got == "colour"
+        if got == "colour":
+            return True
+        value = str((fact or {}).get("value") or "")
+        return bool(value) and span.rstrip("。") in value
     if wanted == "nationality":
         return got == "nationality"
     if wanted in {"person", "name", "place"}:
@@ -375,7 +378,7 @@ def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:
 def accept_aligned(query: str, span: str, fact: dict, require_predicate: bool = True) -> str:
     text = statement_of(fact)
     aligned = align_span(span, text)
-    if not aligned or not types_match(query, aligned):
+    if not aligned or not types_match(query, aligned, fact):
         return ""
     if require_predicate and not predicate_covered(query, text):
         return ""
