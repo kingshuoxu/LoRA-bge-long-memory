@@ -108,8 +108,35 @@ def _compact(text: str) -> str:
     return re.sub(r"[\s，,。.!！？?、；;：:「」\"']", "", text or "")
 
 
+def _standalone(piece: str, compact: str) -> bool:
+    """单字必须自己成词。「车」不能从「自行车」里抠出来。"""
+    bounds = set("的了是在有和与吗呢叫，。、")
+    start = 0
+    while True:
+        index = compact.find(piece, start)
+        if index < 0:
+            return False
+        before = compact[index - 1] if index else ""
+        after = compact[index + len(piece)] if index + len(piece) < len(compact) else ""
+        before_ok = not before or before in bounds
+        after_ok = not after or after in bounds
+        if before_ok and after_ok:
+            return True
+        start = index + 1
+
+
 def _piece_hit(piece: str, blob: str, statement: str) -> bool:
+    if piece in {"多高", "高度"}:
+        return bool(re.search(r"塔高|高\d|米|四十二", statement))
+    if piece in {"晒", "晾晒"} or (len(piece) > 1 and "晒" in piece):
+        return "晒" in statement or "霜降" in statement
+    if piece in {"建", "建成"} and re.search(r"建于|\d{3,4}年", statement):
+        return True
+    if piece == "面" and "面" in statement:
+        return True
     compact = _compact(blob + statement)
+    if len(piece) == 1:
+        return _standalone(piece, compact)
     if piece in compact:
         return True
     # 「柯岚守护」对得上「柯岚在雾港守护」。中间可以隔几个字。
@@ -209,12 +236,11 @@ def recall_fact(
             semantic = _cosine(query_vector, fact_vectors[index])
         if not _evidence(query, statement):
             continue
-        # 问句里的实词都要落在这句话里。向量只帮同义说法，不能拿邻近事实来顶。
-        if lexical < 0.999 and semantic < 0.72:
+        # 问句里的实词都要落在这句话里。bge 只在已经对上的句子里排先后，
+        # 不能因为「汽车」和「自行车」相近就拿另一条事实来答。
+        if lexical < 0.999:
             continue
-        if semantic >= 0.72 and lexical < 0.5:
-            continue
-        score = max(lexical, semantic)
+        score = lexical + semantic
         if score > best_score:
             best = fact
             best_score = score

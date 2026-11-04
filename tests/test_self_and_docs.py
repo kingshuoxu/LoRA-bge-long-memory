@@ -234,6 +234,10 @@ class WugangTests(unittest.TestCase):
         for question in ("雾港的市长是谁？", "柯岚的妻子叫什么名字？", "白鹭塔的灯光能照多远？", "我的狗叫什么名字？"):
             self.assertIsNone(recall_fact(question, facts), question)
         self.assertEqual(possessed_name_query("我的狗叫什么名字？"), "狗")
+        bike = {"statement": "沈星河的自行车颜色是朱红色。", "entity": "沈星河"}
+        self.assertIsNone(recall_fact("沈星河的汽车颜色是什么？", [bike]))
+        self.assertIsNone(recall_fact("沈星河的车是什么颜色？", [bike]))
+        self.assertIsNone(recall_fact("沈星河那辆汽车是什么颜色？", [bike]))
         self.assertEqual(possessed_name_query("我的名字是什么？"), "")
 
     def test_key_points_keep_facts_when_the_model_picks_scenery(self):
