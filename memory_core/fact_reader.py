@@ -271,6 +271,11 @@ def unsupported(query: str, pool: list[dict]) -> str:
         return "生日"
     if any(mark in query for mark in ("多少钱", "价格", "几斤")) and not any(mark in blob for mark in ("钱", "价格", "斤")):
         return "多少钱"
+    for mark in ("讨厌", "大学", "毕业", "股票", "身高"):
+        if mark in query and mark not in blob:
+            return mark
+    if "多高" in query and not re.search(r"米|身高|塔高|多高", blob):
+        return "多高"
     lowered = query.casefold()
     if re.search(r"\b(how old|age|email|e-mail|breed)\b", lowered) and not re.search(r"\b(age|email|breed|years old)\b", blob.casefold()):
         return "that"
