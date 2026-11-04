@@ -182,6 +182,11 @@ class WugangTests(unittest.TestCase):
         height = search_documents("白鹭塔有多高？", [doc], None)["ground"]
         self.assertIsNotNone(height)
         self.assertIn("四十二米", height["answer"])
+        lens = search_documents("白鹭塔的透镜是谁打磨的？", [doc], None)["ground"]
+        self.assertIsNotNone(lens)
+        self.assertIn("诺丁", lens["answer"])
+        self.assertIn("第四章", lens["chips"][0]["label"])
+        self.assertNotIn("第一章", lens["chips"][0]["label"])
         self.assertNotIn("\u2ee9", text)
         self.assertIn("黄昏", text)
 
@@ -193,6 +198,17 @@ class WugangTests(unittest.TestCase):
         self.assertIn("第一章", label)
         self.assertNotIn("第1页", label)
         self.assertNotIn("第2页", label)
+        books = {
+            "docx": extract_document("wugang.docx", (ROOT / "wugang.docx").read_bytes()),
+            "epub": extract_document("wugang.epub", (ROOT / "wugang.epub").read_bytes()),
+        }
+        for name, blob in books.items():
+            book = {"id": name, "title": "雾港灯塔志", "chunks": chunk_book(blob), "vectors": None}
+            count = search_documents("透镜一共有多少面？", [book], None)
+            self.assertFalse(count["missing_term"], name)
+            self.assertIsNotNone(count["ground"], name)
+            self.assertIn("十六", count["ground"]["answer"])
+            self.assertIn("第四章", count["ground"]["chips"][0]["label"])
 
     def test_gull_recall_without_the_stored_name(self):
         line = "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。"
@@ -227,12 +243,45 @@ class WugangTests(unittest.TestCase):
             "白鹭塔的透镜是谁打磨的？": "诺丁",
             "透镜一共有多少面？": "十六",
         }
+        from memory_core.fact_recall import answer_span, spoken_fact, touches_memory
+
         for question, gold in expect.items():
             hit = recall_fact(question, facts)
             self.assertIsNotNone(hit, question)
             self.assertIn(gold, hit["statement"], question)
-        for question in ("雾港的市长是谁？", "柯岚的妻子叫什么名字？", "白鹭塔的灯光能照多远？", "我的狗叫什么名字？"):
+            self.assertIn(gold, spoken_fact(question, hit), question)
+        paraphrases = {
+            "那座四十二米高的塔是哪年建成的？": "1873",
+            "霜降那天雾港人开始晒什么？": "星砂盐",
+            "阿哨是谁养的？": "柯小满",
+            "四十二米高的灯塔叫什么名字？": "白鹭塔",
+            "谁养了名叫阿哨的海鸥？": "柯小满",
+            "每年霜降开始晾晒的是什么？": "星砂盐",
+            "诺丁打磨过的透镜有多少面？": "十六",
+            "改用电灯的那一年是哪年？": "1931",
+            "建于1873年的塔有多高？": "四十二",
+            "三条腿的海鸥名叫什么？": "阿哨",
+            "蓝色海盐是在哪一天开始晒的？": "霜降",
+            "瑞典工匠打磨白鹭塔的透镜，他叫什么？": "诺丁",
+            "十六面的透镜是谁打磨的？": "诺丁",
+            "柯小满养的那只海鸥叫什么？": "阿哨",
+            "雾港特产从哪天起晾晒？": "霜降",
+            "第一座灯塔的高度是多少米？": "四十二",
+        }
+        for question, gold in paraphrases.items():
+            self.assertTrue(touches_memory(question, facts), question)
+            hit = recall_fact(question, facts)
+            self.assertIsNotNone(hit, question)
+            spoken = spoken_fact(question, hit)
+            self.assertIn(gold, spoken, (question, spoken, hit["statement"]))
+            self.assertNotEqual(spoken.rstrip("。"), hit["statement"].rstrip("。"), question)
+            self.assertLess(len(spoken), len(hit["statement"]), question)
+        for question in ("雾港的市长是谁？", "柯岚的妻子叫什么名字？", "白鹭塔的灯光能照多远？", "我的狗叫什么名字？", "水的化学式是什么？"):
             self.assertIsNone(recall_fact(question, facts), question)
+        self.assertTrue(touches_memory("阿哨是谁养的？", facts))
+        self.assertFalse(touches_memory("水的化学式是什么？", facts))
+        self.assertFalse(touches_memory("中国的首都在哪里？", facts))
+        self.assertIn("柯小满", answer_span("阿哨是谁养的？", facts[2]["statement"]))
         self.assertEqual(possessed_name_query("我的狗叫什么名字？"), "狗")
         bike = {"statement": "沈星河的自行车颜色是朱红色。", "entity": "沈星河"}
         self.assertIsNone(recall_fact("沈星河的汽车颜色是什么？", [bike]))
