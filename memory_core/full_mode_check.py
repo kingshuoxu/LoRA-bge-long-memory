@@ -141,6 +141,100 @@ def _recall_without_subject() -> None:
     print("FULL_RECALL_OK", flush=True)
 
 
+def _wait_job(service: MemoryService, job_id: str, timeout: float = 1800) -> dict:
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        status = service.job_status(job_id)
+        stamp = (status.get("status"), status.get("epoch"), status.get("message"))
+        if stamp != last:
+            print(f"[train] {status.get('status')} epoch={status.get('epoch')} {status.get('message')}", flush=True)
+            last = stamp
+        if status.get("status") in {"done", "failed", "cancelled"}:
+            return status
+        time.sleep(2)
+    _fail("训练超时")
+    return {}
+
+
+def _declined(answer: str) -> bool:
+    text = answer or ""
+    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到")):
+        return True
+    return False
+
+
+def _learning(service: MemoryService) -> None:
+    """删掉文档之后，用真实训练过的事实回答学习效果表。"""
+    if os.environ.get("LORA_MEMORY_E2E_FAST") == "1":
+        _fail("学习效果检查不能开 fast 模式")
+    named = service.create_conversation("名字")["id"]
+    service.send_message(named, "我叫徐金朔")
+    for doc in service.list_documents():
+        ids = [str(point.get("id") or "") for point in doc.get("points") or [] if point.get("id")]
+        if ids:
+            service.queue_document_points(doc["id"], ids)
+    pending = service.list_pending()
+    if len(pending) < 4:
+        _fail(f"待巩固不足 4 条: {len(pending)}")
+    job = service.train_pending()
+    status = _wait_job(service, job["id"])
+    if status.get("status") != "done":
+        _fail(f"训练没有完成: {status.get('status')} {status.get('error') or status.get('message')}")
+    for doc in list(service.list_documents()):
+        service.remove_document(doc["id"])
+    if service.list_documents():
+        _fail("文档没有删干净")
+    taught = [
+        ("白鹭塔建于哪一年？", "1873"),
+        ("柯小满的海鸥叫什么？", "阿哨"),
+        ("星砂盐什么时候开始晾晒？", "霜降"),
+        ("白鹭塔有多高？", "四十二"),
+        ("那只三条腿的海鸥叫什么名字？", "阿哨"),
+        ("柯岚守护的第一座灯塔是哪年建的？", "1873"),
+        ("雾港的蓝色海盐每年哪天开始晒？", "霜降"),
+        ("雾港的特产是什么？", "星砂盐"),
+        ("白鹭塔哪一年改用电灯？", "1931"),
+        ("白鹭塔的透镜是谁打磨的？", "诺丁"),
+        ("透镜一共有多少面？", "十六"),
+    ]
+    never = [
+        "雾港的市长是谁？",
+        "柯岚的妻子叫什么名字？",
+        "白鹭塔的灯光能照多远？",
+        "柯小满今年几岁？",
+    ]
+    pets = ["我的狗叫什么名字？", "我的猫叫什么名字？"]
+    taught_hits = 0
+    for question, gold in taught:
+        conv = service.create_conversation("学习")["id"]
+        answer = _ask(service, conv, question)
+        if gold in answer:
+            taught_hits += 1
+        else:
+            print(f"MISS {question} -> {answer}", flush=True)
+    declined = 0
+    for question in never:
+        conv = service.create_conversation("弃权")["id"]
+        answer = _ask(service, conv, question)
+        bad = any(mark in answer for mark in ("陈国强", "李世民", "三脚"))
+        if _declined(answer) and not bad:
+            declined += 1
+        else:
+            print(f"ABSTAIN_MISS {question} -> {answer}", flush=True)
+    for question in pets:
+        conv = service.create_conversation("宠物")["id"]
+        answer = _ask(service, conv, question)
+        if "徐金朔" in answer or not _declined(answer):
+            _fail(f"宠物名字不该答成用户：{question} -> {answer}")
+    print(f"LEARNING taught {taught_hits}/{len(taught)} declined {declined}/{len(never)}", flush=True)
+    if taught_hits < 10:
+        _fail(f"教过的事实只答对 {taught_hits}/11")
+    if declined < 4:
+        _fail(f"没教过的问题只弃权 {declined}/4")
+    print("FULL_LEARNING_OK", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--home", type=Path, default=None)
@@ -168,6 +262,7 @@ def main() -> None:
     service.ensure_ready()
     _abstain(service)
     _book(service, args.book)
+    _learning(service)
     print("FULL_MODE_OK", flush=True)
 
 

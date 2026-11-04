@@ -514,11 +514,11 @@ main {
 .typing span:nth-child(3) { animation-delay: 0.3s; }
 .toast {
   position: fixed;
-  right: 28px;
-  bottom: 28px;
+  left: 348px;
+  bottom: 118px;
   top: auto;
-  left: auto;
-  z-index: 40;
+  right: auto;
+  z-index: 4;
   width: min(360px, 46vw);
   padding: 10px 14px;
   border-radius: 12px;
@@ -864,7 +864,6 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   border-radius: 24px;
   padding: 20px 20px 16px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
-  animation: rise 0.28s ease;
 }
 .sheet h3 { margin: 0 0 8px; font-weight: 500; letter-spacing: 0.08em; }
 .sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }

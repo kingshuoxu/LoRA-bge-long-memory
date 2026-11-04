@@ -900,13 +900,13 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
                 continue
             seen.add(question)
             qa_rows.append({"q": question, "a": value})
-        return {
+        return _keep_recall_context({
             "entity": entity,
             "attr": attr,
             "value": value,
             "statement": statement,
             "qa": qa_rows,
-        }
+        }, fact)
     questions.extend([
         _attr_question(entity, attr, "是什么？"),
         f"请问{_attr_question(entity, attr, '是什么？')}",
@@ -957,13 +957,20 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
             continue
         seen.add(question)
         qa.append({"q": question, "a": value})
-    return {
+    return _keep_recall_context({
         "entity": entity,
         "attr": attr,
         "value": value,
         "statement": statement,
         "qa": qa,
-    }
+    }, fact)
+
+
+def _keep_recall_context(result: dict[str, Any], fact: dict[str, Any]) -> dict[str, Any]:
+    for key in ("aliases", "mentions", "source"):
+        if fact.get(key):
+            result[key] = fact.get(key)
+    return result
 
 
 # 关于使用者的事实并进同一个专家。问句仍用「我 / I」，显示名是「关于你」。

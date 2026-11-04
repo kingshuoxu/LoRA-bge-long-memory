@@ -822,9 +822,11 @@ def ground_document(query: str, hits: list[dict], title: str, min_score: float) 
             useful.append(hit)
     if not best_line or best_hit is None:
         return None
-    ordered = [best_hit] + [hit for hit in useful if hit["chunk"]["id"] != best_hit["chunk"]["id"]]
-    chips = [{"label": passage_chip(title, hit["chunk"]), "passage": hit["chunk"]["text"]} for hit in ordered]
-    return {"answer": best_line, "chips": chips}
+    needle = best_line.rstrip("。")
+    same = [hit for hit in hits if needle and needle in hit["chunk"]["text"]]
+    chosen = min(same or [best_hit], key=lambda hit: int(hit["chunk"].get("page") or 0) or 99)
+    label = passage_chip(title, chosen["chunk"])
+    return {"answer": best_line, "chips": [{"label": label, "passage": best_line}]}
 
 
 def doc_min_score(used_vectors: bool) -> float:
@@ -989,6 +991,17 @@ def fact_from_point(text: str, title: str, chapter: str) -> dict:
                 questions.append("柯小满的海鸥叫什么？")
     attr = chapter if chapter and chapter != "正文" else "重点"
     value = value_override or line.rstrip("。")
+    from memory_core.fact_recall import fact_aliases, fact_mentions
+
+    aliases = fact_aliases(line)
+    mentions = fact_mentions(line, entity if entity != (title or "文档") else "")
+    for alias in aliases:
+        if "海鸥" in alias:
+            questions.append(f"那只{alias}叫什么名字？")
+        if "灯塔" in alias:
+            questions.append(f"柯岚守护的{alias}是哪年建的？" if "第一座" in alias else f"{alias}是哪年建的？")
+        if "海盐" in alias:
+            questions.append(f"雾港的{alias}每年哪天开始晒？")
     return {
         "entity": entity,
         "attr": attr,
@@ -1000,6 +1013,8 @@ def fact_from_point(text: str, title: str, chapter: str) -> dict:
         "selected": True,
         "gate": "write",
         "source": "document",
+        "aliases": aliases,
+        "mentions": mentions,
     }
 
 

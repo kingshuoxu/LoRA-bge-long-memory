@@ -207,6 +207,39 @@ class WugangTests(unittest.TestCase):
         self.assertIsNone(covered_fact("沈星河的车是什么颜色？", [bike]))
         self.assertIsNone(covered_fact("沈星河的狗叫什么？", [bike]))
 
+    def test_learning_questions_use_the_stored_sentence(self):
+        from memory_core.fact_recall import possessed_name_query, recall_fact
+
+        facts = [
+            {"statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "entity": "白鹭塔"},
+            {"statement": "雾港的特产是一种蓝色海盐，名叫星砂盐，每年霜降那天开始晾晒。", "entity": "星砂盐"},
+            {"statement": "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "entity": "柯小满"},
+            {"statement": "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "entity": "雾港灯塔志"},
+            {"statement": "我叫徐金朔。", "entity": "我"},
+        ]
+        expect = {
+            "白鹭塔建于哪一年？": "1873",
+            "白鹭塔有多高？": "四十二",
+            "那只三条腿的海鸥叫什么名字？": "阿哨",
+            "柯岚守护的第一座灯塔是哪年建的？": "1873",
+            "雾港的蓝色海盐每年哪天开始晒？": "霜降",
+            "白鹭塔哪一年改用电灯？": "1931",
+            "白鹭塔的透镜是谁打磨的？": "诺丁",
+            "透镜一共有多少面？": "十六",
+        }
+        for question, gold in expect.items():
+            hit = recall_fact(question, facts)
+            self.assertIsNotNone(hit, question)
+            self.assertIn(gold, hit["statement"], question)
+        for question in ("雾港的市长是谁？", "柯岚的妻子叫什么名字？", "白鹭塔的灯光能照多远？", "我的狗叫什么名字？"):
+            self.assertIsNone(recall_fact(question, facts), question)
+        self.assertEqual(possessed_name_query("我的狗叫什么名字？"), "狗")
+        bike = {"statement": "沈星河的自行车颜色是朱红色。", "entity": "沈星河"}
+        self.assertIsNone(recall_fact("沈星河的汽车颜色是什么？", [bike]))
+        self.assertIsNone(recall_fact("沈星河的车是什么颜色？", [bike]))
+        self.assertIsNone(recall_fact("沈星河那辆汽车是什么颜色？", [bike]))
+        self.assertEqual(possessed_name_query("我的名字是什么？"), "")
+
     def test_key_points_keep_facts_when_the_model_picks_scenery(self):
         text = extract_pdf_text_layer((ROOT / "wugang_chrome.pdf").read_bytes())
         points = extract_key_points(split_chapters(text), ask=lambda _prompt: "镇上的人习惯在黄昏时分聚到石阶上，看归港的船。")
