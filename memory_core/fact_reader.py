@@ -471,10 +471,11 @@ def read_memory(
             continue
         if open_entity_question(query, entity):
             return None
-        # 「白鹭塔建于」里的建是谓语，不是另一个名字。名字本身出现了就继续摘录。
-        if entity in query:
+        # 名字整段出现才摘录。「白鹭塔建于」里的建是谓语。
+        # 「禾昭闻兰」「工坊公司 Inc」「工坊集团」是另一个名字，交给原来的澄清。
+        if entity_mentioned(entity, query):
             continue
-        if near_miss_span(entity, query) and not entity_mentioned(entity, query):
+        if near_miss_span(entity, query):
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
     if not memory_question(query, facts, best, pool):
