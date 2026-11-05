@@ -1076,7 +1076,9 @@ class MemoryService:
                     recall["expert"] = None
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
-                elif gated and gated.get("status") == "span":
+                elif gated and gated.get("status") == "span" and recall.get("reason") != "document":
+                    # 文档还在时，年份那一问要留整句，页码引用才带得上塔高。
+                    # 训练之后的记忆回答只留对上种类的短取值。
                     span = str(gated["span"])
                     fact_answer = span if span[-1:] in "。." else span + "。"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]

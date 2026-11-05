@@ -521,7 +521,7 @@ class AnswerTypeTests(unittest.TestCase):
         fact = _fact("透镜", "重点", LENS.rstrip("。"), LENS)
         fact["source"] = "document"
         self.assertEqual(spoken_fact("透镜有多少个工匠？", fact), "")
-        gated = enforce_answer_type("透镜有多少个工匠？", LENS, [fact])
+        gated = enforce_answer_type("透镜有多少个工匠？", LENS, [fact, _fact("我", "名字", "徐金朔", "我叫徐金朔。")])
         self.assertEqual(gated["status"], "abstain")
         self.assertIn("透镜有多少个工匠", gated["text"])
         self.assertNotIn("十六", gated["text"])
@@ -541,6 +541,10 @@ class AnswerTypeTests(unittest.TestCase):
         gated = enforce_answer_type("白鹭塔建于哪一年？", TOWER, [fact])
         self.assertEqual(gated["status"], "span")
         self.assertEqual(gated["span"], "1873年")
+        unrelated = _fact("我", "名字", "徐金朔", "我叫徐金朔。")
+        still = enforce_answer_type("白鹭塔建于哪一年？", TOWER, [unrelated])
+        self.assertEqual(still["status"], "span")
+        self.assertEqual(still["span"], "1873年")
 
     def test_a_count_question_does_not_keep_a_sentence_that_only_contains_ming(self):
         from memory_core.fact_recall import spoken_fact

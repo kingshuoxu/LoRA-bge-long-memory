@@ -743,6 +743,9 @@ def enforce_answer_type(query: str, answer: str, facts: list[dict] | None = None
                     host = fact
                     support = text
                     break
+        # 文档原句还没写进专家时，原句自己就能证明这个取值。
+        if not support and predicate_in_statement(query, answer or ""):
+            support = answer or ""
         if support or (not rows and predicate_in_statement(query, candidate)):
             if (answer or "").strip().rstrip("。") == candidate:
                 return None

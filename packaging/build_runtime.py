@@ -58,8 +58,18 @@ def download(url: str, dest: Path) -> None:
         return
     print(f"下载 {url}", flush=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=120) as response, tmp.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, tmp.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            print(f"下载失败，重试 {attempt + 1}/3：{exc}", flush=True)
+    if last_error is not None:
+        raise last_error
     tmp.replace(dest)
 
 
