@@ -566,13 +566,13 @@ def _clarify_reply(stored: str, span: str, text: str) -> str:
     english = not has_cjk(text)
     if english:
         return f"I remember {stored}, but not the rest of that."
-    from memory_core.span_guard import _predicate_phrase
+    from memory_core.span_guard import _asked_clause
 
-    phrase = _predicate_phrase(text)
-    if phrase.startswith("的"):
-        phrase = phrase[1:]
-    if phrase:
-        return f"我记得{stored}，但没提到{phrase}。"
+    clause = _asked_clause(text)
+    if clause.startswith(stored):
+        clause = clause[len(stored):].lstrip("的")
+    if clause:
+        return f"我记得{stored}，但没提到{clause}。"
     return f"我记得{stored}，但没提到这件事。"
 
 

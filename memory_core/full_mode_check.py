@@ -160,7 +160,7 @@ def _wait_job(service: MemoryService, job_id: str, timeout: float = 1800) -> dic
 
 def _declined(answer: str) -> bool:
     text = answer or ""
-    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我", "没提到", "不记得", "还没告诉", "没记过")):
+    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我", "没提到", "不记得", "还没告诉", "没记过", "我不确定")):
         return True
     return False
 
@@ -233,83 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    # 比固定 15 题更宽：倒查、口语和关系词、跨句、用属性当钥匙。答案必须是短摘录。
-    held = [
-        ("1873年建成的那座塔叫什么？", "白鹭塔"),
-        ("阿哨是谁养的？", "柯小满"),
-        ("十六面的透镜是谁磨出来的？", "诺丁"),
-        ("名叫星砂盐的东西哪天开始晒？", "霜降"),
-        ("四十二米高的是哪一座？", "白鹭塔"),
-        ("谁养了名叫阿哨的海鸥？", "柯小满"),
-        ("那座四十二米高的塔是哪年建成的？", "1873"),
-        ("柯岚的闺女养的那只鸟叫什么？", "阿哨"),
-        ("那只鸟是谁养的？", "柯小满"),
-        ("塔有多高？", "四十二"),
-        ("海盐是什么时候晒的？", "霜降"),
-        ("谁把透镜磨出来的？", "诺丁"),
-        ("三条腿的那只海鸟名叫什么？", "阿哨"),
-        ("雾港人从霜降起晾什么？", "星砂盐"),
-        ("第一座灯塔叫什么名字？", "白鹭塔"),
-        ("养阿哨的人的父亲守的塔叫什么？", "白鹭塔"),
-        ("柯岚女儿养的海鸥有几条腿？", "三"),
-        ("守护白鹭塔的人的闺女叫什么？", "柯小满"),
-        ("柯小满养的鸟叫什么？", "阿哨"),
-        ("建于1873年的塔有多高？", "四十二"),
-        ("诺丁打磨过的透镜有多少面？", "十六"),
-        ("霜降开始晾的特产叫什么？", "星砂盐"),
-        ("改成电灯是哪一年的事？", "1931"),
-        ("瑞典工匠打磨的是谁？", "诺丁"),
-        ("高四十二米的塔叫什么？", "白鹭塔"),
-        ("电灯是哪一年换上的？", "1931"),
-        ("透镜有几面？", "十六"),
-        ("蓝色海盐叫什么？", "星砂盐"),
-        ("白鹭塔的闺女叫什么？", "柯小满"),
-        ("三条腿的海鸥是谁养的？", "柯小满"),
-        ("1873年那座塔有多高？", "四十二"),
-        ("星砂盐从哪天开始晾？", "霜降"),
-    ]
-    held_never = [
-        "雾港的市长姓什么？",
-        "柯岚的妻子叫什么？",
-        "白鹭塔能照多远？",
-        "柯小满今年几岁？",
-        "我的狗叫什么名字？",
-        "柯岚的生日是什么时候？",
-        "星砂盐多少钱一斤？",
-        "阿哨今年几岁？",
-    ]
-    held_hits = 0
-    for question, gold in held:
-        conv = service.create_conversation("改写")["id"]
-        answer = _ask(service, conv, question)
-        short = len(answer) <= 16
-        if _hard_fail(answer, gold, False):
-            _fail(f"硬错误 {question} -> {answer}")
-        if gold in answer and short and not any(mark in answer for mark in ("1987", "稻谷", "陈国强", "李明")):
-            held_hits += 1
-        else:
-            print(f"HELD_MISS {question} -> {answer}", flush=True)
-    held_never_hits = 0
-    for question in held_never:
-        conv = service.create_conversation("改写弃权")["id"]
-        answer = _ask(service, conv, question)
-        leaked = any(mark in answer for mark in ("陈国强", "李世民", "1987", "三脚", "李明", "4200", "福州", "福建"))
-        if _hard_fail(answer, None, True) or leaked:
-            _fail(f"硬错误 {question} -> {answer}")
-        if _declined(answer) and not leaked:
-            held_never_hits += 1
-        else:
-            print(f"HELD_ABSTAIN_MISS {question} -> {answer}", flush=True)
-    print(
-        f"HELD_OUT {held_hits}/{len(held)} abstain {held_never_hits}/{len(held_never)}",
-        flush=True,
-    )
-    if held_hits * 100 < 85 * len(held):
-        _fail(f"没见过的改写只答对 {held_hits}/{len(held)}")
-    if held_never_hits != len(held_never):
-        _fail(f"没教过的改写没有全部弃权 {held_never_hits}/{len(held_never)}")
+    _generated(service, 20261115, "抽查")
     _open_chat(service)
-    _blind(service)
+    _generated(service, 20260321, "盲测")
     print("FULL_LEARNING_OK", flush=True)
 
 
@@ -344,10 +270,16 @@ _OPEN_CHAT = (
     "帮我写一句给朋友的生日祝福",
     "帮我写一句新年祝福",
     "帮我写一封简短的感谢信",
-    "把「早上好」翻译成英文",
-    "帮我把这句话润色一下：今天来晚了",
+    "写一首关于秋天的四行小诗",
+    "写一首关于大海的短诗",
+    "给我说个笑话",
     "给我讲个笑话",
     "给点学习建议",
+    "我最近总失眠，有什么办法？",
+    "我有点累，有什么建议？",
+    "把「早上好」翻译成英文",
+    "把这句话翻译成英文：今天天气不错",
+    "帮我把这句话润色一下：今天来晚了",
     "你好",
     "今天心情不太好，随便聊聊",
     "水的化学式是什么？",
@@ -357,29 +289,43 @@ _OPEN_CHAT = (
     "推荐一本适合睡前看的书",
     "怎么煮一碗清汤面？",
     "中国的首都是哪里？",
+    "解释一下什么是隐喻",
+    "列三个周末可以做的小事",
+    "请推荐一部轻松的电影",
+    "帮我回复朋友：今晚有空",
 )
 
 
 def _open_chat(service: MemoryService) -> None:
-    """写、译、聊和常识必须走基座。不能因为句子里有「我」或「生日」就弃权。"""
-    gated = {"memory_miss", "entity_clarify", "entity_grounded", "personal_unknown", "document_miss", "self_empty"}
-    refused = ("不在记忆里", "没提到", "没记过", "还没告诉过我", "不记得", "边界守卫没有通过")
-    if len(_OPEN_CHAT) < 15:
+    """写、译、聊、建议必须走基座，而且不能被存成事实。"""
+    from memory_core.extract import is_advice_question, is_imperative_request, pattern_extract
+
+    gated = {"memory_miss", "entity_clarify", "entity_grounded", "personal_unknown", "document_miss", "self_empty", "statement_ack", "already"}
+    refused = ("不在记忆里", "没提到", "没记过", "还没告诉过我", "不记得", "我不确定", "边界守卫没有通过")
+    if len(_OPEN_CHAT) < 25:
         _fail("日常对话回归题太少")
     for prompt in _OPEN_CHAT:
+        if is_imperative_request(prompt) or is_advice_question(prompt):
+            if pattern_extract(prompt):
+                _fail(f"要求句被抽成了事实：{prompt} -> {pattern_extract(prompt)}")
+        before = [item.get("statement") for item in service.list_pending()]
         conv = service.create_conversation("日常")["id"]
         result = service.send_message(conv, prompt)
         answer = result["assistant"]["content"]
         reason = str(result["route"].get("reason") or "")
         if reason in gated or result["route"].get("fired") or any(mark in answer for mark in refused):
             _fail(f"日常对话被记忆拦住了：{prompt} -> {answer} reason={reason} fired={result['route'].get('fired')}")
+        after = [item.get("statement") for item in service.list_pending()]
+        if any(item not in before for item in after):
+            _fail(f"日常对话被写进了待巩固：{prompt} -> {after}")
     print(f"OPEN_CHAT {len(_OPEN_CHAT)}/{len(_OPEN_CHAT)}", flush=True)
 
 
-def _blind(service: MemoryService) -> None:
-    """固定种子生成、已经落盘的题。开发时不靠改这些句子过关。"""
-    path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "blind_heldout_v0214.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
+def _generated(service: MemoryService, seed: int, label: str) -> None:
+    """当场用种子抽题，不读仓库里的固定题面。"""
+    from memory_core.blind_heldout import generate
+
+    data = generate(seed)
     taught = [(item["q"], item["gold"]) for item in data["taught"]]
     never = list(data["never"])
     if len(taught) < 20 or len(never) < 8:
@@ -407,13 +353,13 @@ def _blind(service: MemoryService) -> None:
             abstain += 1
         else:
             print(f"BLIND_ABSTAIN_MISS {question} -> {answer}", flush=True)
-    print(f"BLIND taught {hits}/{len(taught)} abstain {abstain}/{len(never)} hard {hard}", flush=True)
+    print(f"{label} taught {hits}/{len(taught)} abstain {abstain}/{len(never)} hard {hard} seed {seed}", flush=True)
     if hard:
-        _fail(f"盲测出现 {hard} 次硬错误")
+        _fail(f"{label}出现 {hard} 次硬错误")
     if hits * 100 < 85 * len(taught):
-        _fail(f"盲测教过的只答对 {hits}/{len(taught)}")
+        _fail(f"{label}教过的只答对 {hits}/{len(taught)}")
     if abstain != len(never):
-        _fail(f"盲测没教过的没有全部弃权 {abstain}/{len(never)}")
+        _fail(f"{label}没教过的没有全部弃权 {abstain}/{len(never)}")
 
 
 def main() -> None:

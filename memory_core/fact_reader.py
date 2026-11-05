@@ -23,7 +23,7 @@ from memory_core.span_guard import (
     is_open_task,
     mentions_stored,
     predicate_covered,
-    relation_answer,
+    relation_decision,
 )
 
 TOP_K = 3
@@ -480,22 +480,20 @@ def read_memory(
             continue
         missed = near_miss_span(entity, query)
         if missed:
-            # 「守护白鹭塔」前面是动词，名字本身还在。后面多出来的字才是另一个名字。
+            # 前面是动词（守护白鹭塔）仍是这个名字。后面只多一两个字才是另一个名字。
             if missed.endswith(entity) and not missed.startswith(entity):
+                continue
+            if missed.startswith(entity) and len(missed) - len(entity) > 2:
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
     if not memory_question(query, facts, best, pool):
         return None
-    linked = relation_answer(query, facts)
-    if linked is not None and not linked[0]:
-        return {"text": natural_refusal(query, facts), "fact": facts[0], "miss": True}
-    if linked:
-        span, fact = linked
-        checked = accept_aligned(query, span, fact, require_predicate=False)
-        if checked:
-            return {"text": _finish(checked), "fact": fact, "miss": False}
-        return {"text": natural_refusal(query, facts), "fact": fact, "miss": True}
+    decision = relation_decision(query, facts)
+    if decision and decision.get("status") == "abstain":
+        return {"text": decision["text"], "fact": None, "miss": True}
+    if decision and decision.get("status") == "answer":
+        return {"text": _finish(decision["span"]), "fact": decision["fact"], "miss": False}
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}

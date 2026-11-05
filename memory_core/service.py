@@ -228,8 +228,10 @@ class MemoryService:
 
             migrate_legacy(self.home, self.models_dir)
         from memory_core.identity import migrate_user_identity
+        from memory_core.extract import drop_request_memories
 
         migrate_user_identity(self.home)
+        drop_request_memories(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:
@@ -691,7 +693,9 @@ class MemoryService:
                     "fact_pass": False,
                 }
                 return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal, "recall": recall}
-            if not utterance_is_question(content):
+            from memory_core.extract import is_advice_question, is_imperative_request
+
+            if not utterance_is_question(content) and not is_imperative_request(content) and not is_advice_question(content):
                 remember_statement(self.home, content)
                 stated = pattern_extract(content)
                 if stated and all(self._remembered_match(fact) for fact in stated):
@@ -1003,7 +1007,7 @@ class MemoryService:
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
             if utterance_is_question(content) and not open_task:
-                from memory_core.span_guard import fixed_refusal, relation_answer
+                from memory_core.span_guard import relation_decision
 
                 remembered = []
                 for record in experts:
@@ -1011,9 +1015,9 @@ class MemoryService:
                     for fact in memory.get("facts") or []:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
-                linked = relation_answer(content, remembered) if remembered else None
-                if linked is not None and not linked[0]:
-                    fact_answer = fixed_refusal(content, remembered)
+                linked = relation_decision(content, remembered) if remembered else None
+                if linked and linked.get("status") == "abstain":
+                    fact_answer = linked["text"]
                     decision.fired = False
                     decision.expert = None
                     decision.label = "基座"
@@ -1023,21 +1027,25 @@ class MemoryService:
                     recall["abstain"] = True
                     recall["reason"] = "memory_miss"
                     recall["matched_facts"] = []
-                    recall["reason_text"] = "关系没有走到最后一问，所以不把中间的人交出去"
+                    recall["reason_text"] = "关系没有走完，所以不把中间的人当成答案，也不挂引用"
                     recall["expert"] = None
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
-                elif linked and linked[0] and (
-                    not fact_answer
-                    or len(fact_answer) > 18
-                    or (linked[0] not in fact_answer and "记住的是" not in fact_answer)
-                ):
-                    span = linked[0]
-                    fact_answer = span if span[-1] in "。." else span + "。"
-                    owner = next((record for record in experts if linked[1] in ((record.fact_memory or {}).get("facts") or [])), None)
-                    if owner is not None:
-                        mount_memory(decision, recall, owner, [linked[1]], "entity_first")
-                        recall["reason_text"] = "回答是顺着关系从已记住的句子里摘出来的"
+                elif linked and linked.get("status") == "answer":
+                    span = str(linked["span"])
+                    if (
+                        not fact_answer
+                        or len(fact_answer) > 18
+                        or (span not in fact_answer and "记住的是" not in (fact_answer or ""))
+                    ):
+                        fact_answer = span if span[-1:] in "。." else span + "。"
+                        owner = next(
+                            (record for record in experts if linked["fact"] in ((record.fact_memory or {}).get("facts") or [])),
+                            None,
+                        )
+                        if owner is not None:
+                            mount_memory(decision, recall, owner, [linked["fact"]], "entity_first")
+                            recall["reason_text"] = "回答是顺着已经记下的关系摘出来的"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)

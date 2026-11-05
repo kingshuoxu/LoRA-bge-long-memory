@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any
 
 from memory_core.prompts import has_cjk
@@ -32,6 +34,41 @@ def _split_sentences(text: str) -> list[str]:
         if len(piece) >= 4:
             out.append(piece)
     return out
+
+
+_IMPERATIVE = (
+    "帮我", "帮忙", "请你", "请帮", "写一首", "写一句", "写一段", "写个", "写封", "写一封", "写首",
+    "翻译", "译成", "说个", "说一", "讲个", "讲一", "列一下", "列举", "解释一下", "推荐",
+    "润色", "改写", "起草", "给我讲", "给我说", "给我写", "笑话", "祝福",
+)
+_ADVICE = (
+    "有什么办法", "怎么办", "有什么方法", "有什么建议", "怎么缓解", "怎么治",
+    "如何才能", "怎样才能", "有啥办法", "怎么解决", "怎么做",
+)
+
+
+def is_imperative_request(text: str) -> bool:
+    """写、译、讲、推荐。这些是要求，不是关于人或事物的陈述。"""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if any(mark in raw for mark in _IMPERATIVE):
+        return True
+    return bool(re.match(r"^(?:写|译|讲|说|列|荐)", raw))
+
+
+def is_advice_question(text: str) -> bool:
+    """要办法、建议或做法。哪怕以「我」开头，也不是在问记住的事实。"""
+    raw = text or ""
+    return any(mark in raw for mark in _ADVICE)
+
+
+def is_self_fact_question(text: str) -> bool:
+    """只有在问使用者自己已经告诉过的事实时才走记忆。"""
+    raw = (text or "").strip()
+    if re.search(r"我的[\u4e00-\u9fff]{1,12}(?:是|叫|在|住|有)", raw):
+        return True
+    return any(raw.startswith(prefix) for prefix in ("我叫什么", "我是谁", "我的名字", "我住", "我的生日"))
 
 
 def _looks_like_question(sentence: str) -> bool:
@@ -252,7 +289,8 @@ def _bind_subject(sentence: str, current: str | None) -> str:
 
 def _split_yu(sentence: str) -> tuple[str, str, str] | None:
     """「主语 + 一两字的动词 + 于 + 取值」。动词取紧挨着「于」的最短可用长度。"""
-    matched = re.match(r"^(.+)于([^，。]{1,24})$", sentence)
+    probe = sentence.replace("关于", "关○")
+    matched = re.match(r"^(.+)于([^，。]{1,24})$", probe)
     if not matched or "的" in matched.group(1):
         return None
     left, value = matched.group(1), matched.group(2)
@@ -478,12 +516,54 @@ def _leading_name(sentence: str) -> str | None:
     return None
 
 
+def drop_request_memories(home: Path) -> int:
+    """升级后丢掉被误存成事实的要求句，例如「写一首关于秋天的四行小诗」。"""
+    experts = Path(home) / "experts"
+    if not experts.is_dir():
+        return 0
+    removed = 0
+    for path in sorted(experts.glob("*/fact_memory.json")):
+        try:
+            memory = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(memory, dict):
+            continue
+        facts = memory.get("facts")
+        if not isinstance(facts, list):
+            continue
+        kept = []
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            statement = str(fact.get("statement") or "")
+            entity = str(fact.get("entity") or "")
+            if is_imperative_request(statement) or is_imperative_request(entity) or entity in {"写一", "首关"}:
+                removed += 1
+                continue
+            kept.append(fact)
+        if len(kept) == len(facts):
+            continue
+        memory["facts"] = kept
+        names = []
+        for fact in kept:
+            name = str(fact.get("entity") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        if names:
+            memory["entities"] = names
+        path.write_text(json.dumps(memory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return removed
+
+
 def pattern_extract(text: str) -> list[dict[str, Any]]:
     """按句式抽事实，不查属性词表。一段话里的 It / 它 沿用上一句的主语。"""
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
     for sentence in _split_sentences(text):
+        if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence):
+            continue
         found = _match_sentence(sentence, current)
         if found is None:
             named = _leading_name(sentence)
@@ -774,7 +854,7 @@ def subject_names(text: str) -> list[str]:
     for fact in pattern_extract(text):
         add(str(fact.get("entity") or ""))
     for sentence in _split_sentences(text):
-        if _looks_like_question(sentence):
+        if _looks_like_question(sentence) or is_imperative_request(sentence) or is_advice_question(sentence):
             continue
         if not _looks_like_claim(sentence):
             continue
@@ -831,7 +911,11 @@ def _relation_questions(entity: str, attr: str, statement: str, english: bool) -
 
 
 def extract_fact_candidates(text: str, model=None, tok=None, device=None) -> list[dict[str, Any]]:
-    facts = pattern_extract(text)
+    facts = [
+        fact for fact in pattern_extract(text)
+        if not is_imperative_request(str(fact.get("statement") or ""))
+        and not is_advice_question(str(fact.get("statement") or ""))
+    ]
     try:
         facts.extend(company_pipeline_extract(text))
     except Exception:
