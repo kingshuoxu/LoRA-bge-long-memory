@@ -212,6 +212,32 @@ def _public_fact(fact: dict) -> dict[str, Any]:
     }
 
 
+_CHAPTER = re.compile(r"第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇]")
+
+
+def _is_chapter(text: str) -> bool:
+    return bool(_CHAPTER.search(text or ""))
+
+
+def _nebula_attr(attr: str, statement: str) -> str:
+    """星云上的属性不写章节名。"""
+    if not _is_chapter(attr):
+        return attr
+    body = _CHAPTER.sub("", statement or "")
+    body = re.sub(r"^[\s　，,。]+", "", body).strip().rstrip("。")
+    clause = re.split(r"[，,]", body)[0].strip()
+    return clause[:18] or "这条事实"
+
+
+def _nebula_value(value: str, statement: str) -> str:
+    if not _is_chapter(value):
+        return value
+    named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", statement or "")
+    if named:
+        return named.group(1)
+    return _nebula_attr(value, statement)
+
+
 class MemoryService:
     def __init__(
         self,
@@ -2011,8 +2037,8 @@ class MemoryService:
                     "expert_label": record.display_name,
                     "statement": fact.get("statement") or "",
                     "entity": fact.get("entity") or "",
-                    "attr": fact.get("attr") or "",
-                    "value": fact.get("value") or fact.get("answer") or "",
+                    "attr": _nebula_attr(str(fact.get("attr") or ""), str(fact.get("statement") or "")),
+                    "value": _nebula_value(str(fact.get("value") or fact.get("answer") or ""), str(fact.get("statement") or "")),
                     "question": qa[0]["q"] if qa else fact.get("question") or "",
                     "superseded": bool(fact.get("superseded")),
                     "superseded_by": fact.get("superseded_by") or "",
@@ -2030,13 +2056,20 @@ class MemoryService:
                 names = [entity for entity in record.entities if 2 <= len(entity) <= 12]
             canonical[record.name] = names
             bank = ensure_fact_bank(record) if record.explicit else None
+            vec = None
             if bank is not None and bank.question_vecs.numel():
-                vec = bank.question_vecs.mean(dim=0)
-            else:
-                vec = record.key.float().mean(dim=0)
+                raw = bank.question_vecs
+                if not (getattr(raw, "is_meta", False) or getattr(raw.device, "type", "") == "meta"):
+                    vec = raw.detach().float().cpu().mean(dim=0)
+            if vec is None and record.key is not None and not (
+                getattr(record.key, "is_meta", False) or getattr(record.key.device, "type", "") == "meta"
+            ):
+                vec = record.key.detach().float().cpu().mean(dim=0)
+            if vec is None:
+                continue
             norm = float(vec.norm()) or 1.0
             centroids[record.name] = vec / norm
-        names_in_order = [record.name for record in records]
+        names_in_order = [name for name in centroids]
         for index, left in enumerate(names_in_order):
             for right in names_in_order[index + 1 :]:
                 shared = [entity for entity in canonical.get(left, []) if entity in canonical.get(right, [])]

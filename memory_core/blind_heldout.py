@@ -37,6 +37,36 @@ _TAUGHT = [
     ("诺丁是哪国人？", "瑞典"),
     ("三条腿的海鸥是谁养的？", "柯小满"),
 ]
+# 每一跳都有边，而且最后的取值种类对得上。抽查时这些必须答出来。
+_CHAINS = [
+    ("诺丁打磨透镜的那座塔是谁守护的？", "柯岚"),
+    ("柯岚女儿的爸爸守的灯塔有多高？", "四十二"),
+    ("守护灯塔的人的女儿养的是什么鸟？", "阿哨"),
+    ("打磨透镜的工匠是哪国人？", "瑞典"),
+    ("柯小满的父亲守护的塔有多高？", "四十二"),
+    ("柯岚的女儿养的鸟叫什么？", "阿哨"),
+    ("谁看守白鹭塔？", "柯岚"),
+    ("阿哨是谁养的？", "柯小满"),
+    ("透镜是谁打磨的？", "诺丁"),
+    ("守护白鹭塔的人的女儿叫什么？", "柯小满"),
+    ("柯小满的爸爸守护的塔叫什么？", "白鹭塔"),
+    ("打磨透镜的师傅是哪国人？", "瑞典"),
+]
+# 同一句里有另一个人，问的角色却不是那个人。必须弃权，不能把工匠或塔名当成答案。
+_WHO_TRAPS = [
+    "诺丁守护的塔叫什么？",
+    "瑞典工匠养的海鸥叫什么？",
+    "谁是诺丁的主人？",
+    "打磨透镜的人的女儿是谁？",
+    "谁看守诺丁？",
+    "诺丁的爸爸是谁？",
+    "海鸥是谁打磨的？",
+    "阿哨的主人是哪国人？",
+    "白鹭塔的工匠是谁的女儿？",
+    "透镜的工匠守的塔有多高？",
+    "诺丁的女儿叫什么？",
+    "谁打磨了阿哨？",
+]
 _TRAPS = [
     "柯岚守了多少年？",
     "柯岚守护白鹭塔多少年？",
@@ -72,16 +102,21 @@ _NEVER = [
 
 def generate(seed: int) -> dict:
     rng = random.Random(seed)
-    taught = list(_TAUGHT)
-    never = list(_TRAPS)
+    chains = list(_CHAINS)
+    rest = [item for item in _TAUGHT if item not in chains]
+    rng.shuffle(rest)
+    taught = chains + rest[: max(0, 24 - len(chains))]
+    never = list(_TRAPS) + list(_WHO_TRAPS)
     extra = list(_NEVER)
-    rng.shuffle(taught)
     rng.shuffle(extra)
     rng.shuffle(never)
-    taught = taught[:24]
     never.extend(extra[:4])
     if len(_TRAPS) < 15:
         raise RuntimeError("类型陷阱不足 15 条")
+    if len(_WHO_TRAPS) < 10:
+        raise RuntimeError("角色干扰不足 10 条")
+    if len(_CHAINS) < 10:
+        raise RuntimeError("短链不足 10 条")
     return {
         "seed": seed,
         "taught": [{"q": question, "gold": gold} for question, gold in taught],

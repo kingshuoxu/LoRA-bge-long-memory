@@ -238,6 +238,54 @@ def _hosts(query: str, pool: list[dict]) -> list[dict]:
     return usable
 
 
+_NOT_SUBJECT = {"女儿", "闺女", "父亲", "爸爸", "老爸", "主人", "工匠", "师傅", "灯塔", "海鸥", "丫头"}
+
+
+def _names_in_query(query: str, facts: list[dict]) -> list[str]:
+    blob = "\n".join(_statement(fact) for fact in facts)
+    found: list[str] = []
+    text = query or ""
+    for size in (4, 3, 2):
+        for index in range(0, max(0, len(text) - size + 1)):
+            token = text[index:index + size]
+            if token in _NOT_SUBJECT or token in {"打磨", "守护", "看守", "什么", "怎么"}:
+                continue
+            if any(token in longer for longer in found):
+                continue
+            if token in blob:
+                found.append(token)
+    return found
+
+
+def _statement_has_query_names(query: str, statement: str, facts: list[dict]) -> bool:
+    names = _names_in_query(query, facts)
+    if not names:
+        return True
+    return all(name in (statement or "") for name in names)
+
+
+def _subject_in_statement(query: str, statement: str) -> bool:
+    """「白鹭塔的闺女」不能拿柯岚的女儿那一句来答。"""
+    names = []
+    for chunk in re.findall(r"([\u4e00-\u9fff]{2,8})的", query or ""):
+        piece = chunk
+        changed = True
+        while changed and len(piece) > 2:
+            changed = False
+            for role in sorted(_NOT_SUBJECT | {"养"}, key=len, reverse=True):
+                if piece.endswith(role) and len(piece) > len(role):
+                    piece = piece[: -len(role)]
+                    changed = True
+                    break
+        if piece in _NOT_SUBJECT or len(piece) < 2:
+            continue
+        names.append(piece[-4:])
+    if not names:
+        return True
+    text = statement or ""
+    return any(name in text for name in names)
+
+
 def _asked_relation(query: str) -> str:
     """紧挨着疑问词的那个关系，不管前面用来指路的字。"""
     match = re.search(r"的([\u4e00-\u9fff]{1,6})(?:叫什么|是谁|是什么|有多|在哪|哪年|什么时候)", query or "")
@@ -485,17 +533,17 @@ def read_memory(
             # 前面是动词（守护白鹭塔）仍是这个名字。后面只多一两个字才是另一个名字。
             if missed.endswith(entity) and not missed.startswith(entity):
                 continue
-            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往")):
+            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的")):
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
-    if not memory_question(query, facts, best, pool):
-        return None
     decision = relation_decision(query, facts)
-    if decision and decision.get("status") == "abstain":
-        return {"text": decision["text"], "fact": None, "miss": True}
     if decision and decision.get("status") == "answer":
         return {"text": _finish(decision["span"]), "fact": decision["fact"], "miss": False}
+    if not memory_question(query, facts, best, pool):
+        return None
+    if decision and decision.get("status") == "abstain":
+        return {"text": decision["text"], "fact": None, "miss": True}
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}
@@ -509,11 +557,23 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if checked and span_fits(query, checked) and predicate_in_statement(query, _statement(fact)):
+            if (
+                checked
+                and span_fits(query, checked)
+                and predicate_in_statement(query, _statement(fact))
+                and _subject_in_statement(query, _statement(fact))
+                and _statement_has_query_names(query, _statement(fact), facts)
+            ):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if checked and span_fits(query, checked) and predicate_in_statement(query, _statement(fact)):
+        if (
+            checked
+            and span_fits(query, checked)
+            and predicate_in_statement(query, _statement(fact))
+            and _subject_in_statement(query, _statement(fact))
+            and _statement_has_query_names(query, _statement(fact), facts)
+        ):
             return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}

@@ -35,7 +35,9 @@ class ChatEngine:
     def ensure(self) -> None:
         if self._weights_ready():
             return
-        with self._load_lock:
+        from memory_core.model_load import LOAD_LOCK
+
+        with LOAD_LOCK, self._load_lock:
             if self._weights_ready():
                 return
             self.model = None

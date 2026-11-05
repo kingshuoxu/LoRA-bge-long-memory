@@ -523,7 +523,7 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertEqual(spoken_fact("透镜有多少个工匠？", fact), "")
         gated = enforce_answer_type("透镜有多少个工匠？", LENS, [fact, _fact("我", "名字", "徐金朔", "我叫徐金朔。")])
         self.assertEqual(gated["status"], "abstain")
-        self.assertIn("透镜有多少个工匠", gated["text"])
+        self.assertIn("有多少个工匠", gated["text"])
         self.assertNotIn("十六", gated["text"])
         self.assertNotIn("诺丁", gated["text"])
         expert = _Expert([fact])
@@ -545,6 +545,23 @@ class AnswerTypeTests(unittest.TestCase):
         still = enforce_answer_type("白鹭塔建于哪一年？", TOWER, [unrelated])
         self.assertEqual(still["status"], "span")
         self.assertEqual(still["span"], "1873年")
+
+    def test_who_guards_is_not_the_craftsman_title(self):
+        from memory_core.fact_reader import read_memory
+        from memory_core.span_guard import span_fits
+
+        facts = [
+            {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔", "source": "document"},
+            {"entity": "诺丁", "statement": "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "value": "诺丁", "source": "document"},
+            {"entity": "阿哨", "statement": "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "value": "阿哨", "source": "document"},
+        ]
+        self.assertFalse(span_fits("谁守护白鹭塔？", "瑞典工匠"))
+        got = read_memory("诺丁打磨透镜的那座塔是谁守护的？", facts, None)
+        self.assertIn("柯岚", got["text"])
+        self.assertNotIn("瑞典工匠", got["text"])
+        self.assertFalse(got["miss"])
+        missed = read_memory("诺丁的女儿叫什么？", facts, None)
+        self.assertTrue(missed is None or missed.get("miss") or "柯小满" not in missed["text"])
 
     def test_a_count_question_does_not_keep_a_sentence_that_only_contains_ming(self):
         from memory_core.fact_recall import spoken_fact

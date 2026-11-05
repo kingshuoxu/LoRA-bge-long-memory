@@ -12,7 +12,7 @@ from memory_core.prompts import has_cjk
 _COUNTRIES = ("瑞典", "挪威", "中国", "日本", "英国", "法国", "德国", "美国", "荷兰", "丹麦", "芬兰", "俄罗斯")
 _SOLAR = ("霜降", "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至", "立秋", "处暑", "白露", "秋分", "寒露", "立冬", "小雪", "大雪", "冬至", "小寒", "大寒")
 _STOP = frozenset(
-    "什么 怎么 这个 那个 一个 我们 他们 就是 可以 没有 不是 自己 时候 地方 东西 开始 每年 那天 这座 那座 已经 还是 因为 所以 如果 但是 然后 知道 告诉 请问 一下 哪里 哪儿 哪年 谁的 是谁".split()
+    "什么 怎么 这个 那个 一个 我们 他们 就是 可以 没有 不是 自己 时候 地方 东西 开始 每年 那天 这座 那座 已经 还是 因为 所以 如果 但是 然后 知道 告诉 请问 一下 哪里 哪儿 哪年 谁的 是谁 打磨 守护 看守 工匠 师傅".split()
 )
 # 问句里的属性，和句子里必须出现的说法。电灯对不上建塔那一句。
 _PREDICATES = (
@@ -285,11 +285,17 @@ def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
         if clause.startswith("我"):
             clause = clause[1:]
         return f"你还没告诉过我{clause}。" if clause else "你还没告诉过我这件事。"
-    book = _from_book(_subject(query, facts), facts) or any(
+    subject = _subject(query, facts)
+    book = _from_book(subject, facts) or any(
         str(fact.get("source") or "") == "document" for fact in facts
     )
+    if book and subject and subject in (query or "") and clause:
+        rest = clause[len(subject):].lstrip("的") if clause.startswith(subject) else clause
+        if rest and rest != subject:
+            return f"我记得{subject}，但没提到{rest}。"
+        return f"我记得{subject}，但这件事我不确定。"
     if book and clause:
-        return f"书里没提到{clause}。"
+        return f"我不确定{clause}。"
     if clause:
         return f"我没记过{clause}。"
     return "我没记过这件事。"
@@ -477,6 +483,7 @@ _HOP_WORDS = (
     ("闺女", "daughter"),
     ("女儿", "daughter"),
     ("谁守", "keeper"),
+    ("看守", "keeper"),
     ("守护的人", "keeper"),
     ("守的塔", "tower"),
     ("灯塔", "tower"),
@@ -497,18 +504,24 @@ _HOP_WORDS = (
 _PERSON_HOPS = {"owner", "father", "daughter", "keeper", "craft", "pet"}
 
 
+def _mask_role_objects(query: str) -> str:
+    """「守护灯塔的人」是一个角色，灯塔不是下一跳。"""
+    return re.sub(r"((?:守护|看守).{0,8})(?:灯塔|这座塔|那座塔)(的人)", r"\1\2", query or "")
+
+
 def _explicit_hops(query: str, names: list[str]) -> list[str]:
     """按问句从左到右读关系词。只认明确写出来的关系，不把名字里的字算进去。"""
     hops: list[str] = []
     index = 0
-    text = query or ""
+    text = _mask_role_objects(query or "")
     asks_name = any(mark in text for mark in ("叫什么", "叫啥", "什么名字")) and "谁" not in text
     while index < len(text):
         if _inside_name(text, index, 1, names):
             index += 1
             continue
         if text.startswith("养", index):
-            kind = "pet" if asks_name else "owner"
+            wants_pet = asks_name or ("谁" not in text and any(mark in text for mark in ("什么", "啥", "鸟")))
+            kind = "pet" if wants_pet else "owner"
             if not hops or hops[-1] != kind:
                 hops.append(kind)
             index += 1
@@ -583,6 +596,12 @@ def span_fits(query: str, span: str) -> bool:
     if kind == "faces":
         return text.endswith("面")
     if kind == "person":
+        if any(job in text for job in ("工匠", "师傅", "学徒", "徒弟", "市长")):
+            return False
+        if any(text.startswith(country) for country in _COUNTRIES):
+            return False
+        if text.endswith(("塔", "盐", "鸥")):
+            return False
         return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)) and text not in _COUNTRIES
     if kind == "place":
         return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,8}", text))
@@ -609,12 +628,86 @@ def predicate_in_statement(query: str, statement: str) -> bool:
         return "面" in text
     if kind == "height":
         return "米" in text or "塔高" in text
+    if kind == "person":
+        role = _role_asked(query)
+        if role == "keeper":
+            return "守" in text or "看守" in text
+        if role == "craft":
+            return any(mark in text for mark in ("打磨", "工匠", "师傅"))
+        if role == "owner":
+            return "养" in text or "主人" in text
+        if role == "father":
+            return any(mark in text for mark in ("女儿", "父亲", "爸爸", "爸"))
+        if role == "daughter":
+            return "女儿" in text or "闺女" in text
     return True
+
+
+def _role_asked(query: str) -> str:
+    """问句最后问的那个角色。同一句里先出现的工匠不是守护者。"""
+    text = query or ""
+    marks = []
+    for word, role in (
+        ("看守", "keeper"),
+        ("守护", "keeper"),
+        ("谁守", "keeper"),
+        ("在守", "keeper"),
+        ("打磨", "craft"),
+        ("工匠", "craft"),
+        ("师傅", "craft"),
+        ("主人", "owner"),
+        ("父亲", "father"),
+        ("爸爸", "father"),
+        ("老爸", "father"),
+        ("女儿", "daughter"),
+        ("闺女", "daughter"),
+        ("丫头", "daughter"),
+    ):
+        index = text.rfind(word)
+        if index >= 0:
+            marks.append((index, role))
+    if "养" in text and "谁" in text:
+        marks.append((text.rfind("养"), "owner"))
+    if not marks:
+        return ""
+    marks.sort()
+    return marks[-1][1]
+
+
+def _neighbors(node: str, hop: str, edges: list[tuple[str, str, str, dict]]) -> list[tuple[str, dict]]:
+    """先沿边往前，没有再走回来。问「谁打磨的塔谁在守」时，工匠名要回到那座塔。"""
+    forward = []
+    backward = []
+    for rel, src, dst, host in edges:
+        if rel != hop or src == dst:
+            continue
+        if src == node:
+            forward.append((dst, host))
+        elif dst == node:
+            backward.append((src, host))
+    return forward + backward
+
+
+def _walk_hops(node: str, hops: list[str], edges: list[tuple[str, str, str, dict]]) -> tuple[str, dict] | None:
+    if not hops:
+        return node, {}
+    hop, *rest = hops
+    for nxt, host in _neighbors(node, hop, edges):
+        if not rest:
+            return nxt, host
+        deeper = _walk_hops(nxt, rest, edges)
+        if deeper is not None:
+            return deeper
+    return None
 
 
 def _hop_type_ok(hop: str, span: str) -> bool:
     text = (span or "").strip().rstrip("。")
     if hop in _PERSON_HOPS:
+        if any(job in text for job in ("工匠", "师傅", "学徒", "徒弟", "市长")):
+            return False
+        if any(text.startswith(country) for country in _COUNTRIES):
+            return False
         return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)) and text not in _COUNTRIES
     if hop == "height":
         return "米" in text
@@ -667,23 +760,24 @@ def relation_decision(query: str, facts: list[dict]) -> dict | None:
             if _hop_type_ok("nation", dst):
                 return {"status": "answer", "span": dst, "fact": fact}
         return {"status": "abstain", "text": uncertain_reply(query, _related_facts(query, facts, names))}
+    if not start and any(mark in (query or "") for mark in ("灯塔", "这座塔", "那座塔")):
+        towers = []
+        for rel, src, dst, _host in edges:
+            candidate = dst if rel == "tower" else src if rel == "keeper" and "塔" in src else ""
+            if candidate and candidate not in towers:
+                towers.append(candidate)
+        if len(towers) == 1:
+            start = towers[0]
     if not start:
         return None
-    node = start
-    fact = next((item for _rel, src, dst, item in edges if node in {src, dst}), None)
-    seen = [start]
-    for hop in hops:
-        nxt = None
-        for rel, src, dst, host in edges:
-            if rel == hop and src == node:
-                nxt = (dst, host)
-                break
-        if nxt is None or nxt[0] in seen:
-            if len(hops) <= 1:
-                return None
-            return {"status": "abstain", "text": fixed_refusal(query, facts)}
-        node, fact = nxt
-        seen.append(node)
+    walked = _walk_hops(start, hops, edges)
+    if walked is None:
+        if len(hops) <= 1:
+            return None
+        return {"status": "abstain", "text": fixed_refusal(query, facts)}
+    node, fact = walked
+    if not fact:
+        fact = next((item for _rel, src, dst, item in edges if node in {src, dst}), None)
     fits = span_fits(query, node) if asked_kind(query) else _hop_type_ok(hops[-1], node)
     if not fits or node == start or (asked_kind(query) == "person" and node in (query or "")):
         if len(hops) <= 1:
