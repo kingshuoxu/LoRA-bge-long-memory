@@ -5,8 +5,9 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
+
+from server_proc import run_until_ready
 
 
 LEGIT = [
@@ -49,31 +50,14 @@ def _launch(root: Path, home: Path, models: Path) -> None:
         "PYTHONUNBUFFERED": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
     })
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "backend.server"],
-        cwd=str(root),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    assert proc.stdout is not None
-    deadline = time.time() + 90
-    ready = False
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if "LORA_MEMORY_READY port=" in line:
-            ready = True
-            break
-        if not line and proc.poll() is not None:
-            break
+    proc, port, log = run_until_ready(root, env, 90)
     proc.terminate()
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
-    if not ready:
-        sys.exit("服务没有起来")
+    if not port:
+        sys.exit(f"服务没有起来\n{log}")
 
 
 def main() -> None:

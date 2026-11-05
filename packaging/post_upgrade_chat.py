@@ -8,10 +8,11 @@ import json
 import os
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from server_proc import run_until_ready
 
 
 def main() -> None:
@@ -48,29 +49,11 @@ def main() -> None:
         "PYTHONUNBUFFERED": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
     })
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "backend.server"],
-        cwd=str(root),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    port = ""
-    deadline = time.time() + 60
-    assert proc.stdout is not None
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                sys.exit(f"服务提前退出 {proc.returncode}")
-            continue
-        if "LORA_MEMORY_READY port=" in line:
-            port = line.strip().split("port=", 1)[1]
-            break
+    proc, port, log = run_until_ready(root, env, 90)
     if not port:
-        proc.kill()
-        sys.exit("服务没有就绪")
+        if proc.poll() is None:
+            proc.kill()
+        sys.exit(f"服务没有就绪\n{log}")
     base = f"http://127.0.0.1:{port}/api"
 
     def post(path: str, payload: dict) -> tuple[int, dict]:

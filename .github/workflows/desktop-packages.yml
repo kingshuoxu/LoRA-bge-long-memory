@@ -158,14 +158,30 @@ jobs:
         shell: bash
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
-        run: python3 packaging/post_upgrade_chat.py
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/post_upgrade_chat.py
 
       - name: 0.2.14 junk migration keeps declarative facts
         if: runner.os == 'Linux'
         shell: bash
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
-        run: python3 packaging/migrate_0214_check.py
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/migrate_0214_check.py
 
       - name: AppImage upgrade keeps user data
         if: runner.os == 'Linux'
