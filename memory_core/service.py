@@ -491,7 +491,11 @@ class MemoryService:
         """没教过的个人问题不交给基座编。常识题仍走基座。"""
         if self_ask(content) or not utterance_is_question(content):
             return None
-        personal = bool(re.search(r"我的|我最|我比较|我非常|我喜欢|我在哪|我在什么", content)) or bool(re.search(r"\bmy\b", content.casefold()))
+        from memory_core.extract import is_advice_question, is_imperative_request
+
+        if is_advice_question(content) or is_imperative_request(content):
+            return None
+        personal = bool(re.search(r"我的|我最喜欢|我最爱|我比较|我非常|我喜欢|我在哪|我在什么", content)) or bool(re.search(r"\bmy\b", content.casefold()))
         if re.search(r"我", content) and re.search(r"公司|上班", content) and "我们" not in content:
             personal = True
         if not personal:
@@ -908,7 +912,7 @@ class MemoryService:
                         mount_memory(decision, recall, expert, facts, "entity_first")
                         recall["reason_text"] = "回答来自已记住的原句"
                         grounded = True
-            if not fact_answer:
+            if not fact_answer and not open_task:
                 unknown = self._personal_unknown(content)
                 if unknown:
                     fact_answer = unknown

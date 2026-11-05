@@ -531,6 +531,8 @@ def _explicit_hops(query: str, names: list[str]) -> list[str]:
         return ["specialty"]
     if "守护" in text and "的人" in text and "keeper" not in hops:
         hops.insert(0, "keeper")
+    if any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")) and "多高" not in text:
+        hops = [hop for hop in hops if hop not in {"tower", "height", "keeper"}]
     return hops
 
 
