@@ -131,7 +131,7 @@ def _near_wh(query: str, words: tuple[str, ...]) -> bool:
     return False
 
 
-def predicate_covered(query: str, statement: str) -> bool:
+def predicate_covered(query: str, statement: str, fact: dict | None = None) -> bool:
     """问的那个属性必须写在这句里。只点到同一个名字不够。
 
     电灯、出生、省、国籍这类字出现在问句里，句子里也得有。
@@ -175,7 +175,16 @@ def predicate_covered(query: str, statement: str) -> bool:
     if kind == "number" and any(mark in asked for mark in ("几岁", "多大", "年龄")):
         return bool(re.search(r"岁|年龄", text))
     if kind == "colour":
-        return "色" in text
+        if "色" in text:
+            return True
+        # 「禾昭闻的汽车是墨黑。」把颜色写在「是」后面，句子里没有「色」。
+        attr = str((fact or {}).get("attr") or "")
+        value = str((fact or {}).get("value") or "").strip().rstrip("。")
+        return bool(value) and ("颜色" in attr or attr.endswith("色")) and value in text
+    if any(mark in asked for mark in ("现居", "住在", "住哪", "住哪儿", "居住", "住址")):
+        return "住" in text
+    if any(mark in asked for mark in ("老家", "家乡", "长大")):
+        return any(mark in text for mark in ("家乡", "老家", "长大"))
     if kind == "time":
         return bool(re.search(r"\d{3,4}年", text)) or any(term in text for term in _SOLAR)
     return True
@@ -264,7 +273,7 @@ def _subject(query: str, facts: list[dict]) -> str:
     for size in (4, 3, 2):
         for index in range(0, max(0, len(text) - size + 1)):
             token = text[index:index + size]
-            if token in _STOP or token in best or token.endswith("的") or token.startswith("的"):
+            if token in _STOP or token in best or "的" in token:
                 continue
             if not re.fullmatch(r"[\u4e00-\u9fff]{2,4}", token):
                 continue
@@ -380,7 +389,7 @@ def accept_aligned(query: str, span: str, fact: dict, require_predicate: bool = 
     aligned = align_span(span, text)
     if not aligned or not types_match(query, aligned, fact):
         return ""
-    if require_predicate and not predicate_covered(query, text):
+    if require_predicate and not predicate_covered(query, text, fact):
         return ""
     if len(aligned) > 12:
         return ""

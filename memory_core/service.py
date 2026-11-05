@@ -943,7 +943,7 @@ class MemoryService:
                     if host_fact is not None:
                         break
                 if host_fact is not None and (
-                    clashes(content, host_fact) or off_topic(content, host_fact) or not predicate_covered(content, host)
+                    clashes(content, host_fact) or off_topic(content, host_fact) or not predicate_covered(content, host, host_fact)
                 ):
                     fact_answer = None
                     grounded = False

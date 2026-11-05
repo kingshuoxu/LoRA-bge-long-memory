@@ -75,6 +75,9 @@ def _possession_heads(fact: dict) -> list[str]:
         head = match.group(1)
         if head and head not in heads:
             heads.append(head)
+    color = re.match(r"^([\u4e00-\u9fff]{1,6})颜色$", attr)
+    if color and color.group(1) not in heads:
+        heads.append(color.group(1))
     return heads
 
 
@@ -240,11 +243,17 @@ def _asked_relation(query: str) -> str:
     return _normalize_head(re.split(r"的|是", match.group(1))[-1])
 
 
+def _piece_in(piece: str, statement: str) -> bool:
+    if piece == "车":
+        return re.search(r"(?<![自火汽])车", statement or "") is not None
+    return bool(piece) and piece in (statement or "")
+
+
 def _head_in_statement(head: str, statement: str) -> bool:
     if head and head in statement:
         return True
     for group in _KIN:
-        if head in group and any(piece in statement for piece in group):
+        if head in group and any(_piece_in(piece, statement) for piece in group):
             return True
     return False
 
@@ -476,7 +485,7 @@ def read_memory(
         checked = accept_aligned(query, span, fact, require_predicate=False)
         if checked:
             return {"text": _finish(checked), "fact": fact, "miss": False}
-    hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact))]
+    hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}
     missing = unsupported(query, hosts)
