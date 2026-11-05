@@ -494,5 +494,20 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertEqual(got["new_value"], "amber mist")
 
 
+class OpenTaskTests(unittest.TestCase):
+    def test_writing_about_a_birthday_is_not_a_memory_question(self):
+        expert = _Expert([_fact("我", "名字", "徐金朔", "我叫徐金朔。")])
+        for prompt in ("帮我写一句生日祝福", "帮我写一句给朋友的生日祝福", "你好"):
+            self.assertIsNone(resolve_stored_reply(prompt, [expert], []), prompt)
+
+    def test_near_miss_names_the_missing_attribute(self):
+        expert = _Expert([_fact("周衡川", "家乡", "青柘镇", "周衡川的家乡是青柘镇。")])
+        got = resolve_stored_reply("周衡的家乡是哪里？", [expert], [])
+        self.assertEqual(got[3], "entity_clarify")
+        self.assertIn("家乡", got[0])
+        self.assertNotIn("你说的这件事", got[0])
+        self.assertNotIn("青柘", got[0])
+
+
 if __name__ == "__main__":
     unittest.main()
