@@ -559,6 +559,11 @@ def spoken_fact(query: str, fact: dict) -> str:
         text = value
     else:
         text = statement
+    from memory_core.span_guard import asked_kind, predicate_in_statement, span_fits
+
+    # 问的是人数、年份、年限时，不能把整句或另一种单位当成答案。
+    if asked_kind(query) and (not span_fits(query, text) or not predicate_in_statement(query, statement)):
+        return ""
     text = text.strip()
     if text and text[-1] not in "。.!！？?":
         text += "。"

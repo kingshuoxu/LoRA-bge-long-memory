@@ -104,7 +104,18 @@ jobs:
 
       - name: Install Electron builder
         working-directory: desktop
-        run: npm ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=0
+          until npm ci; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              exit 1
+            fi
+            echo "npm ci 失败，15 秒后重试 ($n)" >&2
+            sleep 15
+          done
 
       - name: GUI smoke
         working-directory: desktop

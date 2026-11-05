@@ -544,18 +544,18 @@ def asked_kind(query: str) -> str:
     text = query or ""
     if any(mark in text for mark in ("守了", "守护了", "多少年", "多久")) and "建于" not in text and "建成" not in text:
         return "duration"
+    if "面" in text and any(mark in text for mark in ("多少", "几", "一共")):
+        return "faces"
     if any(mark in text for mark in ("徒弟", "学徒")) and any(mark in text for mark in ("多少", "几", "几个", "几位")):
         return "apprentice"
-    if any(mark in text for mark in ("多少个", "几个", "几个人", "多少位", "几位", "多少名", "多少次")):
+    if any(mark in text for mark in ("多高", "塔高", "高度", "多少米", "几米")):
+        return "height"
+    if any(mark in text for mark in ("多少个", "几个", "几个人", "多少位", "几位", "多少名", "多少次", "多少")):
         return "count"
     if "出生" in text or "生日" in text:
         return "birth"
     if any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")):
         return "year"
-    if "多高" in text or "塔高" in text:
-        return "height"
-    if "面" in text and any(mark in text for mark in ("多少", "几", "一共")):
-        return "faces"
     if any(mark in text for mark in ("是谁", "谁")):
         return "person"
     if any(mark in text for mark in ("哪里", "哪儿", "什么地方")):
@@ -573,7 +573,11 @@ def span_fits(query: str, span: str) -> bool:
     if kind == "duration":
         return bool(re.fullmatch(r"(?:\d{1,4}|[一二三四五六七八九十百]+)年", text))
     if kind in {"apprentice", "count"}:
-        return bool(re.search(r"[个位名次]", text)) and "面" not in text and not re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)
+        # 必须是「三个 / 一位 / 两次」这种数量，不能因为句子里有「名叫」就算数。
+        return bool(re.fullmatch(
+            r"(?:一共|共)?(?:\d{1,6}|[零〇一二三四五六七八九十百千万两]{1,8})(?:个|位|名|次)(?:人)?",
+            text,
+        ))
     if kind == "height":
         return "米" in text
     if kind == "faces":
@@ -690,6 +694,60 @@ def relation_decision(query: str, facts: list[dict]) -> dict | None:
             return None
         return {"status": "abstain", "text": fixed_refusal(query, facts)}
     return {"status": "answer", "span": node, "fact": fact}
+
+
+def _refusal_text(text: str) -> bool:
+    return any(mark in (text or "") for mark in (
+        "不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我",
+        "没提到", "不记得", "没记过", "我不确定",
+    ))
+
+
+def _fact_containing(span: str, facts: list[dict]) -> dict | None:
+    needle = (span or "").strip().rstrip("。")
+    if not needle:
+        return None
+    for fact in facts:
+        if needle in statement_of(fact):
+            return fact
+    return None
+
+
+def enforce_answer_type(query: str, answer: str, facts: list[dict] | None = None) -> dict | None:
+    """问句要了种类，却答成整句或另一种单位时，改成不带引用的弃权。
+
+    已经是弃权句，或短取值和原句对得上时，不动。
+    """
+    if not asked_kind(query) or _refusal_text(answer):
+        return None
+    rows = [fact for fact in (facts or []) if isinstance(fact, dict)]
+    candidate = (answer or "").strip().rstrip("。")
+    host = _fact_containing(candidate, rows)
+    statement = statement_of(host) if host else ""
+    if not span_fits(query, candidate):
+        from memory_core.fact_recall import answer_span
+
+        extracted = answer_span(query, statement or (answer or ""))
+        if extracted and span_fits(query, extracted):
+            candidate = extracted.rstrip("。")
+            host = _fact_containing(candidate, rows) or host
+            statement = statement_of(host) if host else statement
+        else:
+            candidate = ""
+    if candidate and span_fits(query, candidate):
+        support = statement if statement and predicate_in_statement(query, statement) else ""
+        if not support:
+            for fact in rows:
+                text = statement_of(fact)
+                if candidate in text and predicate_in_statement(query, text):
+                    host = fact
+                    support = text
+                    break
+        if support or (not rows and predicate_in_statement(query, candidate)):
+            if (answer or "").strip().rstrip("。") == candidate:
+                return None
+            return {"status": "span", "span": candidate, "fact": host}
+    return {"status": "abstain", "text": fixed_refusal(query, rows)}
 
 
 def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:

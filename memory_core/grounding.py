@@ -652,7 +652,9 @@ def resolve_stored_reply(
         value = str(fact.get("value") or fact.get("answer") or "").strip()
         short = bool(value) and value.rstrip("。") != statement.rstrip("。") and len(value) <= 24
         if answer_span(content, statement) or short:
-            return spoken_fact(content, fact), expert, [fact], "entity_first"
+            spoken = spoken_fact(content, fact)
+            if spoken:
+                return spoken, expert, [fact], "entity_first"
     pool = list(facts)
     for expert_item in experts:
         memory = getattr(expert_item, "fact_memory", None) or {}
@@ -665,7 +667,9 @@ def resolve_stored_reply(
 
         hit = covered_fact(content, facts)
     if hit is not None:
-        return spoken_fact(content, hit), expert, [hit], "entity_first"
+        spoken = spoken_fact(content, hit)
+        if spoken:
+            return spoken, expert, [hit], "entity_first"
     return _unmatched(name, content, expert)
 
 

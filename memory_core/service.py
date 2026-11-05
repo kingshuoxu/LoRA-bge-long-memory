@@ -1050,6 +1050,35 @@ class MemoryService:
                         if owner is not None:
                             mount_memory(decision, recall, owner, [linked["fact"]], "entity_first")
                             recall["reason_text"] = "回答是顺着已经记下的关系摘出来的"
+            if utterance_is_question(content) and not open_task and fact_answer:
+                from memory_core.span_guard import enforce_answer_type
+
+                remembered = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                gated = enforce_answer_type(content, fact_answer, remembered)
+                if gated and gated.get("status") == "abstain":
+                    fact_answer = gated["text"]
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "取值种类对不上，所以不把原句当成答案，也不挂引用"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                elif gated and gated.get("status") == "span":
+                    span = str(gated["span"])
+                    fact_answer = span if span[-1:] in "。." else span + "。"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)

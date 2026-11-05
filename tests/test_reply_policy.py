@@ -509,5 +509,48 @@ class OpenTaskTests(unittest.TestCase):
         self.assertNotIn("青柘", got[0])
 
 
+LENS = "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。"
+TOWER = "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。"
+
+
+class AnswerTypeTests(unittest.TestCase):
+    def test_craftsman_count_does_not_quote_the_lens_sentence(self):
+        from memory_core.fact_recall import spoken_fact
+        from memory_core.span_guard import enforce_answer_type
+
+        fact = _fact("透镜", "重点", LENS.rstrip("。"), LENS)
+        fact["source"] = "document"
+        self.assertEqual(spoken_fact("透镜有多少个工匠？", fact), "")
+        gated = enforce_answer_type("透镜有多少个工匠？", LENS, [fact])
+        self.assertEqual(gated["status"], "abstain")
+        self.assertIn("透镜有多少个工匠", gated["text"])
+        self.assertNotIn("十六", gated["text"])
+        self.assertNotIn("诺丁", gated["text"])
+        expert = _Expert([fact])
+        got = resolve_stored_reply("透镜有多少个工匠？", [expert], [])
+        self.assertTrue(got)
+        self.assertNotIn("十六", got[0])
+        self.assertNotIn("诺丁", got[0])
+        self.assertEqual(got[2], [])
+
+    def test_matching_year_span_stays(self):
+        from memory_core.span_guard import enforce_answer_type
+
+        fact = _fact("白鹭塔", "建于", "1873年", TOWER)
+        self.assertIsNone(enforce_answer_type("白鹭塔建于哪一年？", "1873年。", [fact]))
+        gated = enforce_answer_type("白鹭塔建于哪一年？", TOWER, [fact])
+        self.assertEqual(gated["status"], "span")
+        self.assertEqual(gated["span"], "1873年")
+
+    def test_a_count_question_does_not_keep_a_sentence_that_only_contains_ming(self):
+        from memory_core.fact_recall import spoken_fact
+        from memory_core.span_guard import span_fits
+
+        self.assertFalse(span_fits("白鹭塔建了多少次？", TOWER))
+        self.assertTrue(span_fits("白鹭塔建了多少次？", "三次"))
+        self.assertEqual(spoken_fact("白鹭塔建了多少次？", _fact("白鹭塔", "重点", TOWER.rstrip("。"), TOWER)), "")
+        self.assertEqual(spoken_fact("雾港有多少人口？", _fact("白鹭塔", "重点", TOWER.rstrip("。"), TOWER)), "")
+
+
 if __name__ == "__main__":
     unittest.main()
