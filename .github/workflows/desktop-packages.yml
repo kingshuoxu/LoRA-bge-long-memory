@@ -160,6 +160,13 @@ jobs:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
         run: python3 packaging/post_upgrade_chat.py
 
+      - name: 0.2.14 junk migration keeps declarative facts
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+        run: python3 packaging/migrate_0214_check.py
+
       - name: AppImage upgrade keeps user data
         if: runner.os == 'Linux'
         shell: bash
@@ -274,7 +281,11 @@ jobs:
       - name: Bundle release files
         run: |
           python -m pip install pyyaml
-          git log -1 --pretty=%s > release-notes.txt
+          if [ -f "docs/release-${GITHUB_REF_NAME}.md" ]; then
+            cp "docs/release-${GITHUB_REF_NAME}.md" release-notes.txt
+          else
+            git log -1 --pretty=%B > release-notes.txt
+          fi
           python packaging/publish_desktop_release.py \
             --artifacts release-artifacts \
             --out release \

@@ -36,25 +36,32 @@ def _split_sentences(text: str) -> list[str]:
     return out
 
 
-_IMPERATIVE = (
-    "帮我", "帮忙", "请你", "请帮", "写一首", "写一句", "写一段", "写个", "写封", "写一封", "写首",
-    "翻译", "译成", "说个", "说一", "讲个", "讲一", "列一下", "列举", "解释一下", "推荐",
-    "润色", "改写", "起草", "给我讲", "给我说", "给我写", "笑话", "祝福",
-)
 _ADVICE = (
     "有什么办法", "怎么办", "有什么方法", "有什么建议", "怎么缓解", "怎么治",
-    "如何才能", "怎样才能", "有啥办法", "怎么解决", "怎么做",
+    "如何才能", "怎样才能", "有啥办法", "怎么解决",
 )
+
+
+def is_declarative_fact(text: str) -> bool:
+    """陈述句。里面出现「翻译」「推荐」也不能当成要求句删掉。"""
+    raw = (text or "").strip().rstrip("。")
+    if not raw:
+        return False
+    if re.match(r"^(?:我|他|她)(?:的[\u4e00-\u9fffA-Za-z0-9]{0,12})?是", raw):
+        return True
+    if re.match(r"^(?:我|他|她)喜欢", raw):
+        return True
+    if re.match(r"^我在.+工作", raw) or re.match(r"^我做.+工作", raw):
+        return True
+    return False
 
 
 def is_imperative_request(text: str) -> bool:
-    """写、译、讲、推荐。这些是要求，不是关于人或事物的陈述。"""
+    """只看句首的要求。句中的「翻译」「推荐」不算。"""
     raw = (text or "").strip()
-    if not raw:
+    if not raw or is_declarative_fact(raw):
         return False
-    if any(mark in raw for mark in _IMPERATIVE):
-        return True
-    return bool(re.match(r"^(?:写|译|讲|说|列|荐)", raw))
+    return bool(re.match(r"^(?:请|帮我|给我|写一|写首)", raw))
 
 
 def is_advice_question(text: str) -> bool:
@@ -64,15 +71,19 @@ def is_advice_question(text: str) -> bool:
 
 
 def is_question_fragment(text: str) -> bool:
-    """待巩固里不该留下的问句碎片，例如「工匠的名字」「啥名」。"""
-    raw = (text or "").strip().rstrip("。？?！!…")
+    """句首疑问词、句末语气词或问号。不在句子中间搜「什么」「哪」。"""
+    raw = (text or "").strip()
     if not raw:
         return True
-    if is_imperative_request(raw) or is_advice_question(raw) or _looks_like_question(raw):
+    if is_declarative_fact(raw):
+        return False
+    if is_imperative_request(raw):
         return True
-    if any(mark in raw for mark in ("啥", "什么", "谁", "哪", "多少", "几", "吗", "呢")):
+    if raw.endswith(("?", "？")) or re.search(r"(?:吗|呢)[。！]?$", raw):
         return True
-    if raw.endswith(("…", "...", "的名字", "啥名")):
+    if re.match(r"^(?:什么|谁|哪|咋|啥)", raw):
+        return True
+    if raw.endswith(("的名字", "啥名", "…", "...")):
         return True
     return False
 
@@ -531,77 +542,10 @@ def _leading_name(sentence: str) -> str | None:
 
 
 def drop_request_memories(home: Path) -> int:
-    """升级后丢掉被误存成事实的要求句，例如「写一首关于秋天的四行小诗」。"""
-    experts = Path(home) / "experts"
-    if not experts.is_dir():
-        return 0
-    removed = 0
-    for path in sorted(experts.glob("*/fact_memory.json")):
-        try:
-            memory = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(memory, dict):
-            continue
-        facts = memory.get("facts")
-        if not isinstance(facts, list):
-            continue
-        kept = []
-        for fact in facts:
-            if not isinstance(fact, dict):
-                continue
-            statement = str(fact.get("statement") or "")
-            entity = str(fact.get("entity") or "")
-            if (
-                is_imperative_request(statement)
-                or is_imperative_request(entity)
-                or is_question_fragment(statement)
-                or entity in {"写一", "首关"}
-            ):
-                removed += 1
-                continue
-            kept.append(fact)
-        if len(kept) == len(facts):
-            continue
-        if not kept:
-            import shutil
-            shutil.rmtree(path.parent, ignore_errors=True)
-            removed += 1
-            continue
-        memory["facts"] = kept
-        names = []
-        for fact in kept:
-            name = str(fact.get("entity") or "").strip()
-            if name and name not in names:
-                names.append(name)
-        memory["entities"] = names
-        path.write_text(json.dumps(memory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    removed += _drop_queued_questions(Path(home))
-    return removed
+    """兼容旧调用。真正的清理在 migrate_0214，并且只针对 0.2.14。"""
+    from memory_core.migrate_0214 import migrate_0214_junk
 
-
-def _drop_queued_questions(home: Path) -> int:
-    docs = Path(home) / "documents"
-    if not docs.is_dir():
-        return 0
-    removed = 0
-    for path in docs.glob("*/queued.json"):
-        try:
-            queued = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(queued, list):
-            continue
-        kept = []
-        for item in queued:
-            text = item if isinstance(item, str) else str((item or {}).get("text") or "")
-            if is_question_fragment(text) or is_imperative_request(text):
-                removed += 1
-                continue
-            kept.append(item)
-        if len(kept) != len(queued):
-            path.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return removed
+    return migrate_0214_junk(home)
 
 
 def pattern_extract(text: str) -> list[dict[str, Any]]:

@@ -228,10 +228,10 @@ class MemoryService:
 
             migrate_legacy(self.home, self.models_dir)
         from memory_core.identity import migrate_user_identity
-        from memory_core.extract import drop_request_memories
+        from memory_core.migrate_0214 import migrate_0214_junk
 
         migrate_user_identity(self.home)
-        drop_request_memories(self.home)
+        migrate_0214_junk(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:
