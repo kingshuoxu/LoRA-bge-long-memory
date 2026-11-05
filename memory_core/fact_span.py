@@ -65,7 +65,7 @@ _GRAMMAR = frozenset(
     "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本"
     "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
     "老总主靠自居公相年手电邮职生习股我"
-    "成偏毕建"
+    "成偏毕建磨属"
 )
 
 _LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*")
@@ -298,6 +298,8 @@ def _en_token_near(name: str, query: str) -> str | None:
 def near_miss_span(name: str, query: str) -> str | None:
     """问句里的名字和已存实体差一点：多出来的字、少一两个字、改了一个字，或后面又接了拉丁词。"""
     if not name or not query:
+        return None
+    if name == "我":
         return None
     if has_cjk(name):
         start = 0

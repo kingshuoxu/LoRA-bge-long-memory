@@ -714,8 +714,11 @@ class MemoryService:
                 decision.label = "基座"
                 decision.fired = False
                 return self._finish_turn(conv_id, user_msg, text, decision, recall)
+            from memory_core.span_guard import is_open_task
+
+            open_task = is_open_task(content)
             memory_block = ""
-            if utterance_is_question(content) and not asked:
+            if utterance_is_question(content) and not asked and not open_task:
                 read = self._read_memory(content, experts)
                 if read is not None:
                     text, expert, facts, miss = read
@@ -752,7 +755,7 @@ class MemoryService:
                 gate_dirs.append(self.repo_experts)
             decision, recall = route_with_trace(
                 content,
-                experts,
+                [] if open_task else experts,
                 load_merged_gate(gate_dirs),
                 model=self.chat.model,
                 tok=self.chat.tok,
@@ -763,7 +766,7 @@ class MemoryService:
             hint = ""
             grounded = False
             gate_info = recall.get("fact_gate") or {}
-            resolved = resolve_stored_reply(content, experts, load_mentions(self.home))
+            resolved = None if open_task else resolve_stored_reply(content, experts, load_mentions(self.home))
             if resolved and resolved[3] == "entity_clarify":
                 covered_now = self._covered_reply(content, experts)
                 if covered_now:
@@ -975,7 +978,7 @@ class MemoryService:
                 recall["expert"] = None
                 recall["mounted_expert"] = None
                 recall["mounted_label"] = "基座"
-            if not fact_answer and utterance_is_question(content):
+            if not fact_answer and utterance_is_question(content) and not open_task:
                 from memory_core.fact_recall import touches_memory
                 from memory_core.span_guard import fixed_refusal, mentions_stored
 
@@ -999,6 +1002,42 @@ class MemoryService:
                     recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里"
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
+            if utterance_is_question(content) and not open_task:
+                from memory_core.span_guard import fixed_refusal, relation_answer
+
+                remembered = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                linked = relation_answer(content, remembered) if remembered else None
+                if linked is not None and not linked[0]:
+                    fact_answer = fixed_refusal(content, remembered)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["reason_text"] = "关系没有走到最后一问，所以不把中间的人交出去"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                elif linked and linked[0] and (
+                    not fact_answer
+                    or len(fact_answer) > 18
+                    or (linked[0] not in fact_answer and "记住的是" not in fact_answer)
+                ):
+                    span = linked[0]
+                    fact_answer = span if span[-1] in "。." else span + "。"
+                    owner = next((record for record in experts if linked[1] in ((record.fact_memory or {}).get("facts") or [])), None)
+                    if owner is not None:
+                        mount_memory(decision, recall, owner, [linked[1]], "entity_first")
+                        recall["reason_text"] = "回答是顺着关系从已记住的句子里摘出来的"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)

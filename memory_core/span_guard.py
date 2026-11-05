@@ -82,7 +82,9 @@ def types_match(query: str, span: str, fact: dict | None = None) -> bool:
     if wanted == "time":
         return got == "time"
     if wanted == "number":
-        return got == "number" or bool(fact and str(fact.get("value") or "").startswith(span))
+        if got == "number":
+            return True
+        return bool(re.search(r"[0-9一二三四五六七八九十百千万两]", span or ""))
     if wanted == "colour":
         if got == "colour":
             return True
@@ -235,35 +237,35 @@ def about_user(query: str) -> bool:
 
 def _predicate_phrase(query: str) -> str:
     text = query or ""
-    if any(mark in text for mark in ("哪个省", "什么省", "省份", "属于哪")):
-        return "属于哪个省"
-    if any(mark in text for mark in ("出生", "生日", "生于")):
-        return "的出生年份"
-    if any(mark in text for mark in ("父亲", "爸爸")):
-        return "的父亲"
-    if any(mark in text for mark in ("母亲", "妈妈")):
-        return "的母亲"
-    if "妻子" in text or "老婆" in text:
-        return "的妻子"
-    if "丈夫" in text or "老公" in text:
-        return "的丈夫"
-    if "主人" in text:
-        return "的主人"
-    if any(mark in text for mark in ("哪国", "国籍")):
-        return "是哪国人"
-    if any(mark in text for mark in ("多少钱", "价格")):
-        return "的价格"
-    if any(mark in text for mark in ("性别", "是男", "是女", "是公", "是母")):
-        return "的性别"
-    if "市长" in text:
-        return "的市长"
-    if any(mark in text for mark in ("多远",)):
-        return "能照多远"
-    if any(mark in text for mark in ("几岁", "多大")):
-        return "的年龄"
-    if "多高" in text:
-        return "有多高"
-    return ""
+    options = (
+        (("哪个省", "什么省", "省份", "属于哪"), "属于哪个省"),
+        (("出生", "生日", "生于"), "的出生年份"),
+        (("家乡", "老家", "长大"), "的家乡"),
+        (("现居", "住在", "住哪", "住址"), "住在哪里"),
+        (("父亲", "爸爸", "她爸", "他爸"), "的父亲"),
+        (("母亲", "妈妈", "她妈", "他妈"), "的母亲"),
+        (("妻子", "老婆"), "的妻子"),
+        (("丈夫", "老公"), "的丈夫"),
+        (("师傅", "工匠"), "的师傅"),
+        (("主人",), "的主人"),
+        (("哪国", "国籍"), "是哪国人"),
+        (("多少钱", "价格"), "的价格"),
+        (("性别", "是男", "是女", "是公", "是母"), "的性别"),
+        (("市长",), "的市长"),
+        (("多远",), "能照多远"),
+        (("几岁", "多大"), "的年龄"),
+        (("多高", "塔高"), "有多高"),
+        (("特产",), "的特产"),
+    )
+    best = ""
+    best_at = -1
+    for marks, phrase in options:
+        for mark in marks:
+            index = text.rfind(mark)
+            if index > best_at:
+                best_at = index
+                best = phrase
+    return best
 
 
 def _subject(query: str, facts: list[dict]) -> str:
@@ -321,8 +323,227 @@ def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
     return "我没记过这件事。"
 
 
+def is_open_task(text: str) -> bool:
+    """写、译、聊、建议。这些走基座。我单独出现不算在问记忆。"""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if any(mark in raw for mark in (
+        "帮我写", "写一句", "写一首", "写一段", "写个笑话", "写封", "写一封",
+        "帮我翻译", "翻译成", "译成", "润色", "改写一下", "起草",
+        "祝福", "讲个笑话", "讲个故事", "聊聊天", "随便聊",
+        "给点建议", "给些建议", "有什么建议", "帮我回复", "怎么回复",
+        "推荐一本", "怎么煮", "怎么做",
+    )):
+        return True
+    if raw in {"你好", "您好", "在吗", "谢谢", "早上好", "晚安", "再见", "嗨"}:
+        return True
+    return bool(re.match(r"^(你好|您好|在吗|谢谢|早上好|晚安|再见|嗨|hi|hello)\b", raw, re.IGNORECASE))
+
+
+def _relation_edges(facts: list[dict]) -> list[tuple[str, str, str, dict]]:
+    edges: list[tuple[str, str, str, dict]] = []
+    for fact in facts:
+        if not isinstance(fact, dict) or fact.get("superseded"):
+            continue
+        text = statement_of(fact)
+        parent = re.search(r"([\u4e00-\u9fff]{2,4})的女儿([\u4e00-\u9fff]{2,3})", text)
+        if parent:
+            edges.append(("daughter", parent.group(1), parent.group(2), fact))
+            edges.append(("father", parent.group(2), parent.group(1), fact))
+        keeper = re.search(r"([\u4e00-\u9fff]{2,3})养了", text)
+        named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
+        if keeper and named:
+            edges.append(("owner", named.group(1), keeper.group(1), fact))
+            edges.append(("pet", keeper.group(1), named.group(1), fact))
+        guard = re.search(r"([\u4e00-\u9fff]{2,4})在.{0,16}守护", text)
+        if guard and named:
+            edges.append(("tower", guard.group(1), named.group(1), fact))
+            edges.append(("keeper", named.group(1), guard.group(1), fact))
+        height = re.search(r"([0-9一二三四五六七八九十百千两]{1,8}米)", text)
+        if height and named and "塔" in text:
+            edges.append(("height", named.group(1), height.group(1), fact))
+        built = re.search(r"建于(\d{3,4}年)", text)
+        if built and named:
+            edges.append(("built", named.group(1), built.group(1), fact))
+        if "电" in text and "白鹭塔" in text:
+            year = re.search(r"(\d{3,4})年", text)
+            if year:
+                edges.append(("electric", "白鹭塔", f"{year.group(1)}年", fact))
+        origin = re.search(r"([\u4e00-\u9fff]{2,6})的特产", text)
+        if origin and named:
+            edges.append(("origin", named.group(1), origin.group(1), fact))
+            edges.append(("specialty", origin.group(1), named.group(1), fact))
+            if "海盐" in text:
+                edges.append(("origin", "海盐", origin.group(1), fact))
+                edges.append(("origin", "蓝色海盐", origin.group(1), fact))
+        country = next((item for item in _COUNTRIES if item in text), "")
+        craft = re.search(r"(?:工匠|师傅)([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
+        if country and craft:
+            edges.append(("nation", craft.group(1), country, fact))
+            if "白鹭塔" in text:
+                edges.append(("craft", "白鹭塔", craft.group(1), fact))
+            if "透镜" in text:
+                edges.append(("craft", "透镜", craft.group(1), fact))
+    return edges
+
+
+def _node_names(edges: list[tuple[str, str, str, dict]]) -> list[str]:
+    found: set[str] = set()
+    for _rel, src, dst, _fact in edges:
+        for node in (src, dst):
+            if re.fullmatch(r"[\u4e00-\u9fff]{2,8}", node) and not node.endswith(("米", "年", "面")):
+                found.add(node)
+    return sorted(found, key=len, reverse=True)
+
+
+def _inside_name(query: str, index: int, length: int, names: list[str]) -> bool:
+    for name in names:
+        start = 0
+        while True:
+            at = query.find(name, start)
+            if at < 0:
+                break
+            if at <= index and index + length <= at + len(name) and len(name) > length:
+                return True
+            start = at + len(name)
+    return False
+
+
+def _ordered_hops(query: str, names: list[str]) -> list[str]:
+    phrases = (
+        ("owner", ("小主人", "主人", "养的人", "谁养", "小姑娘", "小丫头")),
+        ("father", ("父亲", "爸爸", "她爸", "他爸")),
+        ("mother", ("母亲", "妈妈", "她妈", "他妈")),
+        ("daughter", ("闺女", "女儿")),
+        ("spouse", ("妻子", "老婆", "丈夫", "老公")),
+        ("tower", ("灯塔", "这座塔", "那座塔", "的塔", "座塔")),
+        ("craft", ("师傅", "工匠")),
+    )
+    found: list[tuple[int, str]] = []
+    for hop, words in phrases:
+        for word in words:
+            start = 0
+            while True:
+                index = query.find(word, start)
+                if index < 0:
+                    break
+                if not _inside_name(query, index, len(word), names):
+                    found.append((index, hop))
+                start = index + len(word)
+    asks_name = any(mark in query for mark in ("叫什么", "叫啥", "什么名字")) and "谁" not in query
+    if "养" in query and not any(hop == ("pet" if asks_name else "owner") for _index, hop in found):
+        index = query.find("养")
+        if index >= 0:
+            found.append((index, "pet" if asks_name else "owner"))
+    has_tower = any(hop == "tower" for _index, hop in found)
+    if "守护" in query and any(mark in query for mark in ("的人", "是谁", "叫什么")) and not has_tower:
+        found.append((query.find("守护"), "keeper"))
+    found.sort()
+    hops: list[str] = []
+    for _index, hop in found:
+        if hops and hops[-1] == hop:
+            continue
+        hops.append(hop)
+    return hops
+
+
+def _chain_terminal(query: str) -> str:
+    if "腿" in query or ("面" in query and any(mark in query for mark in ("多少", "几", "一共"))):
+        return ""
+    if any(mark in query for mark in ("多少钱", "几岁", "性别", "是公", "是母")):
+        return ""
+    if any(mark in query for mark in ("多高", "塔高")) or ("高" in query and "多少" in query):
+        return "height"
+    if any(mark in query for mark in ("哪国", "国籍")):
+        return "nation"
+    if any(mark in query for mark in ("哪里", "哪儿", "什么地方", "哪个地方", "产自", "产地")):
+        return "origin"
+    if any(mark in query for mark in ("哪一年", "哪年", "什么时候")) and "电" in query:
+        return "electric"
+    if any(mark in query for mark in ("建于", "建成", "落成")) or (
+        any(mark in query for mark in ("哪一年", "哪年")) and "建" in query and "电" not in query
+    ):
+        return "built"
+    if "特产" in query and any(mark in query for mark in ("叫什么", "是什么", "什么", "啥")):
+        return "specialty"
+    if any(mark in query for mark in ("叫什么", "是谁", "叫啥", "什么名字", "谁")):
+        return "identity"
+    return ""
+
+
+def _edge_step(node: str, hop: str, edges: list[tuple[str, str, str, dict]]) -> tuple[str, dict] | None:
+    for rel, src, dst, fact in edges:
+        if rel == hop and src == node:
+            return dst, fact
+    if hop == "daughter":
+        keeper = _edge_step(node, "keeper", edges)
+        if keeper:
+            return _edge_step(keeper[0], "daughter", edges)
+    return None
+
+
+def _apply_terminal(node: str, terminal: str, edges: list[tuple[str, str, str, dict]], fact: dict) -> tuple[str, dict] | None:
+    if terminal in {"", "identity"}:
+        return node, fact
+    for rel, src, dst, host in edges:
+        if rel == terminal and src == node:
+            return dst, host
+    if terminal == "nation":
+        craft = _edge_step(node, "craft", edges)
+        if craft:
+            return _apply_terminal(craft[0], "nation", edges, craft[1])
+    return None
+
+
+def _start_node(query: str, names: list[str]) -> str:
+    hits = []
+    for name in names:
+        index = query.find(name)
+        if index >= 0:
+            hits.append((index, -len(name), name))
+    if not hits:
+        return ""
+    hits.sort()
+    return hits[0][2]
+
+
+def walk_chain(query: str, facts: list[dict]) -> tuple[str, dict] | str | None:
+    """顺着最后一问走到头。走不到就返回 blocked，不许把中间那个人交出去。"""
+    edges = _relation_edges(facts)
+    names = _node_names(edges)
+    terminal = _chain_terminal(query)
+    if not terminal:
+        return None
+    hops = _ordered_hops(query, names)
+    start = _start_node(query, names)
+    if not start:
+        return None
+    if not hops and terminal == "identity":
+        return None
+    node = start
+    fact = next((item for _rel, src, _dst, item in edges if src == node or _dst == node), facts[0] if facts else {})
+    for hop in hops:
+        nxt = _edge_step(node, hop, edges)
+        if not nxt:
+            return "blocked" if len(hops) >= 2 else None
+        node, fact = nxt
+    applied = _apply_terminal(node, terminal, edges, fact)
+    if not applied:
+        return "blocked" if len(hops) >= 2 else None
+    span, host = applied
+    if span in (query or "") and terminal == "identity":
+        return None
+    return span, host
+
+
 def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:
-    """女儿对父亲、养对主人、特产对产地、工匠对国籍。只在问的就是这条关系时用。"""
+    """女儿对父亲、养对主人、特产对产地、工匠对国籍。多跳必须走到最后一问。"""
+    walked = walk_chain(query, facts)
+    if walked == "blocked":
+        return "", None
+    if isinstance(walked, tuple) and walked[0]:
+        return walked
     asked = query or ""
     kind = question_type(asked)
     focus_person = any(mark in asked for mark in ("父亲", "爸爸", "母亲", "妈妈", "主人"))

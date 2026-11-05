@@ -566,7 +566,14 @@ def _clarify_reply(stored: str, span: str, text: str) -> str:
     english = not has_cjk(text)
     if english:
         return f"I remember {stored}, but not the rest of that."
-    return f"我记得{stored}，但没提到你说的这件事。"
+    from memory_core.span_guard import _predicate_phrase
+
+    phrase = _predicate_phrase(text)
+    if phrase.startswith("的"):
+        phrase = phrase[1:]
+    if phrase:
+        return f"我记得{stored}，但没提到{phrase}。"
+    return f"我记得{stored}，但没提到这件事。"
 
 
 def forget_fact_hit(decision: Any, recall: dict) -> None:
@@ -596,7 +603,10 @@ def resolve_stored_reply(
     from memory_core.paraphrase import is_polar, polar_reply_from_fact
 
     from memory_core.fact_span import near_miss_span
+    from memory_core.span_guard import is_open_task
 
+    if is_open_task(content):
+        return None
     mentions = list(mentions or [])
     names = sorted(known_entity_names(content, experts), key=len, reverse=True)
     if not names:
