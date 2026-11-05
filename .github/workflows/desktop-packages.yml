@@ -20,7 +20,7 @@ jobs:
   package:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
