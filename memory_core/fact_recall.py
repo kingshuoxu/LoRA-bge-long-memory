@@ -457,7 +457,7 @@ def answer_span(query: str, statement: str) -> str:
     asked = str(query or "")
     if not text or not asked:
         return ""
-    if any(mark in asked for mark in ("多高", "高度", "有多高")):
+    if any(mark in asked for mark in ("多高", "高度", "有多高", "塔高")) or ("高" in asked and "多少" in asked):
         match = re.search(rf"({_MEASURE.replace('(?:米|面|岁|公里|里)', '米')})", text)
         if match:
             return match.group(1)
