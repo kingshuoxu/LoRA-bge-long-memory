@@ -153,6 +153,13 @@ jobs:
         shell: bash
         run: bash packaging/upgrade-from-027.sh
 
+      - name: Chat in the same session after a 0.2.7 home migration
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+        run: python3 packaging/post_upgrade_chat.py
+
       - name: AppImage upgrade keeps user data
         if: runner.os == 'Linux'
         shell: bash

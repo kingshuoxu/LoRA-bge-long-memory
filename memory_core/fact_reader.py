@@ -24,6 +24,8 @@ from memory_core.span_guard import (
     mentions_stored,
     predicate_covered,
     relation_decision,
+    span_fits,
+    predicate_in_statement,
 )
 
 TOP_K = 3
@@ -507,11 +509,11 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if checked:
+            if checked and span_fits(query, checked) and predicate_in_statement(query, _statement(fact)):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if checked:
+        if checked and span_fits(query, checked) and predicate_in_statement(query, _statement(fact)):
             return {"text": _finish(checked), "fact": fact, "miss": False}
-    return {"text": natural_refusal(query, hosts), "fact": hosts[0], "miss": True}
+    return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}

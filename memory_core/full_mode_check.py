@@ -233,9 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261115, "抽查")
+    _generated(service, 20261116, "抽查")
     _open_chat(service)
-    _generated(service, 20260321, "盲测")
+    _generated(service, 20261129, "盲测")
     print("FULL_LEARNING_OK", flush=True)
 
 
@@ -328,7 +328,7 @@ def _generated(service: MemoryService, seed: int, label: str) -> None:
     data = generate(seed)
     taught = [(item["q"], item["gold"]) for item in data["taught"]]
     never = list(data["never"])
-    if len(taught) < 20 or len(never) < 8:
+    if len(taught) < 20 or len(never) < 15:
         _fail("盲测题太少")
     hits = 0
     hard = 0

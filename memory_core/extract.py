@@ -63,6 +63,20 @@ def is_advice_question(text: str) -> bool:
     return any(mark in raw for mark in _ADVICE)
 
 
+def is_question_fragment(text: str) -> bool:
+    """待巩固里不该留下的问句碎片，例如「工匠的名字」「啥名」。"""
+    raw = (text or "").strip().rstrip("。？?！!…")
+    if not raw:
+        return True
+    if is_imperative_request(raw) or is_advice_question(raw) or _looks_like_question(raw):
+        return True
+    if any(mark in raw for mark in ("啥", "什么", "谁", "哪", "多少", "几", "吗", "呢")):
+        return True
+    if raw.endswith(("…", "...", "的名字", "啥名")):
+        return True
+    return False
+
+
 def is_self_fact_question(text: str) -> bool:
     """只有在问使用者自己已经告诉过的事实时才走记忆。"""
     raw = (text or "").strip()
@@ -538,11 +552,21 @@ def drop_request_memories(home: Path) -> int:
                 continue
             statement = str(fact.get("statement") or "")
             entity = str(fact.get("entity") or "")
-            if is_imperative_request(statement) or is_imperative_request(entity) or entity in {"写一", "首关"}:
+            if (
+                is_imperative_request(statement)
+                or is_imperative_request(entity)
+                or is_question_fragment(statement)
+                or entity in {"写一", "首关"}
+            ):
                 removed += 1
                 continue
             kept.append(fact)
         if len(kept) == len(facts):
+            continue
+        if not kept:
+            import shutil
+            shutil.rmtree(path.parent, ignore_errors=True)
+            removed += 1
             continue
         memory["facts"] = kept
         names = []
@@ -550,9 +574,33 @@ def drop_request_memories(home: Path) -> int:
             name = str(fact.get("entity") or "").strip()
             if name and name not in names:
                 names.append(name)
-        if names:
-            memory["entities"] = names
+        memory["entities"] = names
         path.write_text(json.dumps(memory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    removed += _drop_queued_questions(Path(home))
+    return removed
+
+
+def _drop_queued_questions(home: Path) -> int:
+    docs = Path(home) / "documents"
+    if not docs.is_dir():
+        return 0
+    removed = 0
+    for path in docs.glob("*/queued.json"):
+        try:
+            queued = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(queued, list):
+            continue
+        kept = []
+        for item in queued:
+            text = item if isinstance(item, str) else str((item or {}).get("text") or "")
+            if is_question_fragment(text) or is_imperative_request(text):
+                removed += 1
+                continue
+            kept.append(item)
+        if len(kept) != len(queued):
+            path.write_text(json.dumps(kept, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return removed
 
 

@@ -1079,8 +1079,12 @@ class MemoryService:
         seen: set[str] = set()
 
         def take(fact: dict) -> None:
+            from memory_core.extract import is_imperative_request, is_question_fragment
+
             statement = str(fact.get("statement") or "")
-            if not statement or any(is_same_memory(statement, item) for item in stored if item):
+            if not statement or is_question_fragment(statement) or is_imperative_request(statement):
+                return
+            if any(is_same_memory(statement, item) for item in stored if item):
                 return
             key = normalize_fact_key(statement)
             if not key or key in seen:
@@ -1924,7 +1928,12 @@ class MemoryService:
         centroids = {}
         canonical: dict[str, list[str]] = {}
         for record in records:
-            stored_facts = list((record.fact_memory or {}).get("facts") or [])
+            stored_facts = [
+                fact for fact in ((record.fact_memory or {}).get("facts") or [])
+                if isinstance(fact, dict) and not fact.get("superseded")
+            ]
+            if not stored_facts and not (record.fact_memory or {}).get("self"):
+                continue
             experts.append({
                 "id": f"expert:{record.name}",
                 "name": record.name,

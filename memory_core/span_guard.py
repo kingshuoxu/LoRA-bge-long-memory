@@ -531,9 +531,81 @@ def _explicit_hops(query: str, names: list[str]) -> list[str]:
         return ["specialty"]
     if "守护" in text and "的人" in text and "keeper" not in hops:
         hops.insert(0, "keeper")
-    if any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")) and "多高" not in text:
-        hops = [hop for hop in hops if hop not in {"tower", "height", "keeper"}]
+    duration = any(mark in text for mark in ("多少年", "守了", "守护了", "多久"))
+    if not duration and "电" in text and any(mark in text for mark in ("哪一年", "哪年")):
+        hops.append("electric")
+    elif not duration and "出生" not in text and any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")):
+        hops.append("built")
     return hops
+
+
+def asked_kind(query: str) -> str:
+    """问句要的取值种类。用来拦住把塔名当成年限、把十六面当成徒弟人数。"""
+    text = query or ""
+    if any(mark in text for mark in ("守了", "守护了", "多少年", "多久")) and "建于" not in text and "建成" not in text:
+        return "duration"
+    if any(mark in text for mark in ("徒弟", "学徒")) and any(mark in text for mark in ("多少", "几", "几个", "几位")):
+        return "apprentice"
+    if any(mark in text for mark in ("多少个", "几个", "几个人", "多少位", "几位", "多少名", "多少次")):
+        return "count"
+    if "出生" in text or "生日" in text:
+        return "birth"
+    if any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")):
+        return "year"
+    if "多高" in text or "塔高" in text:
+        return "height"
+    if "面" in text and any(mark in text for mark in ("多少", "几", "一共")):
+        return "faces"
+    if any(mark in text for mark in ("是谁", "谁")):
+        return "person"
+    if any(mark in text for mark in ("哪里", "哪儿", "什么地方")):
+        return "place"
+    return ""
+
+
+def span_fits(query: str, span: str) -> bool:
+    kind = asked_kind(query)
+    text = (span or "").strip().rstrip("。")
+    if not kind:
+        return True
+    if kind in {"year", "birth"}:
+        return bool(re.fullmatch(r"\d{3,4}年", text))
+    if kind == "duration":
+        return bool(re.fullmatch(r"(?:\d{1,4}|[一二三四五六七八九十百]+)年", text))
+    if kind in {"apprentice", "count"}:
+        return bool(re.search(r"[个位名次]", text)) and "面" not in text and not re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)
+    if kind == "height":
+        return "米" in text
+    if kind == "faces":
+        return text.endswith("面")
+    if kind == "person":
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)) and text not in _COUNTRIES
+    if kind == "place":
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,8}", text))
+    return True
+
+
+def predicate_in_statement(query: str, statement: str) -> bool:
+    """问的那个属性必须写在被引用的句子里，只点到同一个人不够。"""
+    text = statement or ""
+    kind = asked_kind(query)
+    if kind == "apprentice":
+        return any(mark in text for mark in ("徒弟", "学徒"))
+    if kind == "count" and "工匠" in (query or ""):
+        return "多少" in text or "几个" in text
+    if kind == "count" and "人" in (query or "") and "守" in (query or ""):
+        return "多少人" in text or "几个人" in text
+    if kind == "duration":
+        return any(mark in text for mark in ("守了", "守护了"))
+    if kind == "birth":
+        return any(mark in text for mark in ("出生", "生日", "生于"))
+    if kind == "year":
+        return "建" in text or "电" in text or bool(re.search(r"\d{3,4}年", text))
+    if kind == "faces":
+        return "面" in text
+    if kind == "height":
+        return "米" in text or "塔高" in text
+    return True
 
 
 def _hop_type_ok(hop: str, span: str) -> bool:
@@ -603,11 +675,20 @@ def relation_decision(query: str, facts: list[dict]) -> dict | None:
                 nxt = (dst, host)
                 break
         if nxt is None or nxt[0] in seen:
-            return {"status": "abstain", "text": uncertain_reply(query, _related_facts(query, facts, names) or ([fact] if fact else []))}
+            if len(hops) <= 1:
+                return None
+            return {"status": "abstain", "text": fixed_refusal(query, facts)}
         node, fact = nxt
         seen.append(node)
-    if not _hop_type_ok(hops[-1], node) or node == start or node in (query or ""):
-        return {"status": "abstain", "text": uncertain_reply(query, _related_facts(query, facts, names))}
+    fits = span_fits(query, node) if asked_kind(query) else _hop_type_ok(hops[-1], node)
+    if not fits or node == start or (asked_kind(query) == "person" and node in (query or "")):
+        if len(hops) <= 1:
+            return None
+        return {"status": "abstain", "text": fixed_refusal(query, facts)}
+    if not predicate_in_statement(query, statement_of(fact or {})):
+        if len(hops) <= 1:
+            return None
+        return {"status": "abstain", "text": fixed_refusal(query, facts)}
     return {"status": "answer", "span": node, "fact": fact}
 
 

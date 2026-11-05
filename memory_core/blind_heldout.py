@@ -37,8 +37,24 @@ _TAUGHT = [
     ("诺丁是哪国人？", "瑞典"),
     ("三条腿的海鸥是谁养的？", "柯小满"),
 ]
-_NEVER = [
+_TRAPS = [
+    "柯岚守了多少年？",
+    "柯岚守护白鹭塔多少年？",
+    "诺丁有多少徒弟？",
+    "诺丁收了几个徒弟？",
+    "瑞典工匠有几位学徒？",
+    "白鹭塔建了多少次？",
+    "雾港有多少人口？",
+    "柯小满的父亲是哪一年出生的？",
+    "阿哨的主人的爸爸是哪一年出生的？",
+    "诺丁住在哪里？",
+    "白鹭塔有几个人守？",
+    "透镜有多少个工匠？",
+    "柯岚守护了多久？",
     "白鹭塔离码头多远？",
+    "白鹭塔能照多远？",
+]
+_NEVER = [
     "柯岚的妻子是谁？",
     "阿哨的主人的妈妈是谁？",
     "雾港属于哪个省？",
@@ -47,7 +63,6 @@ _NEVER = [
     "阿哨是公是母？",
     "白鹭塔的闺女叫什么？",
     "柯小满今年几岁？",
-    "白鹭塔能照多远？",
     "雾港的市长是谁？",
     "诺丁的出生年是哪年？",
     "透镜卖多少钱？",
@@ -58,11 +73,15 @@ _NEVER = [
 def generate(seed: int) -> dict:
     rng = random.Random(seed)
     taught = list(_TAUGHT)
-    never = list(_NEVER)
+    never = list(_TRAPS)
+    extra = list(_NEVER)
     rng.shuffle(taught)
+    rng.shuffle(extra)
     rng.shuffle(never)
     taught = taught[:24]
-    never = never[:10]
+    never.extend(extra[:4])
+    if len(_TRAPS) < 15:
+        raise RuntimeError("类型陷阱不足 15 条")
     return {
         "seed": seed,
         "taught": [{"q": question, "gold": gold} for question, gold in taught],

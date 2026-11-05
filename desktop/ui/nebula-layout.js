@@ -53,8 +53,14 @@ export function factCaption(fact) {
     else if (year) value = year[0];
     else value = value.slice(0, 10);
   }
-  const name = value || attr || statement.slice(0, 12);
-  const meta = attr && attr !== name && attr.length <= 12 ? attr : "";
+  const name = value || statement.slice(0, 12);
+  const chapter = /第.+章|章/.test(attr);
+  let meta = "";
+  if (!chapter && attr && attr !== name && attr !== "重点" && attr.length <= 12) {
+    meta = attr;
+  } else if (statement && statement !== name) {
+    meta = statement.replace(name, "").replace(/^[，,、\s]+/, "").replace(/[，,].*$/, "").slice(0, 12);
+  }
   return { name, meta };
 }
 
