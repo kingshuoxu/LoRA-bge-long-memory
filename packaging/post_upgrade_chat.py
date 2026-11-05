@@ -17,8 +17,17 @@ from server_proc import run_until_ready
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     models = Path(os.environ.get("LORA_MEMORY_MODELS") or root / "model-cache")
-    if not (models / "Qwen2.5-0.5B-Instruct").is_dir() and not any(models.glob("**/config.json")):
+    # 标签构建看不到拉取请求上的缓存，缺模型时在这里下载。
+    from memory_core.models_mgr import ensure_models, models_ready
+
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    if not models_ready(models):
+        print(f"模型缓存未就绪，开始下载到 {models}", flush=True)
+        ensure_models(models)
+    if not models_ready(models):
         sys.exit(f"找不到模型目录 {models}")
     work = Path(os.environ.get("UPGRADE_CHAT_HOME") or Path("/tmp") / "yingyu-upgrade-chat")
     if work.exists():
