@@ -9,7 +9,7 @@ import re
 _COUNTRIES = ("瑞典", "挪威", "中国", "日本", "英国", "法国", "德国", "美国", "荷兰", "丹麦", "芬兰", "俄罗斯")
 _SOLAR = ("霜降", "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至", "立秋", "处暑", "白露", "秋分", "寒露", "立冬", "小雪", "大雪", "冬至", "小寒", "大寒")
 _COLOURS = (
-    "蔚蓝", "深蓝", "浅蓝", "蓝色", "朱红", "酒红", "墨黑", "墨色", "金色", "银色",
+    "朱红色", "蔚蓝", "深蓝", "浅蓝", "蓝色", "朱红", "酒红", "墨黑", "墨色", "金色", "银色",
     "红色", "白色", "黑色", "青色", "紫色", "绿色", "黄色", "褐色", "灰色", "粉色", "棕色", "橙色",
 )
 _MATERIALS = ("大理石", "花岗岩", "木头", "木材", "石头", "玻璃", "水泥", "砖头", "铜", "铁", "砖", "竹")
@@ -20,7 +20,7 @@ _ROLE_SUFFIX = ("女儿", "闺女", "丫头", "父亲", "爸爸", "老爸", "主
 def question_kind(query: str) -> str:
     """问句要的取值种类。空字符串表示这句没有强制种类。"""
     text = query or ""
-    if re.search(r"什么颜色|啥颜色|哪种颜色|颜色", text):
+    if re.search(r"什么颜色|啥颜色|哪种颜色|颜色|什么色", text):
         return "colour"
     if re.search(r"什么材料|啥材料|哪种材料|什么做的|用什么做|材料", text):
         return "material"
@@ -46,6 +46,8 @@ def question_kind(query: str) -> str:
         return "person"
     if re.search(r"谁", text):
         return "person"
+    if "茶" in text and re.search(r"什么|哪种|啥", text):
+        return "name"
     if re.search(r"叫什么|叫啥|什么名字|是什么", text):
         return "name"
     return ""
@@ -57,6 +59,8 @@ def question_subjects(query: str) -> list[str]:
     for part in re.split(r"的", query or ""):
         part = re.split(r"[？?，,]", part)[0]
         part = re.split(r"打磨|守护|看守|养|是|有|叫", part)[0]
+        if part.endswith("家") and len(part) > 2:
+            part = part[:-1]
         for role in sorted(_ROLE_SUFFIX, key=len, reverse=True):
             if part.endswith(role) and len(part) > len(role):
                 part = part[: -len(role)]
@@ -155,7 +159,7 @@ def extract_span(query: str, statement: str) -> str:
     text = statement or ""
     kind = question_kind(query)
     if kind == "colour":
-        for colour in _COLOURS:
+        for colour in sorted(_COLOURS, key=len, reverse=True):
             if colour in text:
                 return colour
         return ""
@@ -187,8 +191,20 @@ def extract_span(query: str, statement: str) -> str:
         if "城市" in (query or "") or re.search(r"哪座城|哪个城", query or ""):
             match = re.search(r"([\u4e00-\u9fff]{1,8}(?:城|市))", text)
             return match.group(1) if match else ""
-        match = re.search(r"(?<![在的])([\u4e00-\u9fff]{1,4}(?:港|镇|乡|县))", text)
-        return match.group(1) if match else ""
+        found = []
+        for match in re.finditer(r"[港镇乡县]", text):
+            for length in (2, 3, 1):
+                begin = match.start() - length
+                if begin < 0:
+                    continue
+                before = text[begin - 1:begin]
+                if before and before not in "在的是为于住到往属":
+                    continue
+                name = text[begin:match.end()]
+                if re.fullmatch(r"[\u4e00-\u9fff]+", name):
+                    found.append(name)
+                    break
+        return found[-1] if found else ""
     if kind == "time":
         if "电" in (query or "") and "电" not in text:
             return ""
@@ -249,6 +265,9 @@ def extract_span(query: str, statement: str) -> str:
         if match:
             return match.group(1)
         match = re.search(r"(?:名字是|名为|叫做)([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
+        if match:
+            return match.group(1)
+        match = re.search(r"是([\u4e00-\u9fffA-Za-z0-9·]{2,12})", text)
         return match.group(1) if match else ""
     return ""
 
@@ -275,6 +294,32 @@ def _claimed_role_mismatch(query: str, statement: str) -> bool:
     return False
 
 
+def _subject_present(subject: str, statement: str) -> bool:
+    if subject in (statement or ""):
+        return True
+    for length in range(min(len(subject), 4), 1, -1):
+        if subject[:length] in (statement or ""):
+            return True
+    return False
+
+
+def _same_thing(query: str, statement: str) -> bool:
+    """狗的问题不能用猫的句子，汽车的问题不能用自行车的句子。"""
+    asked = query or ""
+    text = statement or ""
+    if "狗" in asked and "狗" not in text:
+        return False
+    if "猫" in asked and "猫" not in text:
+        return False
+    if "茶" in asked and "茶" not in text:
+        return False
+    if "自行车" in asked and "自行车" not in text:
+        return False
+    if "车" in asked and "自行车" not in asked and "自行车" in text and "汽车" not in text:
+        return False
+    return True
+
+
 def accept_span(
     query: str,
     span: str,
@@ -288,6 +333,8 @@ def accept_span(
     if not text or text not in (statement or ""):
         return False
     if any(text == subject or (len(text) >= 2 and text in subject) for subject in question_subjects(query)):
+        return False
+    if not _same_thing(query, statement):
         return False
     if _claimed_role_mismatch(query, statement):
         return False
@@ -313,7 +360,7 @@ def accept_span(
             return False
         if text != expected and expected not in text:
             return False
-        if subjects and not any(subject in (statement or "") for subject in subjects):
+        if subjects and not any(_subject_present(subject, statement) for subject in subjects):
             return allow_chain
         return True
     expected = extract_span(query, statement)
@@ -401,8 +448,6 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     from memory_core.span_guard import relation_decision, statement_of
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
-    if question_subjects(query) and not _mentioned_names(query, rows):
-        return None
     personal = "我的" in (query or "") or (query or "").startswith("我")
     if personal:
         rows = [
@@ -411,6 +456,15 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         ]
         if not rows:
             return None
+    if not personal and not _mentioned_names(query, rows):
+        decision = relation_decision(query, rows)
+        if decision and decision.get("status") == "answer":
+            fact = decision.get("fact") or {}
+            if isinstance(fact, dict):
+                span = str(decision.get("span") or "")
+                if accept_span(query, span, statement_of(fact), allow_chain=True):
+                    return span, fact
+        return None
     decision = relation_decision(query, rows)
     if decision and decision.get("status") == "answer":
         fact = decision.get("fact") or {}

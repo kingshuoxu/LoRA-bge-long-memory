@@ -1099,7 +1099,15 @@ class MemoryService:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
                 picked = choose_typed(content, remembered) if remembered else None
-                if recall.get("reason") == "document" and fact_answer and picked and picked[0] in fact_answer:
+                personal = "我的" in content or content.startswith("我")
+                if remembered and not personal and not grounded_subjects(content, remembered) and not picked:
+                    fact_answer = None
+                    decision.fired = False
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                elif recall.get("reason") == "document" and fact_answer and picked and picked[0] in fact_answer:
                     pass
                 elif picked and (
                     not fact_answer
