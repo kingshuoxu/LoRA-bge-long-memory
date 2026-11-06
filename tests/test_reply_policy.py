@@ -572,6 +572,34 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertEqual(spoken_fact("白鹭塔建了多少次？", _fact("白鹭塔", "重点", TOWER.rstrip("。"), TOWER)), "")
         self.assertEqual(spoken_fact("雾港有多少人口？", _fact("白鹭塔", "重点", TOWER.rstrip("。"), TOWER)), "")
 
+    def test_kinship_tower_and_event_do_not_borrow_another_span(self):
+        from memory_core.answer_type import memory_topic
+        from memory_core.fact_reader import read_memory
+
+        facts = [
+            {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "source": "document"},
+            {"entity": "星砂盐", "statement": "雾港的特产是一种蓝色海盐，名叫星砂盐，每年霜降那天开始晾晒。", "source": "document"},
+            {"entity": "阿哨", "statement": "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "source": "document"},
+            {"entity": "诺丁", "statement": "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "source": "document"},
+        ]
+
+        def text(question):
+            hit = read_memory(question, facts, None) or {}
+            return hit.get("text") or ""
+
+        self.assertIn("柯岚", text("柯小满的爸爸叫什么？"))
+        self.assertNotIn("阿哨", text("柯小满的爸爸叫什么？"))
+        self.assertIn("白鹭塔", text("她爸爸守护的塔叫啥？"))
+        self.assertNotIn("阿哨", text("她爸爸守护的塔叫啥？"))
+        self.assertIn("白鹭塔", text("十六面透镜是哪座灯塔？"))
+        self.assertNotIn("柯岚", text("十六面透镜是哪座灯塔？"))
+        self.assertIn("星砂盐", text("每年霜降晾晒的盐叫什么？"))
+        self.assertIn("1931", text("柯岚守护的灯塔什么时候改成电灯？"))
+        first = text("柯岚第一次点灯是哪一天？")
+        self.assertNotIn("1931", first)
+        self.assertTrue(memory_topic("诺丁活到多少岁？", facts))
+        self.assertFalse(memory_topic("水的化学式是什么？", facts))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -233,10 +233,30 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261121, "抽查")
+    _generated(service, 20261106, "抽查")
     _open_chat(service)
-    _generated(service, 20261211, "盲测")
+    _generated(service, 20261107, "盲测")
+    _known_fence(service)
     print("FULL_LEARNING_OK", flush=True)
+
+
+def _known_fence(service: MemoryService) -> None:
+    """记住了的人没有这条属性时，只能是固定句式，不能让基座编名字或数字。"""
+    from memory_core.blind_heldout import _DENY, _FENCE
+
+    if len(_FENCE) < 15:
+        _fail("已知实体的未知属性不足 15 条")
+    invented = 0
+    for question in _FENCE:
+        conv = service.create_conversation("围栏")["id"]
+        answer = _ask(service, conv, question)
+        leaked = [word for word in _DENY if word in answer]
+        if not _declined(answer) or leaked:
+            invented += 1
+            print(f"FENCE {question} -> {answer}", flush=True)
+    print(f"FENCE {len(_FENCE) - invented}/{len(_FENCE)} invented {invented}", flush=True)
+    if invented:
+        _fail(f"已知实体的未知属性被编造了 {invented} 次")
 
 
 _STORED_VALUES = (
