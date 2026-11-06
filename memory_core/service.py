@@ -1188,8 +1188,19 @@ class MemoryService:
                         if needle and needle in statement_of(fact):
                             host = statement_of(fact)
                             break
+                    polar = bool(re.match(r"^(?:是|不是|Yes|No)\b", (fact_answer or "").strip(), re.IGNORECASE))
+                    polar_ok = False
+                    if polar and fact_answer and len(fact_answer) <= 40:
+                        for fact in remembered:
+                            statement = statement_of(fact)
+                            for piece in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,16}", fact_answer):
+                                if piece in statement and accept_span(content, piece, statement):
+                                    polar_ok = True
+                                    break
+                            if polar_ok:
+                                break
                     valid = bool(fact_answer) and (
-                        _refusal_answer(fact_answer) or (host and accept_span(content, needle, host))
+                        _refusal_answer(fact_answer) or polar_ok or (host and accept_span(content, needle, host))
                     )
                     if not valid:
                         fact_answer = fixed_refusal(content, remembered)
