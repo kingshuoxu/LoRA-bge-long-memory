@@ -366,6 +366,10 @@ def accept_span(
         subjects = question_subjects(query)
         if not allow_chain and subjects and not any(_subject_present(subject, statement) for subject in subjects):
             return False
+        if role == "keeper":
+            obj = re.search(r"(?:守护|看守)([\u4e00-\u9fff]{2,8})", query or "")
+            if obj and "的" not in obj.group(1) and obj.group(1) not in (statement or ""):
+                return False
         if role:
             return text == _role_argument(statement, role) and _person_shape(text)
         return _person_shape(text)
@@ -429,6 +433,12 @@ def _mentioned_names(query: str, facts: list[dict]) -> list[str]:
 
     text = query or ""
     hits = [name for name in _catalog(facts) if name_bounded(name, text)]
+    for name in _catalog(facts):
+        if name in hits or name not in text:
+            continue
+        after = text[text.find(name) + len(name):text.find(name) + len(name) + 1]
+        if not after or after in "的守收有是在打养叫吗？?":
+            hits.append(name)
     kept: list[str] = []
     for name in hits:
         if any(name != other and name in other and other in text for other in hits):
