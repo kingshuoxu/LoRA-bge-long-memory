@@ -1105,7 +1105,7 @@ class MemoryService:
                     and not personal
                     and not grounded_subjects(content, remembered)
                     and not picked
-                    and recall.get("reason") != "document"
+                    and recall.get("reason") not in {"document", "document_miss"}
                 ):
                     fact_answer = None
                     decision.fired = False
@@ -1130,7 +1130,12 @@ class MemoryService:
                         mount_memory(decision, recall, owner, [fact], "entity_first")
                         recall["doc_chips"] = []
                         recall["reason_text"] = "回答用的是和问句种类一致的取值"
-                elif fact_answer and not _refusal_answer(fact_answer) and question_kind(content):
+                elif (
+                    fact_answer
+                    and not _refusal_answer(fact_answer)
+                    and question_kind(content)
+                    and recall.get("reason") not in {"document", "document_miss"}
+                ):
                     host = ""
                     needle = fact_answer.strip().rstrip("。")
                     for fact in remembered:
