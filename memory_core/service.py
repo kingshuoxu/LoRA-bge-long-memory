@@ -1181,7 +1181,23 @@ class MemoryService:
                     for fact in memory.get("facts") or []:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
-                if memory_topic(content, remembered):
+                if re.search(r"是.+还是", content or ""):
+                    fact_answer = fixed_refusal(content, remembered)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "是A还是B没有写在记忆里，不选其中一边"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                elif memory_topic(content, remembered):
                     needle = (fact_answer or "").strip().rstrip("。")
                     host = ""
                     for fact in remembered:

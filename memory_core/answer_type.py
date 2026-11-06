@@ -802,6 +802,8 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         ]
         if not rows:
             return None
+    if re.search(r"是.+还是", query or ""):
+        return None
     made = _maker_chain(query, rows)
     if made:
         return made

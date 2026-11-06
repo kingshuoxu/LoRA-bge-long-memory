@@ -523,6 +523,10 @@ def read_memory(
         return None
     if is_open_task(query):
         return None
+    if re.search(r"是.+还是", query or ""):
+        from memory_core.span_guard import fixed_refusal
+
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.grounding import open_entity_question
     from memory_core.paraphrase import is_polar
