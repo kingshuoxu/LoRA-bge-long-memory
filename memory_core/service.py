@@ -1203,6 +1203,25 @@ class MemoryService:
                         _refusal_answer(fact_answer) or polar_ok or (host and accept_span(content, needle, host))
                     )
                     if not valid:
+                        from memory_core.answer_type import choose_typed
+
+                        picked_now = choose_typed(content, remembered)
+                        if picked_now:
+                            span, fact = picked_now
+                            picked_host = statement_of(fact)
+                            if accept_span(content, span, picked_host, allow_chain=True):
+                                fact_answer = span if span[-1:] in "。." else span + "。"
+                                owner = next(
+                                    (record for record in experts if fact in ((record.fact_memory or {}).get("facts") or [])),
+                                    None,
+                                )
+                                if owner is not None:
+                                    mount_memory(decision, recall, owner, [fact], "entity_first")
+                                    recall["doc_chips"] = []
+                                    recall["abstain"] = False
+                                    recall["reason_text"] = "回答用的是和问句种类一致的取值"
+                                valid = True
+                    if not valid:
                         fact_answer = fixed_refusal(content, remembered)
                         decision.fired = False
                         decision.expert = None

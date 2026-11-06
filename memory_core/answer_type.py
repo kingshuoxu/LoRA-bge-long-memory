@@ -17,6 +17,22 @@ _ANIMALS = ("海鸥", "海燕", "鸽子", "小狗", "小猫", "狗", "猫")
 _ROLE_SUFFIX = ("女儿", "闺女", "丫头", "父亲", "爸爸", "老爸", "主人", "工匠", "师傅", "灯塔", "海鸥", "养")
 
 
+_SPOUSE_WORDS = ("配偶", "妻子", "爱人", "老婆", "老公", "太太", "丈夫")
+_FATHER_MARK = re.compile(r"父亲|爸爸|老爸|她爹|他爹|她爸|他爸|爹|(?<![爸])爸(?!爸)")
+
+
+def _asks_spouse(query: str) -> bool:
+    text = query or ""
+    return any(word in text for word in _SPOUSE_WORDS) and bool(re.search(r"叫什么|叫啥|是谁|什么名字|是什么", text))
+
+
+def _asks_father(query: str) -> bool:
+    text = query or ""
+    if re.search(r"哪座塔|什么塔|哪座灯塔|塔叫什么|塔叫啥|塔是什么", text):
+        return False
+    return bool(_FATHER_MARK.search(text)) and bool(re.search(r"叫什么|叫啥|是谁|什么名字", text))
+
+
 def question_kind(query: str) -> str:
     """问句要的取值种类。空字符串表示这句没有强制种类。"""
     text = query or ""
@@ -28,12 +44,16 @@ def question_kind(query: str) -> str:
         return "nation"
     if re.search(r"什么鸟|什么动物|哪种鸟|哪种动物", text):
         return "animal"
-    if re.search(r"鸟|动物", text) and re.search(r"叫什么|叫啥|是什么", text):
-        return "name"
     if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔|塔叫什么|塔叫啥|塔是什么", text):
         return "tower"
     if "十六面" in text and "谁" not in text and re.search(r"哪座|灯塔|什么塔", text):
         return "tower"
+    if _asks_spouse(text):
+        return "person"
+    if _asks_father(text):
+        return "person"
+    if "谁" in text:
+        return "person"
     if re.search(r"哪个村|哪个村子|哪个镇|哪个城市|哪座城市|住在哪|住哪", text):
         return "place"
     if re.search(r"哪里|哪儿|什么地方", text):
@@ -45,11 +65,10 @@ def question_kind(query: str) -> str:
     if re.search(r"哪一年|哪年|多高|塔高|多少|几", text):
         return "measure"
     if re.search(r"女儿|闺女|丫头", text) and re.search(r"叫什么|叫啥|是谁|什么名字", text):
-        return "person"
-    if re.search(r"爸爸|父亲|老爸|她爹|他爹", text) and re.search(r"叫什么|叫啥|是谁|什么名字", text):
-        return "person"
-    if re.search(r"谁", text):
-        return "person"
+        if not (re.search(r"鸟|动物|海鸥", text) and re.search(r"叫什么|叫啥", text)):
+            return "person"
+    if re.search(r"鸟|动物", text) and re.search(r"叫什么|叫啥|是什么", text) and not _asks_father(text):
+        return "name"
     if "茶" in text and re.search(r"什么|哪种|啥", text):
         return "name"
     if re.search(r"叫什么|叫啥|什么名字|是什么", text):
@@ -88,12 +107,23 @@ def _asked_role(query: str) -> str:
         ("打磨", "maker"),
         ("工匠", "maker"),
         ("师傅", "maker"),
+        ("配偶", "spouse"),
+        ("妻子", "spouse"),
+        ("爱人", "spouse"),
+        ("太太", "spouse"),
+        ("老婆", "spouse"),
+        ("老公", "spouse"),
+        ("丈夫", "spouse"),
         ("主人", "owner"),
         ("父亲", "father"),
         ("爸爸", "father"),
         ("老爸", "father"),
         ("她爹", "father"),
         ("他爹", "father"),
+        ("她爸", "father"),
+        ("他爸", "father"),
+        ("爹", "father"),
+        ("爸", "father"),
         ("女儿", "daughter"),
         ("闺女", "daughter"),
         ("丫头", "daughter"),
@@ -143,8 +173,10 @@ def _role_argument(statement: str, role: str) -> str:
         return _owner(statement)
     if role == "daughter":
         return _daughter(statement)
-    if role == "father":
-        return _father(statement)
+        if role == "father":
+            return _father(statement)
+        if role == "spouse":
+            return ""
     return ""
 
 
@@ -308,6 +340,11 @@ def extract_span(query: str, statement: str) -> str:
         if "出生" in (query or "") or "生日" in (query or ""):
             return ""
         role = _asked_role(query)
+        if role == "spouse":
+            return ""
+        if role == "father":
+            parent = _father(text)
+            return parent if _person_shape(parent) else ""
         if role:
             return _role_argument(text, role)
         if "谁" in (query or ""):
@@ -333,7 +370,7 @@ def _claimed_role_mismatch(query: str, statement: str) -> bool:
     """「诺丁守护的塔」不能用诺丁只是工匠的那一句。"""
     text = query or ""
     claimed = re.search(r"([\u4e00-\u9fff]{2,4})(?:在.{0,4})?(?:守护|看守)", text)
-    if claimed and "谁" not in claimed.group(1) and "的" not in claimed.group(1) and not claimed.group(1).endswith(("父亲", "女儿", "爸爸", "主人", "闺女", "老爸", "爹")) and claimed.group(1) not in {"父亲", "女儿", "爸爸", "主人", "闺女", "老爸"} and _person_shape(claimed.group(1)):
+    if claimed and "谁" not in claimed.group(1) and "的" not in claimed.group(1) and not claimed.group(1).endswith(("父亲", "女儿", "爸爸", "主人", "闺女", "老爸", "爹", "爸")) and claimed.group(1) not in {"父亲", "女儿", "爸爸", "主人", "闺女", "老爸"} and _person_shape(claimed.group(1)):
         if _keeper(statement) != claimed.group(1):
             return True
     asked = _asked_role(text)
@@ -401,7 +438,7 @@ def accept_span(
         return False
     if question_kind(query) in {"person", "tower"} and _claimed_role_mismatch(query, statement):
         return False
-    for word in ("妈妈", "母亲", "妻子", "丈夫", "老婆", "老公"):
+    for word in ("妈妈", "母亲", "妻子", "丈夫", "老婆", "老公", "配偶", "爱人", "太太"):
         if word in (query or "") and word not in (statement or ""):
             return False
     if require_subject:
@@ -426,6 +463,10 @@ def accept_span(
             obj = re.search(r"(?:守护|看守)([\u4e00-\u9fff]{2,8})", query or "")
             if obj and "的" not in obj.group(1) and obj.group(1) not in (statement or ""):
                 return False
+        if role == "spouse":
+            return False
+        if role == "father":
+            return text == _father(statement) and _person_shape(text)
         if role:
             return text == _role_argument(statement, role) and _person_shape(text)
         return _person_shape(text)
@@ -563,6 +604,62 @@ def _from_fact(query: str, fact: dict, subjects: list[str]) -> tuple[str, dict] 
     return None
 
 
+def _parent_fact(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    """从「X的女儿Y」取出父亲。鸟的主人、她爹、它主人都指到这个父亲，不取名叫的宠物。"""
+    from memory_core.span_guard import statement_of
+
+    asked = query or ""
+    pairs: list[tuple[str, str, dict]] = []
+    for fact in rows:
+        text = statement_of(fact)
+        parent = _father(text)
+        daughter = _daughter(text)
+        if parent and daughter and _person_shape(parent):
+            pairs.append((parent, daughter, fact))
+    for parent, daughter, fact in pairs:
+        if daughter in asked:
+            return parent, fact
+    refers = any(word in asked for word in ("主人", "她爹", "他爹", "她爸", "他爸", "它主", "那只", "鸟", "海鸥"))
+    if not refers or len(pairs) != 1:
+        return None
+    parent, daughter, fact = pairs[0]
+    for other in rows:
+        text = statement_of(other)
+        for name in (_keeper(text), _maker(text), _owner(text)):
+            if name and name in asked and name not in {parent, daughter}:
+                return None
+    return parent, fact
+
+
+def _kinship_hit(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    from memory_core.span_guard import statement_of
+
+    if _asks_spouse(query):
+        return None
+    if question_kind(query) == "tower" and re.search(r"父亲|爸|爹", query or ""):
+        found = _parent_fact(query, rows)
+        if not found:
+            return None
+        parent, _fact = found
+        for fact in rows:
+            text = statement_of(fact)
+            if _keeper(text) != parent:
+                continue
+            named = re.search(r"名叫([\u4e00-\u9fff]{2,4}塔)", text)
+            if named and _person_shape(parent):
+                return named.group(1), fact
+        return None
+    if not _asks_father(query):
+        return None
+    found = _parent_fact(query, rows)
+    if not found:
+        return None
+    parent, fact = found
+    if accept_span(query, parent, statement_of(fact), allow_chain=True):
+        return parent, fact
+    return None
+
+
 def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     """关系链和单句摘录都要过同一种类检查。对不上就当没答出来。"""
     from memory_core.span_guard import relation_decision, statement_of
@@ -576,6 +673,9 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         ]
         if not rows:
             return None
+    kin = _kinship_hit(query, rows)
+    if kin:
+        return kin
     if not personal and not memory_topic(query, rows):
         decision = relation_decision(query, rows)
         if decision and decision.get("status") == "answer":
@@ -600,14 +700,16 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
                 return rescued
     subjects = grounded_subjects(query, rows)
     pool = rows
+    focus = subjects
     if question_kind(query) == "tower" and any(mark in (query or "") for mark in ("十六", "透镜")):
         pool = [fact for fact in rows if any(mark in statement_of(fact) for mark in ("十六", "透镜"))]
+        focus = []
     elif subjects:
         anchored = [fact for fact in rows if all(name in statement_of(fact) for name in subjects)]
         pool = anchored
     found: list[tuple[int, str, dict]] = []
     for fact in pool:
-        rescued = _from_fact(query, fact, subjects)
+        rescued = _from_fact(query, fact, focus)
         if rescued:
             found.append((_score(query, statement_of(fact)), rescued[0], rescued[1]))
     if not found:

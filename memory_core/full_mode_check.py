@@ -233,11 +233,43 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261106, "抽查")
+    _generated(service, 20261120, "抽查")
     _open_chat(service)
-    _generated(service, 20261107, "盲测")
+    _generated(service, 20261128, "盲测")
     _known_fence(service)
+    _spouse_and_kin(service)
     print("FULL_LEARNING_OK", flush=True)
+
+
+def _spouse_and_kin(service: MemoryService) -> None:
+    """没教过的配偶只能是固定句式。鸟的主人她爹要答到父亲，不能答宠物。"""
+    from memory_core.blind_heldout import _KIN_NESTED, _SPOUSE_TRAPS
+
+    spouse_bad = 0
+    for question in _SPOUSE_TRAPS:
+        conv = service.create_conversation("配偶")["id"]
+        answer = _ask(service, conv, question)
+        borrowed = any(word in answer and word not in question for word in ("阿哨", "四十二", "1873", "1931", "诺丁", "星砂盐"))
+        if not _declined(answer) or borrowed or answer.strip().rstrip("。") in {"白鹭塔", "雾港", "阿哨"}:
+            spouse_bad += 1
+            print(f"SPOUSE {question} -> {answer}", flush=True)
+    kin_hits = 0
+    for question, gold in _KIN_NESTED:
+        conv = service.create_conversation("亲属")["id"]
+        answer = _ask(service, conv, question)
+        if gold in answer and "阿哨" not in answer:
+            kin_hits += 1
+        else:
+            print(f"KIN {question} -> {answer}", flush=True)
+    print(
+        f"SPOUSE {len(_SPOUSE_TRAPS) - spouse_bad}/{len(_SPOUSE_TRAPS)} bad {spouse_bad} "
+        f"KIN {kin_hits}/{len(_KIN_NESTED)}",
+        flush=True,
+    )
+    if spouse_bad:
+        _fail(f"配偶问题答成了同一句里的别的东西 {spouse_bad} 次")
+    if kin_hits < len(_KIN_NESTED):
+        _fail(f"嵌套亲属只答对 {kin_hits}/{len(_KIN_NESTED)}")
 
 
 def _known_fence(service: MemoryService) -> None:
