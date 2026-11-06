@@ -13,7 +13,7 @@ from typing import Any
 
 from memory_core.prompts import has_cjk
 
-_QUESTION_HINTS = ("什么", "哪", "谁", "吗", "多少", "几", "是否", "怎么", "如何")
+_QUESTION_HINTS = ("什么", "哪", "谁", "吗", "呢", "多少", "几", "是否", "怎么", "如何", "啥", "叫啥", "啥名")
 _EN_WH = re.compile(r"\b(what|where|who|which|when|how|whose|why)\b", re.IGNORECASE)
 _ENDINGS = "。！？.!?"
 
@@ -83,7 +83,9 @@ def is_question_fragment(text: str) -> bool:
         return True
     if re.match(r"^(?:什么|谁|哪|咋|啥)", raw):
         return True
-    if raw.endswith(("的名字", "啥名", "…", "...")):
+    if raw.endswith(("的名字", "啥名", "…", "...")) or raw.rstrip("。").endswith("啥名"):
+        return True
+    if re.search(r"叫啥|啥名|什么|是谁|哪一|多少|吗", raw):
         return True
     return False
 
@@ -231,7 +233,9 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
-    if _looks_like_question(raw):
+    if _looks_like_question(raw) or is_question_fragment(raw):
+        return None
+    if re.search(r"啥|什么|谁|吗|呢|多少", value):
         return None
     entity, attr = _peel_entity(entity, attr)
     attr = _refine_attr(attr, value, how, raw)
@@ -554,7 +558,7 @@ def pattern_extract(text: str) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
     for sentence in _split_sentences(text):
-        if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence):
+        if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
             continue
         found = _match_sentence(sentence, current)
         if found is None:
@@ -674,7 +678,7 @@ def model_extract(text: str, model, tok, device) -> list[dict[str, Any]]:
     gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
     if gen.startswith("无") or gen.lower().startswith("none"):
         return []
-    return _parse_model_block(gen)
+    return [fact for fact in _parse_model_block(gen) if not is_question_fragment(str(fact.get("statement") or ""))]
 
 
 class _nullctx:

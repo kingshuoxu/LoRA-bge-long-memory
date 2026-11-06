@@ -516,6 +516,9 @@ def read_memory(
 
     返回 {"text", "fact", "miss"}。miss 为真时不要再调用基座编造。
     """
+    from memory_core.extract import is_question_fragment
+
+    facts = [fact for fact in facts if isinstance(fact, dict) and not is_question_fragment(str(fact.get("statement") or ""))]
     if not facts or not str(query or "").strip():
         return None
     if is_open_task(query):

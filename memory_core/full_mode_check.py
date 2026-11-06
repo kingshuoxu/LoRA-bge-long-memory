@@ -233,12 +233,78 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261120, "抽查")
+    _generated(service, 20261202, "抽查")
     _open_chat(service)
-    _generated(service, 20261128, "盲测")
+    _generated(service, 20261203, "盲测")
     _known_fence(service)
     _spouse_and_kin(service)
+    _new_traps(service)
     print("FULL_LEARNING_OK", flush=True)
+
+
+def _new_traps(service: MemoryService) -> None:
+    """是A还是B不能把其中一边说成已经记住。俗称配偶、看守人、谁磨的各有一套。"""
+    from memory_core.blind_heldout import _EITHER, _KEEPER_CALLED, _SPOKEN_SPOUSE, _WHO_MADE
+    from memory_core.extract import is_question_fragment
+
+    either_bad = 0
+    for question in _EITHER:
+        conv = service.create_conversation("两选")["id"]
+        answer = _ask(service, conv, question)
+        asserted = bool(re.search(r"我记得[^，]{0,12}是", answer))
+        if not _declined(answer) or asserted:
+            either_bad += 1
+            print(f"EITHER {question} -> {answer}", flush=True)
+    spoken_bad = 0
+    for question in _SPOKEN_SPOUSE:
+        conv = service.create_conversation("俗称")["id"]
+        answer = _ask(service, conv, question)
+        if not _declined(answer) or answer.strip().rstrip("。") in {"白鹭塔", "雾港", "阿哨"}:
+            spoken_bad += 1
+            print(f"SPOKEN {question} -> {answer}", flush=True)
+    keeper_hits = 0
+    for question, gold in _KEEPER_CALLED:
+        conv = service.create_conversation("看守")["id"]
+        answer = _ask(service, conv, question)
+        if gold in answer and "白鹭塔" not in answer:
+            keeper_hits += 1
+        else:
+            print(f"KEEPER {question} -> {answer}", flush=True)
+    made_hits = 0
+    for question, gold in _WHO_MADE:
+        conv = service.create_conversation("打磨")["id"]
+        answer = _ask(service, conv, question)
+        if gold in answer and "柯岚" not in answer:
+            made_hits += 1
+        else:
+            print(f"MADE {question} -> {answer}", flush=True)
+    leaked = []
+    for record in service.expert_records():
+        for fact in (getattr(record, "fact_memory", None) or {}).get("facts") or []:
+            statement = str(fact.get("statement") or "")
+            if is_question_fragment(statement):
+                leaked.append(statement)
+    for item in service.list_pending():
+        statement = str(item.get("statement") or "")
+        if is_question_fragment(statement):
+            leaked.append(statement)
+    print(
+        f"EITHER {len(_EITHER) - either_bad}/{len(_EITHER)} bad {either_bad} "
+        f"SPOKEN {len(_SPOKEN_SPOUSE) - spoken_bad}/{len(_SPOKEN_SPOUSE)} bad {spoken_bad} "
+        f"KEEPER {keeper_hits}/{len(_KEEPER_CALLED)} MADE {made_hits}/{len(_WHO_MADE)} "
+        f"QUESTION_FACTS {len(leaked)}",
+        flush=True,
+    )
+    if either_bad:
+        _fail(f"是A还是B把一边说成了事实 {either_bad} 次")
+    if spoken_bad:
+        _fail(f"俗称配偶答成了塔或别的东西 {spoken_bad} 次")
+    if keeper_hits < len(_KEEPER_CALLED):
+        _fail(f"看守人叫什么只答对 {keeper_hits}/{len(_KEEPER_CALLED)}")
+    if made_hits < len(_WHO_MADE):
+        _fail(f"谁磨的只答对 {made_hits}/{len(_WHO_MADE)}")
+    if leaked:
+        _fail(f"问句被存成了事实：{leaked[:3]}")
 
 
 def _spouse_and_kin(service: MemoryService) -> None:

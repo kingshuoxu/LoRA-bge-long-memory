@@ -254,6 +254,8 @@ def _subject(query: str, facts: list[dict]) -> str:
             token = text[index:index + size]
             if token in _STOP or token in best or "的" in token:
                 continue
+            if any(mark in token for mark in ("是", "还", "公", "母", "男", "女", "啥", "什", "谁", "吗", "呢")):
+                continue
             if not re.fullmatch(r"[\u4e00-\u9fff]{2,4}", token):
                 continue
             if token in blob and len(token) > len(best):
@@ -278,6 +280,13 @@ def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
     from memory_core.extract import is_self_fact_question
 
     clause = _asked_clause(query)
+    either = re.search(r"是.+还是.+", query or "")
+    if either:
+        entity = _subject(query, facts)
+        attr = either.group(0).rstrip("？?。")
+        if entity:
+            return f"我记得{entity}，但没提到{attr}。"
+        return "这件事不在记忆里。"
     owned = possessed_name_query(query)
     if owned:
         return f"你还没告诉过我你的{owned}叫什么。"

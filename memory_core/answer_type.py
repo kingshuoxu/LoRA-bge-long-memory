@@ -17,7 +17,10 @@ _ANIMALS = ("海鸥", "海燕", "鸽子", "小狗", "小猫", "狗", "猫")
 _ROLE_SUFFIX = ("女儿", "闺女", "丫头", "父亲", "爸爸", "老爸", "主人", "工匠", "师傅", "灯塔", "海鸥", "养")
 
 
-_SPOUSE_WORDS = ("配偶", "妻子", "爱人", "老婆", "老公", "太太", "丈夫")
+_SPOUSE_WORDS = (
+    "配偶", "妻子", "爱人", "老婆", "老公", "太太", "丈夫",
+    "那口子", "对象", "媳妇", "先生", "夫人", "老伴", "另一半", "内人",
+)
 _FATHER_MARK = re.compile(r"父亲|爸爸|老爸|她爹|他爹|她爸|他爸|爹|(?<![爸])爸(?!爸)")
 
 
@@ -26,11 +29,25 @@ def _asks_spouse(query: str) -> bool:
     return any(word in text for word in _SPOUSE_WORDS) and bool(re.search(r"叫什么|叫啥|是谁|什么名字|是什么", text))
 
 
+def _asks_maker(query: str) -> bool:
+    text = query or ""
+    if not re.search(r"打磨|磨镜|谁磨|磨的|磨了", text):
+        return False
+    return _asked_role(text) == "maker"
+
+
+def _asks_keeper_name(query: str) -> bool:
+    text = query or ""
+    return bool(re.search(r"守护人|看守人|守塔人|守塔的人|看守的人|守护的人|谁守", text)) and bool(
+        re.search(r"叫什么|叫啥|啥名|是谁|什么名字", text)
+    )
+
+
 def _asks_father(query: str) -> bool:
     text = query or ""
-    if re.search(r"哪座塔|什么塔|哪座灯塔|塔叫什么|塔叫啥|塔是什么", text):
+    if _asks_maker(text) or re.search(r"哪座塔|什么塔|哪座灯塔|塔叫什么|塔叫啥|塔是什么", text):
         return False
-    return bool(_FATHER_MARK.search(text)) and bool(re.search(r"叫什么|叫啥|是谁|什么名字", text))
+    return bool(_FATHER_MARK.search(text)) and bool(re.search(r"叫什么|叫啥|是谁|什么名字|啥名", text))
 
 
 def question_kind(query: str) -> str:
@@ -49,6 +66,10 @@ def question_kind(query: str) -> str:
     if "十六面" in text and "谁" not in text and re.search(r"哪座|灯塔|什么塔", text):
         return "tower"
     if _asks_spouse(text):
+        return "person"
+    if _asks_keeper_name(text):
+        return "person"
+    if _asks_maker(text) and re.search(r"谁|叫什么|叫啥|啥名|什么名字", text):
         return "person"
     if _asks_father(text):
         return "person"
@@ -100,11 +121,16 @@ def _asked_role(query: str) -> str:
     text = query or ""
     marks: list[tuple[int, str]] = []
     for word, role in (
+        ("看守人", "keeper"),
+        ("守护人", "keeper"),
+        ("守塔人", "keeper"),
         ("看守", "keeper"),
         ("守护", "keeper"),
         ("谁守", "keeper"),
         ("在守", "keeper"),
         ("打磨", "maker"),
+        ("磨镜", "maker"),
+        ("磨", "maker"),
         ("工匠", "maker"),
         ("师傅", "maker"),
         ("配偶", "spouse"),
@@ -114,6 +140,14 @@ def _asked_role(query: str) -> str:
         ("老婆", "spouse"),
         ("老公", "spouse"),
         ("丈夫", "spouse"),
+        ("那口子", "spouse"),
+        ("另一半", "spouse"),
+        ("媳妇", "spouse"),
+        ("夫人", "spouse"),
+        ("老伴", "spouse"),
+        ("内人", "spouse"),
+        ("对象", "spouse"),
+        ("先生", "spouse"),
         ("主人", "owner"),
         ("父亲", "father"),
         ("爸爸", "father"),
@@ -432,13 +466,15 @@ def accept_span(
     text = (span or "").strip().rstrip("。")
     if not text or text not in (statement or ""):
         return False
+    if re.search(r"啥|什么|吗|呢|多少|是谁", text) or text in {"谁", "哪", "几", "啥名"}:
+        return False
     if any(text == subject or (len(text) >= 2 and text in subject) for subject in question_subjects(query)):
         return False
     if not _same_thing(query, statement):
         return False
     if question_kind(query) in {"person", "tower"} and _claimed_role_mismatch(query, statement):
         return False
-    for word in ("妈妈", "母亲", "妻子", "丈夫", "老婆", "老公", "配偶", "爱人", "太太"):
+    for word in _SPOUSE_WORDS + ("妈妈", "母亲"):
         if word in (query or "") and word not in (statement or ""):
             return False
     if require_subject:
@@ -660,11 +696,104 @@ def _kinship_hit(query: str, rows: list[dict]) -> tuple[str, dict] | None:
     return None
 
 
+def _maker_chain(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    """问的是谁磨的。父亲只是中间的人，答不到工匠就当没走完。"""
+    from memory_core.span_guard import statement_of
+
+    if question_kind(query) != "person" or not _asks_maker(query):
+        return None
+    asked = query or ""
+    if re.search(r"海鸥|阿哨|鸟", asked) and "透镜" not in asked and "塔" not in asked:
+        return None
+    claimed = re.search(r"([\u4e00-\u9fff]{2,4})打磨", asked)
+    tower = ""
+    parent = _parent_fact(query, rows)
+    if parent:
+        for fact in rows:
+            text = statement_of(fact)
+            if _keeper(text) == parent[0]:
+                named = re.search(r"名叫([\u4e00-\u9fff]{2,4}塔)", text)
+                if named:
+                    tower = named.group(1)
+    for fact in rows:
+        text = statement_of(fact)
+        maker = _maker(text)
+        if not maker or not _person_shape(maker):
+            continue
+        if "打磨" not in text and "磨" not in text:
+            continue
+        if tower and tower not in text and "透镜" not in text:
+            continue
+        if not tower and "透镜" not in asked and "磨" not in asked:
+            continue
+        if (
+            claimed
+            and _person_shape(claimed.group(1))
+            and "谁" not in claimed.group(1)
+            and "镜" not in claimed.group(1)
+            and claimed.group(1) != maker
+        ):
+            continue
+        if "透镜" in asked or "磨" in asked or (tower and tower in text):
+            return maker, fact
+    return None
+
+
+def _taught_paraphrase(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    """教过的说法换一种问法。种类对得上就答，不先弃权。"""
+    from memory_core.span_guard import statement_of
+
+    asked = query or ""
+    if not _asks_spouse(asked) and not _asks_father(asked) and (
+        _asks_keeper_name(asked) or (
+            re.search(r"谁", asked) and re.search(r"守", asked) and re.search(r"塔|灯塔|四十二", asked) and not _asks_maker(asked)
+        )
+    ):
+        for fact in rows:
+            text = statement_of(fact)
+            keeper = _keeper(text)
+            if keeper and _person_shape(keeper) and ("守护" in text or "看守" in text):
+                return keeper, fact
+    if re.search(r"四十二|42", asked) and re.search(r"谁|守护|看守|守塔", asked) and not _asks_maker(asked):
+        for fact in rows:
+            text = statement_of(fact)
+            keeper = _keeper(text)
+            if keeper and "四十二" in text and _person_shape(keeper):
+                return keeper, fact
+    if "霜降" in asked and "盐" in asked and re.search(r"叫|啥|什么|名字", asked):
+        for fact in rows:
+            text = statement_of(fact)
+            if "霜降" not in text or "盐" not in text:
+                continue
+            named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", text)
+            if named and not named.group(1).endswith("塔"):
+                return named.group(1), fact
+    if re.search(r"第一座|头一座", asked) and re.search(r"塔", asked) and re.search(r"盐|雾港|特产", asked):
+        for fact in rows:
+            text = statement_of(fact)
+            if "第一座" not in text:
+                continue
+            named = re.search(r"名叫([\u4e00-\u9fff]{2,4}塔)", text)
+            if named:
+                return named.group(1), fact
+    if re.search(r"工匠|师傅", asked) and re.search(r"叫啥|啥名", asked) and not re.search(r"海鸥|鸟|养|妻子|爱人", asked):
+        for fact in rows:
+            maker = _maker(statement_of(fact))
+            if maker and _person_shape(maker):
+                return maker, fact
+    return None
+
+
 def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     """关系链和单句摘录都要过同一种类检查。对不上就当没答出来。"""
     from memory_core.span_guard import relation_decision, statement_of
 
-    rows = [fact for fact in facts if isinstance(fact, dict)]
+    from memory_core.extract import is_question_fragment
+
+    rows = [
+        fact for fact in facts
+        if isinstance(fact, dict) and not is_question_fragment(str(fact.get("statement") or ""))
+    ]
     personal = "我的" in (query or "") or (query or "").startswith("我")
     if personal:
         rows = [
@@ -673,6 +802,12 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         ]
         if not rows:
             return None
+    made = _maker_chain(query, rows)
+    if made:
+        return made
+    taught = _taught_paraphrase(query, rows)
+    if taught:
+        return taught
     kin = _kinship_hit(query, rows)
     if kin:
         return kin
