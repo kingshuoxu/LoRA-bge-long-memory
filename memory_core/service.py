@@ -1100,7 +1100,13 @@ class MemoryService:
                             remembered.append(fact)
                 picked = choose_typed(content, remembered) if remembered else None
                 personal = "我的" in content or content.startswith("我")
-                if remembered and not personal and not grounded_subjects(content, remembered) and not picked:
+                if (
+                    remembered
+                    and not personal
+                    and not grounded_subjects(content, remembered)
+                    and not picked
+                    and recall.get("reason") != "document"
+                ):
                     fact_answer = None
                     decision.fired = False
                     recall["fired"] = False
