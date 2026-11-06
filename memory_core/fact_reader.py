@@ -554,6 +554,8 @@ def read_memory(
     if picked:
         span, fact = picked
         return {"text": _finish(span), "fact": fact, "miss": False}
+    if "我的" in query or query.startswith("我"):
+        return None
     if not memory_question(query, facts, best, pool):
         return None
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]

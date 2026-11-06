@@ -552,6 +552,8 @@ def spoken_fact(query: str, fact: dict) -> str:
     """回答只给问句要的那一段。引用仍留在事实原句上。"""
     statement = str(fact.get("statement") or "").strip()
     value = str(fact.get("value") or fact.get("answer") or "").strip()
+    if ("我的" in (query or "") or (query or "").startswith("我")) and "我" not in statement and str(fact.get("entity") or "") not in {"我", "用户"}:
+        return ""
     span = answer_span(query, statement)
     if span:
         text = span

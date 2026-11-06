@@ -383,6 +383,14 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     from memory_core.span_guard import relation_decision, statement_of
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
+    personal = "我的" in (query or "") or (query or "").startswith("我")
+    if personal:
+        rows = [
+            fact for fact in rows
+            if "我" in statement_of(fact) or str(fact.get("entity") or "") in {"我", "用户"}
+        ]
+        if not rows:
+            return None
     decision = relation_decision(query, rows)
     if decision and decision.get("status") == "answer":
         fact = decision.get("fact") or {}
