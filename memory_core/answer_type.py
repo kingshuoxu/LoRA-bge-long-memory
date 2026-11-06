@@ -422,8 +422,10 @@ def _catalog(facts: list[dict]) -> list[str]:
 
 
 def _mentioned_names(query: str, facts: list[dict]) -> list[str]:
+    from memory_core.fact_span import name_bounded
+
     text = query or ""
-    hits = [name for name in _catalog(facts) if name in text]
+    hits = [name for name in _catalog(facts) if name_bounded(name, text)]
     kept: list[str] = []
     for name in hits:
         if any(name != other and name in other and other in text for other in hits):
@@ -477,6 +479,9 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
                 span = str(decision.get("span") or "")
                 if accept_span(query, span, statement_of(fact), allow_chain=True):
                     return span, fact
+                rescued = _from_fact(query, fact, [])
+                if rescued:
+                    return rescued
         return None
     decision = relation_decision(query, rows)
     if decision and decision.get("status") == "answer":
