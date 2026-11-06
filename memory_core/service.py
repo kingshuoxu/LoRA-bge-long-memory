@@ -1101,6 +1101,26 @@ class MemoryService:
                 picked = choose_typed(content, remembered) if remembered else None
                 personal = "我的" in content or content.startswith("我")
                 if (
+                    not picked
+                    and not fact_answer
+                    and not personal
+                    and question_kind(content)
+                    and grounded_subjects(content, remembered)
+                    and recall.get("reason") not in {"document", "document_miss", "entity_clarify", "entity_grounded"}
+                ):
+                    fact_answer = fixed_refusal(content, remembered)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "问到了已经记住的对象，但这一种取值没有写在句子里"
+                if (
                     remembered
                     and not personal
                     and not grounded_subjects(content, remembered)

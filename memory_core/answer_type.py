@@ -363,6 +363,9 @@ def accept_span(
         return True
     if kind == "person":
         role = _asked_role(query)
+        subjects = question_subjects(query)
+        if not allow_chain and subjects and not any(_subject_present(subject, statement) for subject in subjects):
+            return False
         if role:
             return text == _role_argument(statement, role) and _person_shape(text)
         return _person_shape(text)
