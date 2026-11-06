@@ -1105,7 +1105,7 @@ class MemoryService:
                     and not personal
                     and not grounded_subjects(content, remembered)
                     and not picked
-                    and recall.get("reason") not in {"document", "document_miss"}
+                    and recall.get("reason") not in {"document", "document_miss", "entity_clarify", "entity_grounded"}
                 ):
                     fact_answer = None
                     decision.fired = False
@@ -1134,7 +1134,7 @@ class MemoryService:
                     fact_answer
                     and not _refusal_answer(fact_answer)
                     and question_kind(content)
-                    and recall.get("reason") not in {"document", "document_miss"}
+                    and recall.get("reason") not in {"document", "document_miss", "entity_clarify", "entity_grounded"}
                 ):
                     host = ""
                     needle = fact_answer.strip().rstrip("。")

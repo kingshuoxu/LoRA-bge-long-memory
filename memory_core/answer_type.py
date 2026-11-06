@@ -32,7 +32,7 @@ def question_kind(query: str) -> str:
         return "name"
     if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔|塔叫什么|塔是什么", text):
         return "tower"
-    if re.search(r"哪个村|哪个村子|哪个镇|哪个城市|住在哪|住哪", text):
+    if re.search(r"哪个村|哪个村子|哪个镇|哪个城市|哪座城市|住在哪|住哪", text):
         return "place"
     if re.search(r"哪里|哪儿|什么地方", text):
         return "place"
@@ -190,6 +190,9 @@ def extract_span(query: str, statement: str) -> str:
             return match.group(1) if match else ""
         if "城市" in (query or "") or re.search(r"哪座城|哪个城", query or ""):
             match = re.search(r"([\u4e00-\u9fff]{1,8}(?:城|市))", text)
+            if match:
+                return match.group(1)
+            match = re.search(r"(?:总部在|总部设在|在)([\u4e00-\u9fff]{2,6})", text)
             return match.group(1) if match else ""
         found = []
         for match in re.finditer(r"[港镇乡县]", text):
@@ -244,6 +247,9 @@ def extract_span(query: str, statement: str) -> str:
             return match.group(1) if match else ""
         if "人" in asked and "守" in asked:
             return ""
+        if "员工" in asked or "多少人" in asked:
+            match = re.search(r"([0-9一二三四五六七八九十百千两]{1,8}人)", text)
+            return match.group(1) if match else ""
         return ""
     if kind == "person":
         for missing in ("妻子", "丈夫", "老婆", "老公", "妈妈", "母亲", "爸爸", "父亲", "村子", "出生", "生日"):
@@ -268,6 +274,9 @@ def extract_span(query: str, statement: str) -> str:
         if match:
             return match.group(1)
         match = re.search(r"是([\u4e00-\u9fffA-Za-z0-9·]{2,12})", text)
+        if match:
+            return match.group(1)
+        match = re.search(r"(?:名字)?叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
         return match.group(1) if match else ""
     return ""
 
@@ -312,6 +321,10 @@ def _same_thing(query: str, statement: str) -> bool:
     if "猫" in asked and "猫" not in text:
         return False
     if "茶" in asked and "茶" not in text:
+        return False
+    if "花" in asked and "花" not in text:
+        return False
+    if "讨厌" in asked and "讨厌" not in text:
         return False
     if "自行车" in asked and "自行车" not in text:
         return False
