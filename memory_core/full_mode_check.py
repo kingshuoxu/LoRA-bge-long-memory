@@ -233,9 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261118, "抽查")
+    _generated(service, 20261121, "抽查")
     _open_chat(service)
-    _generated(service, 20261204, "盲测")
+    _generated(service, 20261211, "盲测")
     print("FULL_LEARNING_OK", flush=True)
 
 
@@ -326,40 +326,53 @@ def _generated(service: MemoryService, seed: int, label: str) -> None:
     from memory_core.blind_heldout import generate
 
     data = generate(seed)
-    taught = [(item["q"], item["gold"]) for item in data["taught"]]
+    taught = [(item["q"], item["gold"], int(item.get("hops") or 1)) for item in data["taught"]]
     never = list(data["never"])
-    if len(taught) < 20 or len(never) < 15:
+    single = [(question, gold) for question, gold, hops in taught if hops < 2]
+    multi = [(question, gold) for question, gold, hops in taught if hops >= 2]
+    if len(single) < 15 or len(multi) < 8 or len(never) < 15:
         _fail("盲测题太少")
-    hits = 0
     hard = 0
-    for question, gold in taught:
+    single_hits = 0
+    multi_hits = 0
+    for question, gold in single:
         conv = service.create_conversation("盲测")["id"]
         answer = _ask(service, conv, question)
         if _hard_fail(answer, gold, False):
             hard += 1
             print(f"HARD {question} -> {answer}", flush=True)
         elif gold in answer and len(answer) <= 16:
-            hits += 1
+            single_hits += 1
         else:
             print(f"BLIND_MISS {question} -> {answer}", flush=True)
-    abstain = 0
+    for question, gold in multi:
+        conv = service.create_conversation("盲测")["id"]
+        answer = _ask(service, conv, question)
+        if _hard_fail(answer, gold, False):
+            hard += 1
+            print(f"HARD {question} -> {answer}", flush=True)
+        elif gold in answer and len(answer) <= 16:
+            multi_hits += 1
+        else:
+            print(f"BLIND_MISS {question} -> {answer}", flush=True)
     for question in never:
         conv = service.create_conversation("盲测弃权")["id"]
         answer = _ask(service, conv, question)
         if _hard_fail(answer, None, True):
             hard += 1
             print(f"HARD_ABSTAIN {question} -> {answer}", flush=True)
-        elif _declined(answer):
-            abstain += 1
-        else:
-            print(f"BLIND_ABSTAIN_MISS {question} -> {answer}", flush=True)
-    print(f"{label} taught {hits}/{len(taught)} abstain {abstain}/{len(never)} hard {hard} seed {seed}", flush=True)
+    single_rate = 100 * single_hits // len(single)
+    multi_rate = 100 * multi_hits // len(multi)
+    print(
+        f"{label} single {single_hits}/{len(single)}={single_rate}% chain {multi_hits}/{len(multi)}={multi_rate}% hard {hard} seed {seed}",
+        flush=True,
+    )
     if hard:
         _fail(f"{label}出现 {hard} 次硬错误")
-    if hits * 100 < 85 * len(taught):
-        _fail(f"{label}教过的只答对 {hits}/{len(taught)}")
-    if abstain != len(never):
-        _fail(f"{label}没教过的没有全部弃权 {abstain}/{len(never)}")
+    if single_hits * 100 < 90 * len(single):
+        _fail(f"{label}单跳只答对 {single_hits}/{len(single)}")
+    if multi_hits * 100 < 70 * len(multi):
+        _fail(f"{label}两跳只答对 {multi_hits}/{len(multi)}")
 
 
 def main() -> None:

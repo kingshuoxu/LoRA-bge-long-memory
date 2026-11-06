@@ -215,6 +215,13 @@ def _public_fact(fact: dict) -> dict[str, Any]:
 _CHAPTER = re.compile(r"第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇]")
 
 
+def _refusal_answer(text: str) -> bool:
+    return any(mark in (text or "") for mark in (
+        "不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我",
+        "没提到", "不记得", "没记过", "我不确定",
+    ))
+
+
 def _is_chapter(text: str) -> bool:
     return bool(_CHAPTER.search(text or ""))
 
@@ -1062,11 +1069,16 @@ class MemoryService:
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
                 elif linked and linked.get("status") == "answer":
+                    from memory_core.answer_type import accept_span
+                    from memory_core.span_guard import statement_of
+
                     span = str(linked["span"])
-                    if (
+                    host = statement_of(linked.get("fact") or {})
+                    if accept_span(content, span, host) and (
                         not fact_answer
+                        or _refusal_answer(fact_answer)
                         or len(fact_answer) > 18
-                        or (span not in fact_answer and "记住的是" not in (fact_answer or ""))
+                        or not accept_span(content, fact_answer.strip().rstrip("。"), host)
                     ):
                         fact_answer = span if span[-1:] in "。." else span + "。"
                         owner = next(
@@ -1076,8 +1088,9 @@ class MemoryService:
                         if owner is not None:
                             mount_memory(decision, recall, owner, [linked["fact"]], "entity_first")
                             recall["reason_text"] = "回答是顺着已经记下的关系摘出来的"
-            if utterance_is_question(content) and not open_task and fact_answer:
-                from memory_core.span_guard import enforce_answer_type
+            if utterance_is_question(content) and not open_task:
+                from memory_core.answer_type import accept_span, choose_typed, question_kind
+                from memory_core.span_guard import fixed_refusal, statement_of
 
                 remembered = []
                 for record in experts:
@@ -1085,28 +1098,47 @@ class MemoryService:
                     for fact in memory.get("facts") or []:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
-                gated = enforce_answer_type(content, fact_answer, remembered)
-                if gated and gated.get("status") == "abstain":
-                    fact_answer = gated["text"]
-                    decision.fired = False
-                    decision.expert = None
-                    decision.label = "基座"
-                    decision.reason = "memory_miss"
-                    recall["fired"] = False
-                    recall["mounted"] = False
-                    recall["abstain"] = True
-                    recall["reason"] = "memory_miss"
-                    recall["matched_facts"] = []
-                    recall["doc_chips"] = []
-                    recall["reason_text"] = "取值种类对不上，所以不把原句当成答案，也不挂引用"
-                    recall["expert"] = None
-                    recall["mounted_expert"] = None
-                    recall["mounted_label"] = "基座"
-                elif gated and gated.get("status") == "span" and recall.get("reason") != "document":
-                    # 文档还在时，年份那一问要留整句，页码引用才带得上塔高。
-                    # 训练之后的记忆回答只留对上种类的短取值。
-                    span = str(gated["span"])
+                picked = choose_typed(content, remembered) if remembered else None
+                if recall.get("reason") == "document" and fact_answer and picked and picked[0] in fact_answer:
+                    pass
+                elif picked and (
+                    not fact_answer
+                    or _refusal_answer(fact_answer)
+                    or not accept_span(content, fact_answer.strip().rstrip("。"), statement_of(picked[1]))
+                ):
+                    span, fact = picked
                     fact_answer = span if span[-1:] in "。." else span + "。"
+                    owner = next(
+                        (record for record in experts if fact in ((record.fact_memory or {}).get("facts") or [])),
+                        None,
+                    )
+                    if owner is not None:
+                        mount_memory(decision, recall, owner, [fact], "entity_first")
+                        recall["doc_chips"] = []
+                        recall["reason_text"] = "回答用的是和问句种类一致的取值"
+                elif fact_answer and not _refusal_answer(fact_answer) and question_kind(content):
+                    host = ""
+                    needle = fact_answer.strip().rstrip("。")
+                    for fact in remembered:
+                        if needle and needle in statement_of(fact):
+                            host = statement_of(fact)
+                            break
+                    if not accept_span(content, needle, host or fact_answer):
+                        fact_answer = fixed_refusal(content, remembered)
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["doc_chips"] = []
+                        recall["reason_text"] = "取值种类对不上，所以不把原句当成答案，也不挂引用"
+                        recall["expert"] = None
+                        recall["mounted_expert"] = None
+                        recall["mounted_label"] = "基座"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)

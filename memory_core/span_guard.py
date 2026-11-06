@@ -772,21 +772,10 @@ def relation_decision(query: str, facts: list[dict]) -> dict | None:
         return None
     walked = _walk_hops(start, hops, edges)
     if walked is None:
-        if len(hops) <= 1:
-            return None
-        return {"status": "abstain", "text": fixed_refusal(query, facts)}
+        return None
     node, fact = walked
     if not fact:
         fact = next((item for _rel, src, dst, item in edges if node in {src, dst}), None)
-    fits = span_fits(query, node) if asked_kind(query) else _hop_type_ok(hops[-1], node)
-    if not fits or node == start or (asked_kind(query) == "person" and node in (query or "")):
-        if len(hops) <= 1:
-            return None
-        return {"status": "abstain", "text": fixed_refusal(query, facts)}
-    if not predicate_in_statement(query, statement_of(fact or {})):
-        if len(hops) <= 1:
-            return None
-        return {"status": "abstain", "text": fixed_refusal(query, facts)}
     return {"status": "answer", "span": node, "fact": fact}
 
 

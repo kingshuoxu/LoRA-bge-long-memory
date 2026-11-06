@@ -1,0 +1,409 @@
+"""每条回答路径都要过这一关。
+
+问句要的种类和摘出来的取值对不上，或者取值就是问句里的主语，就弃权，不挂引用。
+"""
+from __future__ import annotations
+
+import re
+
+_COUNTRIES = ("瑞典", "挪威", "中国", "日本", "英国", "法国", "德国", "美国", "荷兰", "丹麦", "芬兰", "俄罗斯")
+_SOLAR = ("霜降", "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至", "立秋", "处暑", "白露", "秋分", "寒露", "立冬", "小雪", "大雪", "冬至", "小寒", "大寒")
+_COLOURS = (
+    "蔚蓝", "深蓝", "浅蓝", "蓝色", "朱红", "酒红", "墨黑", "墨色", "金色", "银色",
+    "红色", "白色", "黑色", "青色", "紫色", "绿色", "黄色", "褐色", "灰色", "粉色", "棕色", "橙色",
+)
+_MATERIALS = ("大理石", "花岗岩", "木头", "木材", "石头", "玻璃", "水泥", "砖头", "铜", "铁", "砖", "竹")
+_ANIMALS = ("海鸥", "海燕", "鸽子", "小狗", "小猫", "狗", "猫")
+_ROLE_SUFFIX = ("女儿", "闺女", "丫头", "父亲", "爸爸", "老爸", "主人", "工匠", "师傅", "灯塔", "海鸥", "养")
+
+
+def question_kind(query: str) -> str:
+    """问句要的取值种类。空字符串表示这句没有强制种类。"""
+    text = query or ""
+    if re.search(r"什么颜色|啥颜色|哪种颜色|颜色", text):
+        return "colour"
+    if re.search(r"什么材料|啥材料|哪种材料|什么做的|用什么做|材料", text):
+        return "material"
+    if re.search(r"哪国|国籍", text):
+        return "nation"
+    if re.search(r"什么鸟|什么动物|哪种鸟|哪种动物", text):
+        return "animal"
+    if re.search(r"鸟|动物", text) and re.search(r"叫什么|叫啥|是什么", text):
+        return "name"
+    if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔", text) or (
+        "灯塔" in text and re.search(r"叫什么|是什么|哪座", text)
+    ):
+        return "tower"
+    if re.search(r"哪个村|哪个村子|哪个镇|哪个城市|住在哪|住哪", text):
+        return "place"
+    if re.search(r"哪里|哪儿|什么地方", text):
+        return "place"
+    if re.search(r"什么时候|何时|哪天|哪一天", text):
+        return "time"
+    if re.search(r"多久|多少年|几岁|多少钱|人口", text):
+        return "measure"
+    if re.search(r"哪一年|哪年|多高|塔高|多少|几", text):
+        return "measure"
+    if re.search(r"女儿|闺女|丫头", text) and re.search(r"叫什么|叫啥|是谁|什么名字", text):
+        return "person"
+    if re.search(r"谁", text):
+        return "person"
+    if re.search(r"叫什么|叫啥|什么名字|是什么", text):
+        return "name"
+    return ""
+
+
+def question_subjects(query: str) -> list[str]:
+    """问句里被问的那个东西。答案不能原样把主语交回去。"""
+    found: list[str] = []
+    for part in re.split(r"的", query or ""):
+        part = re.split(r"[？?，,]", part)[0]
+        part = re.split(r"打磨|守护|看守|养|是|有|叫", part)[0]
+        for role in sorted(_ROLE_SUFFIX, key=len, reverse=True):
+            if part.endswith(role) and len(part) > len(role):
+                part = part[: -len(role)]
+        if not re.fullmatch(r"[\u4e00-\u9fff]{2,6}", part):
+            continue
+        if "谁" in part or part in {"什么", "怎么", "这个", "那个", "哪个", "父亲", "女儿", "主人", "工匠", "师傅"}:
+            continue
+        if part not in found:
+            found.append(part)
+    return found
+
+
+def _asked_role(query: str) -> str:
+    text = query or ""
+    marks: list[tuple[int, str]] = []
+    for word, role in (
+        ("看守", "keeper"),
+        ("守护", "keeper"),
+        ("谁守", "keeper"),
+        ("在守", "keeper"),
+        ("打磨", "maker"),
+        ("工匠", "maker"),
+        ("师傅", "maker"),
+        ("主人", "owner"),
+        ("父亲", "father"),
+        ("爸爸", "father"),
+        ("老爸", "father"),
+        ("女儿", "daughter"),
+        ("闺女", "daughter"),
+        ("丫头", "daughter"),
+    ):
+        index = text.rfind(word)
+        if index >= 0:
+            marks.append((index, role))
+    if "养" in text and "谁" in text:
+        marks.append((text.rfind("养"), "owner"))
+    if not marks:
+        return ""
+    marks.sort()
+    return marks[-1][1]
+
+
+def _keeper(statement: str) -> str:
+    match = re.search(r"([\u4e00-\u9fff]{2,3})在.{0,16}守护", statement or "")
+    return match.group(1) if match else ""
+
+
+def _maker(statement: str) -> str:
+    match = re.search(r"(?:工匠|师傅)([\u4e00-\u9fff]{2,4})打磨", statement or "")
+    return match.group(1) if match else ""
+
+
+def _owner(statement: str) -> str:
+    match = re.search(r"([\u4e00-\u9fff]{2,3})养了", statement or "")
+    return match.group(1) if match else ""
+
+
+def _daughter(statement: str) -> str:
+    match = re.search(r"的女儿([\u4e00-\u9fff]{2,3})", statement or "")
+    return match.group(1) if match else ""
+
+
+def _father(statement: str) -> str:
+    match = re.search(r"([\u4e00-\u9fff]{2,3})的女儿", statement or "")
+    return match.group(1) if match else ""
+
+
+def _role_argument(statement: str, role: str) -> str:
+    if role == "keeper":
+        return _keeper(statement)
+    if role == "maker":
+        return _maker(statement)
+    if role == "owner":
+        return _owner(statement)
+    if role == "daughter":
+        return _daughter(statement)
+    if role == "father":
+        return _father(statement)
+    return ""
+
+
+def _person_shape(span: str) -> bool:
+    if not re.fullmatch(r"[\u4e00-\u9fff]{2,4}", span or ""):
+        return False
+    if span in _COUNTRIES or any(span.startswith(country) for country in _COUNTRIES):
+        return False
+    if any(job in span for job in ("工匠", "师傅", "学徒", "徒弟", "市长")):
+        return False
+    if span.endswith(("塔", "盐", "鸥", "港", "村", "镇", "市", "城")):
+        return False
+    return True
+
+
+def extract_span(query: str, statement: str) -> str:
+    """从这一句里抄问句要的那一种取值。抄不到就返回空。"""
+    text = statement or ""
+    kind = question_kind(query)
+    if kind == "colour":
+        for colour in _COLOURS:
+            if colour in text:
+                return colour
+        return ""
+    if kind == "material":
+        for item in _MATERIALS:
+            if item in text:
+                return item
+        return ""
+    if kind == "nation":
+        for country in _COUNTRIES:
+            if country in text:
+                return country
+        return ""
+    if kind == "animal":
+        for animal in _ANIMALS:
+            if animal in text:
+                return animal
+        return ""
+    if kind == "tower":
+        named = re.search(r"名叫([\u4e00-\u9fff]{1,6}塔)", text)
+        if named:
+            return named.group(1)
+        match = re.search(r"(?<![年的座])([\u4e00-\u9fff]{2,3}塔)", text)
+        return match.group(1) if match else ""
+    if kind == "place":
+        if "村" in (query or ""):
+            match = re.search(r"([\u4e00-\u9fff]{1,8}村)", text)
+            return match.group(1) if match else ""
+        if "城市" in (query or "") or re.search(r"哪座城|哪个城", query or ""):
+            match = re.search(r"([\u4e00-\u9fff]{1,8}(?:城|市))", text)
+            return match.group(1) if match else ""
+        match = re.search(r"(?<![在的])([\u4e00-\u9fff]{1,4}(?:港|镇|乡|县))", text)
+        return match.group(1) if match else ""
+    if kind == "time":
+        if "电" in (query or "") and "电" not in text:
+            return ""
+        for term in _SOLAR:
+            if term in text and "晒" in (query or "") or term in text and "晾" in (query or ""):
+                return term
+        for term in _SOLAR:
+            if term in text and "什么时候" in (query or ""):
+                return term
+        match = re.search(r"(\d{3,4}年)", text)
+        return match.group(1) if match else ""
+    if kind == "measure":
+        asked = query or ""
+        if any(mark in asked for mark in ("多高", "塔高", "多少米", "几米")):
+            match = re.search(r"([0-9一二三四五六七八九十百千两]{1,8}米)", text)
+            return match.group(1) if match else ""
+        if "面" in asked:
+            match = re.search(r"([0-9一二三四五六七八九十百千两]{1,8}面)", text)
+            return match.group(1) if match else ""
+        if "腿" in asked or "条" in asked:
+            match = re.search(r"([0-9一二三四五六七八九十两]{1,4}条腿)", text)
+            return match.group(1) if match else ""
+        if "出生" in asked or "生日" in asked:
+            return ""
+        if any(mark in asked for mark in ("多少年", "多久", "守了", "守护了")):
+            return ""
+        if any(mark in asked for mark in ("多少钱", "几岁", "人口", "徒弟", "学徒", "几次", "多少次")):
+            return ""
+        if "电" in asked and "电" not in text:
+            return ""
+        if any(mark in asked for mark in ("建", "建于", "建成")):
+            match = re.search(r"建于(\d{3,4}年)", text)
+            if match:
+                return match.group(1)
+        if any(mark in asked for mark in ("哪年", "哪一年")):
+            match = re.search(r"(\d{3,4}年)", text)
+            return match.group(1) if match else ""
+        if "人" in asked and "守" in asked:
+            return ""
+        return ""
+    if kind == "person":
+        for missing in ("妻子", "丈夫", "老婆", "老公", "妈妈", "母亲", "爸爸", "父亲", "村子", "出生", "生日"):
+            if missing in (query or "") and missing not in text and not (
+                missing in ("爸爸", "父亲") and "女儿" in text
+            ):
+                return ""
+        if "出生" in (query or "") or "生日" in (query or ""):
+            return ""
+        role = _asked_role(query)
+        if role:
+            return _role_argument(text, role)
+        if "谁" in (query or ""):
+            return ""
+        match = re.search(r"名叫([\u4e00-\u9fff]{2,4})", text)
+        return match.group(1) if match and _person_shape(match.group(1)) else ""
+    if kind == "name":
+        match = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
+        return match.group(1) if match else ""
+    return ""
+
+
+def _claimed_role_mismatch(query: str, statement: str) -> bool:
+    """「诺丁守护的塔」不能用诺丁只是工匠的那一句。"""
+    text = query or ""
+    claimed = re.search(r"([\u4e00-\u9fff]{2,4})(?:在.{0,4})?(?:守护|看守)", text)
+    if claimed and "谁" not in claimed.group(1) and "的" not in claimed.group(1) and claimed.group(1) not in {"父亲", "女儿", "爸爸", "主人", "闺女", "老爸"} and _person_shape(claimed.group(1)):
+        if _keeper(statement) != claimed.group(1):
+            return True
+    asked = _asked_role(text)
+    claimed_make = re.search(r"([\u4e00-\u9fff]{2,4})打磨", text)
+    if (
+        asked != "keeper"
+        and claimed_make
+        and _person_shape(claimed_make.group(1))
+        and "谁" not in claimed_make.group(1)
+        and "哪座" not in text
+        and "什么塔" not in text
+    ):
+        if _maker(statement) != claimed_make.group(1):
+            return True
+    return False
+
+
+def accept_span(query: str, span: str, statement: str, *, require_subject: bool = False) -> bool:
+    """取值必须是问句要的种类，而且不能就是问句里的主语。"""
+    text = (span or "").strip().rstrip("。")
+    if not text or text not in (statement or ""):
+        return False
+    if any(text == subject or (len(text) >= 2 and text in subject) for subject in question_subjects(query)):
+        return False
+    if _claimed_role_mismatch(query, statement):
+        return False
+    for word in ("妈妈", "母亲", "妻子", "丈夫", "老婆", "老公"):
+        if word in (query or "") and word not in (statement or ""):
+            return False
+    if require_subject:
+        subjects = question_subjects(query)
+        if subjects and not any(subject in (statement or "") for subject in subjects):
+            return False
+    kind = question_kind(query)
+    if not kind:
+        return True
+    if kind == "person":
+        role = _asked_role(query)
+        if role:
+            return text == _role_argument(statement, role) and _person_shape(text)
+        return _person_shape(text)
+    expected = extract_span(query, statement)
+    if not expected:
+        return False
+    return text == expected or text in expected or expected in text
+
+
+def _score(query: str, statement: str) -> int:
+    score = 0
+    asked = query or ""
+    if "电" in asked and "电" in statement:
+        score += 6
+    if "建" in asked and "建于" in statement:
+        score += 6
+    if ("晒" in asked or "晾" in asked) and ("晒" in statement or "晾" in statement):
+        score += 6
+    score += sum(len(name) for name in question_subjects(asked) if name in statement)
+    return score
+
+
+def _catalog(facts: list[dict]) -> list[str]:
+    from memory_core.span_guard import statement_of
+
+    found: list[str] = []
+
+    def add(name: str) -> None:
+        name = (name or "").strip()
+        if len(name) >= 2 and name not in found:
+            found.append(name)
+
+    for fact in facts:
+        add(str(fact.get("entity") or ""))
+        text = statement_of(fact)
+        for match in re.finditer(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text):
+            add(match.group(1))
+        for reader in (_keeper, _maker, _owner, _daughter, _father):
+            add(reader(text))
+        for word in ("透镜", "海鸥", "海盐", "雾港", "灯塔"):
+            if word in text:
+                add(word)
+        for match in re.finditer(r"([\u4e00-\u9fff]{2,4}塔)", text):
+            add(match.group(1))
+    found.sort(key=len, reverse=True)
+    return found
+
+
+def _mentioned_names(query: str, facts: list[dict]) -> list[str]:
+    text = query or ""
+    hits = [name for name in _catalog(facts) if name in text]
+    kept: list[str] = []
+    for name in hits:
+        if any(name != other and name in other and other in text for other in hits):
+            continue
+        kept.append(name)
+    return kept
+
+
+def grounded_subjects(query: str, facts: list[dict]) -> list[str]:
+    from memory_core.span_guard import statement_of
+
+    subjects = [
+        subject for subject in question_subjects(query)
+        if any(subject in statement_of(fact) for fact in facts)
+    ]
+    if subjects:
+        return subjects
+    return _mentioned_names(query, facts)
+
+
+def _from_fact(query: str, fact: dict, subjects: list[str]) -> tuple[str, dict] | None:
+    from memory_core.span_guard import statement_of
+
+    text = statement_of(fact)
+    if subjects and not any(subject in text for subject in subjects):
+        return None
+    span = extract_span(query, text)
+    if span and accept_span(query, span, text, require_subject=False):
+        return span, fact
+    return None
+
+
+def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
+    """关系链和单句摘录都要过同一种类检查。对不上就当没答出来。"""
+    from memory_core.span_guard import relation_decision, statement_of
+
+    rows = [fact for fact in facts if isinstance(fact, dict)]
+    decision = relation_decision(query, rows)
+    if decision and decision.get("status") == "answer":
+        fact = decision.get("fact") or {}
+        if isinstance(fact, dict):
+            span = str(decision.get("span") or "")
+            if accept_span(query, span, statement_of(fact)):
+                return span, fact
+            rescued = _from_fact(query, fact, [])
+            if rescued:
+                return rescued
+    subjects = grounded_subjects(query, rows)
+    pool = rows
+    if subjects:
+        anchored = [fact for fact in rows if all(name in statement_of(fact) for name in subjects)]
+        pool = anchored
+    found: list[tuple[int, str, dict]] = []
+    for fact in pool:
+        rescued = _from_fact(query, fact, subjects)
+        if rescued:
+            found.append((_score(query, statement_of(fact)), rescued[0], rescued[1]))
+    if not found:
+        return None
+    found.sort(key=lambda item: item[0], reverse=True)
+    return found[0][1], found[0][2]

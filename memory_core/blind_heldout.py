@@ -36,12 +36,16 @@ _TAUGHT = [
     ("工匠师傅是哪国人？", "瑞典"),
     ("诺丁是哪国人？", "瑞典"),
     ("三条腿的海鸥是谁养的？", "柯小满"),
+    ("星砂盐是什么颜色？", "蓝色"),
+    ("诺丁打磨的是哪座塔？", "白鹭塔"),
+    ("柯小满养的是什么鸟？", "海鸥"),
+    ("雾港有哪座灯塔？", "白鹭塔"),
 ]
 # 每一跳都有边，而且最后的取值种类对得上。抽查时这些必须答出来。
 _CHAINS = [
     ("诺丁打磨透镜的那座塔是谁守护的？", "柯岚"),
     ("柯岚女儿的爸爸守的灯塔有多高？", "四十二"),
-    ("守护灯塔的人的女儿养的是什么鸟？", "阿哨"),
+    ("守护灯塔的人的女儿养的是什么鸟？", "海鸥"),
     ("打磨透镜的工匠是哪国人？", "瑞典"),
     ("柯小满的父亲守护的塔有多高？", "四十二"),
     ("柯岚的女儿养的鸟叫什么？", "阿哨"),
@@ -67,6 +71,41 @@ _WHO_TRAPS = [
     "诺丁的女儿叫什么？",
     "谁打磨了阿哨？",
 ]
+_TYPE_TRAPS = [
+    "白鹭塔是什么材料做的？",
+    "柯岚住在哪个村子？",
+    "诺丁住在哪个村？",
+    "海鸥是什么颜色？",
+    "白鹭塔的灯是什么颜色？",
+    "柯小满是哪国人？",
+    "星砂盐是哪座塔？",
+    "诺丁是什么鸟？",
+    "谁守护透镜？",
+    "白鹭塔的看守住在哪个村？",
+    "星砂盐是哪个城市的？",
+    "阿哨住在哪个村子？",
+    "雾港是什么材料？",
+    "柯岚打磨的透镜是谁？",
+    "瑞典工匠养的海鸥叫什么？",
+    "阿哨的主人的妈妈是谁？",
+    "谁打磨了阿哨？",
+]
+_TWO_HOP = {
+    "诺丁打磨透镜的那座塔是谁守护的？",
+    "柯岚女儿的爸爸守的灯塔有多高？",
+    "守护灯塔的人的女儿养的是什么鸟？",
+    "柯小满的父亲守护的塔有多高？",
+    "柯岚的女儿养的鸟叫什么？",
+    "守护白鹭塔的人的女儿叫什么？",
+    "柯小满的爸爸守护的塔叫什么？",
+    "阿哨的主人的爸爸是谁？",
+    "阿哨的小主人的老爸是谁？",
+    "阿哨的主人的爸爸守的塔有多高？",
+    "守护白鹭塔的人的闺女叫什么？",
+    "白鹭塔磨透镜的师傅是哪国人？",
+    "打磨透镜的工匠是哪国人？",
+    "打磨透镜的师傅是哪国人？",
+}
 _TRAPS = [
     "柯岚守了多少年？",
     "柯岚守护白鹭塔多少年？",
@@ -105,20 +144,21 @@ def generate(seed: int) -> dict:
     chains = list(_CHAINS)
     rest = [item for item in _TAUGHT if item not in chains]
     rng.shuffle(rest)
-    taught = chains + rest[: max(0, 24 - len(chains))]
-    never = list(_TRAPS) + list(_WHO_TRAPS)
+    taught = chains + rest
+    never = list(_TRAPS) + list(_WHO_TRAPS) + list(_TYPE_TRAPS)
     extra = list(_NEVER)
     rng.shuffle(extra)
     rng.shuffle(never)
     never.extend(extra[:4])
-    if len(_TRAPS) < 15:
-        raise RuntimeError("类型陷阱不足 15 条")
-    if len(_WHO_TRAPS) < 10:
-        raise RuntimeError("角色干扰不足 10 条")
+    if len(_TYPE_TRAPS) < 15:
+        raise RuntimeError("种类干扰不足 15 条")
     if len(_CHAINS) < 10:
         raise RuntimeError("短链不足 10 条")
     return {
         "seed": seed,
-        "taught": [{"q": question, "gold": gold} for question, gold in taught],
+        "taught": [
+            {"q": question, "gold": gold, "hops": 2 if question in _TWO_HOP else 1}
+            for question, gold in taught
+        ],
         "never": never,
     }

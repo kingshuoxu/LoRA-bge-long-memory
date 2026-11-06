@@ -496,6 +496,15 @@ def _finish(span: str) -> str:
     return text
 
 
+def _slot_ok(query: str, span: str, fact: dict, names: list[str]) -> bool:
+    from memory_core.answer_type import accept_span
+
+    statement = _statement(fact)
+    if names and not all(name in statement for name in names):
+        return False
+    return bool(span) and accept_span(query, span, statement, require_subject=False)
+
+
 def read_memory(
     query: str,
     facts: list[dict],
@@ -537,13 +546,16 @@ def read_memory(
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
-    decision = relation_decision(query, facts)
-    if decision and decision.get("status") == "answer":
-        return {"text": _finish(decision["span"]), "fact": decision["fact"], "miss": False}
+    from memory_core.answer_type import choose_typed, grounded_subjects
+
+    names = grounded_subjects(query, facts)
+
+    picked = choose_typed(query, facts)
+    if picked:
+        span, fact = picked
+        return {"text": _finish(span), "fact": fact, "miss": False}
     if not memory_question(query, facts, best, pool):
         return None
-    if decision and decision.get("status") == "abstain":
-        return {"text": decision["text"], "fact": None, "miss": True}
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}
@@ -557,23 +569,11 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if (
-                checked
-                and span_fits(query, checked)
-                and predicate_in_statement(query, _statement(fact))
-                and _subject_in_statement(query, _statement(fact))
-                and _statement_has_query_names(query, _statement(fact), facts)
-            ):
+            if _slot_ok(query, checked, fact, names):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if (
-            checked
-            and span_fits(query, checked)
-            and predicate_in_statement(query, _statement(fact))
-            and _subject_in_statement(query, _statement(fact))
-            and _statement_has_query_names(query, _statement(fact), facts)
-        ):
+        if _slot_ok(query, checked, fact, names):
             return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}
