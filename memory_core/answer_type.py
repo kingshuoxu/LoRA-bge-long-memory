@@ -30,9 +30,7 @@ def question_kind(query: str) -> str:
         return "animal"
     if re.search(r"鸟|动物", text) and re.search(r"叫什么|叫啥|是什么", text):
         return "name"
-    if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔", text) or (
-        "灯塔" in text and re.search(r"叫什么|是什么|哪座", text)
-    ):
+    if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔|塔叫什么|塔是什么", text):
         return "tower"
     if re.search(r"哪个村|哪个村子|哪个镇|哪个城市|住在哪|住哪", text):
         return "place"
@@ -248,6 +246,9 @@ def extract_span(query: str, statement: str) -> str:
         return match.group(1) if match and _person_shape(match.group(1)) else ""
     if kind == "name":
         match = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
+        if match:
+            return match.group(1)
+        match = re.search(r"(?:名字是|名为|叫做)([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
         return match.group(1) if match else ""
     return ""
 
@@ -274,7 +275,14 @@ def _claimed_role_mismatch(query: str, statement: str) -> bool:
     return False
 
 
-def accept_span(query: str, span: str, statement: str, *, require_subject: bool = False) -> bool:
+def accept_span(
+    query: str,
+    span: str,
+    statement: str,
+    *,
+    require_subject: bool = False,
+    allow_chain: bool = False,
+) -> bool:
     """取值必须是问句要的种类，而且不能就是问句里的主语。"""
     text = (span or "").strip().rstrip("。")
     if not text or text not in (statement or ""):
@@ -298,6 +306,16 @@ def accept_span(query: str, span: str, statement: str, *, require_subject: bool 
         if role:
             return text == _role_argument(statement, role) and _person_shape(text)
         return _person_shape(text)
+    if kind == "name":
+        expected = extract_span(query, statement)
+        subjects = question_subjects(query)
+        if not expected or any(expected == subject for subject in subjects):
+            return False
+        if text != expected and expected not in text:
+            return False
+        if subjects and not any(subject in (statement or "") for subject in subjects):
+            return allow_chain
+        return True
     expected = extract_span(query, statement)
     if not expected:
         return False
@@ -383,6 +401,8 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     from memory_core.span_guard import relation_decision, statement_of
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
+    if question_subjects(query) and not _mentioned_names(query, rows):
+        return None
     personal = "我的" in (query or "") or (query or "").startswith("我")
     if personal:
         rows = [
@@ -396,7 +416,7 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         fact = decision.get("fact") or {}
         if isinstance(fact, dict):
             span = str(decision.get("span") or "")
-            if accept_span(query, span, statement_of(fact)):
+            if accept_span(query, span, statement_of(fact), allow_chain=True):
                 return span, fact
             rescued = _from_fact(query, fact, [])
             if rescued:

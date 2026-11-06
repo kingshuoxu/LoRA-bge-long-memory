@@ -1089,7 +1089,7 @@ class MemoryService:
                             mount_memory(decision, recall, owner, [linked["fact"]], "entity_first")
                             recall["reason_text"] = "回答是顺着已经记下的关系摘出来的"
             if utterance_is_question(content) and not open_task:
-                from memory_core.answer_type import accept_span, choose_typed, question_kind
+                from memory_core.answer_type import accept_span, choose_typed, grounded_subjects, question_kind
                 from memory_core.span_guard import fixed_refusal, statement_of
 
                 remembered = []
@@ -1124,21 +1124,25 @@ class MemoryService:
                             host = statement_of(fact)
                             break
                     if not accept_span(content, needle, host or fact_answer):
-                        fact_answer = fixed_refusal(content, remembered)
+                        linked_names = grounded_subjects(content, remembered)
                         decision.fired = False
-                        decision.expert = None
-                        decision.label = "基座"
-                        decision.reason = "memory_miss"
                         recall["fired"] = False
                         recall["mounted"] = False
-                        recall["abstain"] = True
-                        recall["reason"] = "memory_miss"
                         recall["matched_facts"] = []
                         recall["doc_chips"] = []
-                        recall["reason_text"] = "取值种类对不上，所以不把原句当成答案，也不挂引用"
-                        recall["expert"] = None
-                        recall["mounted_expert"] = None
-                        recall["mounted_label"] = "基座"
+                        if not linked_names:
+                            fact_answer = None
+                        else:
+                            fact_answer = fixed_refusal(content, remembered)
+                            decision.expert = None
+                            decision.label = "基座"
+                            decision.reason = "memory_miss"
+                            recall["abstain"] = True
+                            recall["reason"] = "memory_miss"
+                            recall["reason_text"] = "取值种类对不上，所以不把原句当成答案，也不挂引用"
+                            recall["expert"] = None
+                            recall["mounted_expert"] = None
+                            recall["mounted_label"] = "基座"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
