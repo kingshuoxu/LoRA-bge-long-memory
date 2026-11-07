@@ -1,6 +1,7 @@
 """挂上路由选中的 LoRA 再生成。没有专家或守卫拦住时用基座。"""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import torch
@@ -21,18 +22,43 @@ class ChatEngine:
         self.model = None
         self._peft = False
         self._loaded: set[str] = set()
+        self._load_lock = threading.Lock()
+
+    def _weights_ready(self) -> bool:
+        if self.model is None:
+            return False
+        for param in self.model.parameters():
+            if getattr(param, "is_meta", False) or getattr(param.device, "type", "") == "meta":
+                return False
+        return True
 
     def ensure(self) -> None:
-        if self.model is not None:
+        if self._weights_ready():
             return
-        self.tok = AutoTokenizer.from_pretrained(self.model_path)
-        if self.tok.pad_token_id is None:
-            self.tok.pad_token = self.tok.eos_token
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_path, torch_dtype=self.dtype)
-        self.model.to(self.device)
-        self.model.eval()
-        self._peft = False
-        self._loaded = set()
+        from memory_core.model_load import LOAD_LOCK
+
+        with LOAD_LOCK, self._load_lock:
+            if self._weights_ready():
+                return
+            self.model = None
+            self.tok = AutoTokenizer.from_pretrained(self.model_path)
+            if self.tok.pad_token_id is None:
+                self.tok.pad_token = self.tok.eos_token
+            # 不用 accelerate 的 meta 空权重。升级后第一次请求和预热会同时进来，
+            # 锁住这一段，等权重真正落到 cpu 再给别人用。
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                torch_dtype=self.dtype,
+                low_cpu_mem_usage=False,
+                device_map=None,
+            )
+            self.model.to(self.device)
+            if not self._weights_ready():
+                self.model = None
+                raise RuntimeError("模型权重没有落到 cpu")
+            self.model.eval()
+            self._peft = False
+            self._loaded = set()
 
     def unload(self) -> None:
         self.model = None

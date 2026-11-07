@@ -509,5 +509,105 @@ class OpenTaskTests(unittest.TestCase):
         self.assertNotIn("青柘", got[0])
 
 
+LENS = "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。"
+TOWER = "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。"
+
+
+class AnswerTypeTests(unittest.TestCase):
+    def test_craftsman_count_does_not_quote_the_lens_sentence(self):
+        from memory_core.fact_recall import spoken_fact
+        from memory_core.span_guard import enforce_answer_type
+
+        fact = _fact("透镜", "重点", LENS.rstrip("。"), LENS)
+        fact["source"] = "document"
+        self.assertEqual(spoken_fact("透镜有多少个工匠？", fact), "")
+        gated = enforce_answer_type("透镜有多少个工匠？", LENS, [fact, _fact("我", "名字", "徐金朔", "我叫徐金朔。")])
+        self.assertEqual(gated["status"], "abstain")
+        self.assertIn("有多少个工匠", gated["text"])
+        self.assertNotIn("十六", gated["text"])
+        self.assertNotIn("诺丁", gated["text"])
+        expert = _Expert([fact])
+        got = resolve_stored_reply("透镜有多少个工匠？", [expert], [])
+        self.assertTrue(got)
+        self.assertNotIn("十六", got[0])
+        self.assertNotIn("诺丁", got[0])
+        self.assertEqual(got[2], [])
+
+    def test_matching_year_span_stays(self):
+        from memory_core.span_guard import enforce_answer_type
+
+        fact = _fact("白鹭塔", "建于", "1873年", TOWER)
+        self.assertIsNone(enforce_answer_type("白鹭塔建于哪一年？", "1873年。", [fact]))
+        gated = enforce_answer_type("白鹭塔建于哪一年？", TOWER, [fact])
+        self.assertEqual(gated["status"], "span")
+        self.assertEqual(gated["span"], "1873年")
+        unrelated = _fact("我", "名字", "徐金朔", "我叫徐金朔。")
+        still = enforce_answer_type("白鹭塔建于哪一年？", TOWER, [unrelated])
+        self.assertEqual(still["status"], "span")
+        self.assertEqual(still["span"], "1873年")
+
+    def test_who_guards_is_not_the_craftsman_title(self):
+        from memory_core.fact_reader import read_memory
+        from memory_core.span_guard import span_fits
+
+        facts = [
+            {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔", "source": "document"},
+            {"entity": "诺丁", "statement": "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "value": "诺丁", "source": "document"},
+            {"entity": "阿哨", "statement": "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "value": "阿哨", "source": "document"},
+        ]
+        self.assertFalse(span_fits("谁守护白鹭塔？", "瑞典工匠"))
+        got = read_memory("诺丁打磨透镜的那座塔是谁守护的？", facts, None)
+        self.assertIn("柯岚", got["text"])
+        self.assertNotIn("瑞典工匠", got["text"])
+        self.assertFalse(got["miss"])
+        missed = read_memory("诺丁的女儿叫什么？", facts, None)
+        self.assertTrue(missed is None or missed.get("miss") or "柯小满" not in missed["text"])
+
+    def test_a_count_question_does_not_keep_a_sentence_that_only_contains_ming(self):
+        from memory_core.fact_recall import spoken_fact
+        from memory_core.span_guard import span_fits
+
+        self.assertFalse(span_fits("白鹭塔建了多少次？", TOWER))
+        self.assertTrue(span_fits("白鹭塔建了多少次？", "三次"))
+        self.assertEqual(spoken_fact("白鹭塔建了多少次？", _fact("白鹭塔", "重点", TOWER.rstrip("。"), TOWER)), "")
+        self.assertEqual(spoken_fact("雾港有多少人口？", _fact("白鹭塔", "重点", TOWER.rstrip("。"), TOWER)), "")
+
+    def test_kinship_tower_and_event_do_not_borrow_another_span(self):
+        from memory_core.answer_type import memory_topic
+        from memory_core.fact_reader import read_memory
+
+        facts = [
+            {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "source": "document"},
+            {"entity": "星砂盐", "statement": "雾港的特产是一种蓝色海盐，名叫星砂盐，每年霜降那天开始晾晒。", "source": "document"},
+            {"entity": "阿哨", "statement": "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "source": "document"},
+            {"entity": "诺丁", "statement": "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "source": "document"},
+        ]
+
+        def text(question):
+            hit = read_memory(question, facts, None) or {}
+            return hit.get("text") or ""
+
+        self.assertIn("柯岚", text("柯小满的爸爸叫什么？"))
+        self.assertNotIn("阿哨", text("柯小满的爸爸叫什么？"))
+        self.assertIn("白鹭塔", text("她爸爸守护的塔叫啥？"))
+        self.assertNotIn("阿哨", text("她爸爸守护的塔叫啥？"))
+        self.assertIn("白鹭塔", text("十六面透镜是哪座灯塔？"))
+        self.assertNotIn("柯岚", text("十六面透镜是哪座灯塔？"))
+        self.assertIn("星砂盐", text("每年霜降晾晒的盐叫什么？"))
+        self.assertIn("1931", text("柯岚守护的灯塔什么时候改成电灯？"))
+        spouse = text("柯岚的太太叫什么？")
+        self.assertNotIn("白鹭塔", spouse)
+        self.assertIn("没提到", spouse)
+        nested = text("柯小满养的鸟的主人的爹叫什么？")
+        self.assertIn("柯岚", nested)
+        self.assertNotIn("阿哨", nested)
+        self.assertIn("白鹭塔", text("有十六面透镜的灯塔是哪一座？"))
+        self.assertIn("柯岚", text("塔高四十二米的那座塔是谁守护的？"))
+        first = text("柯岚第一次点灯是哪一天？")
+        self.assertNotIn("1931", first)
+        self.assertTrue(memory_topic("诺丁活到多少岁？", facts))
+        self.assertFalse(memory_topic("水的化学式是什么？", facts))
+
+
 if __name__ == "__main__":
     unittest.main()

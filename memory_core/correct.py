@@ -264,7 +264,7 @@ def utterance_is_question(text: str) -> bool:
         return True
     if _information_request(raw):
         return True
-    if any(mark in raw for mark in ("是不是", "对不对", "有没有")):
+    if any(mark in raw for mark in ("是不是", "对不对", "有没有", "还是")):
         return True
     if _EN_AUX.match(raw):
         return True

@@ -20,7 +20,7 @@ jobs:
   package:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 300
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -104,7 +104,18 @@ jobs:
 
       - name: Install Electron builder
         working-directory: desktop
-        run: npm ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=0
+          until npm ci; do
+            n=$((n + 1))
+            if [ "$n" -ge 3 ]; then
+              exit 1
+            fi
+            echo "npm ci 失败，15 秒后重试 ($n)" >&2
+            sleep 15
+          done
 
       - name: GUI smoke
         working-directory: desktop
@@ -152,6 +163,51 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash packaging/upgrade-from-027.sh
+
+      - name: Chat in the same session after a 0.2.7 home migration
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/post_upgrade_chat.py
+
+      - name: 0.2.14 junk migration keeps declarative facts
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/migrate_0214_check.py
+
+      - name: Nebula stays up after a 0.2.14 home migration
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/nebula_0214_check.py
 
       - name: AppImage upgrade keeps user data
         if: runner.os == 'Linux'
@@ -267,7 +323,11 @@ jobs:
       - name: Bundle release files
         run: |
           python -m pip install pyyaml
-          git log -1 --pretty=%s > release-notes.txt
+          if [ -f "docs/release-${GITHUB_REF_NAME}.md" ]; then
+            cp "docs/release-${GITHUB_REF_NAME}.md" release-notes.txt
+          else
+            git log -1 --pretty=%B > release-notes.txt
+          fi
           python packaging/publish_desktop_release.py \
             --artifacts release-artifacts \
             --out release \

@@ -217,7 +217,7 @@ def main():
         server = ThreadingHTTPServer((host, port), make_handler(app))
     except OSError:
         server = ThreadingHTTPServer((host, 0), make_handler(app))
-        port = server.server_address[1]
+    port = server.server_address[1]
     print(f"LORA_MEMORY_READY port={port}", flush=True)
     try:
         server.serve_forever()

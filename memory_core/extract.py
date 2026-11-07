@@ -6,12 +6,14 @@
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any
 
 from memory_core.prompts import has_cjk
 
-_QUESTION_HINTS = ("什么", "哪", "谁", "吗", "多少", "几", "是否", "怎么", "如何")
+_QUESTION_HINTS = ("什么", "哪", "谁", "吗", "呢", "多少", "几", "是否", "怎么", "如何", "啥", "叫啥", "啥名")
 _EN_WH = re.compile(r"\b(what|where|who|which|when|how|whose|why)\b", re.IGNORECASE)
 _ENDINGS = "。！？.!?"
 
@@ -34,8 +36,74 @@ def _split_sentences(text: str) -> list[str]:
     return out
 
 
+_ADVICE = (
+    "有什么办法", "怎么办", "有什么方法", "有什么建议", "怎么缓解", "怎么治",
+    "如何才能", "怎样才能", "有啥办法", "怎么解决",
+)
+
+
+def is_declarative_fact(text: str) -> bool:
+    """陈述句。里面出现「翻译」「推荐」也不能当成要求句删掉。"""
+    raw = (text or "").strip().rstrip("。")
+    if not raw:
+        return False
+    if re.match(r"^(?:我|他|她)(?:的[\u4e00-\u9fffA-Za-z0-9]{0,12})?是", raw):
+        return True
+    if re.match(r"^(?:我|他|她)喜欢", raw):
+        return True
+    if re.match(r"^我在.+工作", raw) or re.match(r"^我做.+工作", raw):
+        return True
+    return False
+
+
+def is_imperative_request(text: str) -> bool:
+    """只看句首的要求。句中的「翻译」「推荐」不算。"""
+    raw = (text or "").strip()
+    if not raw or is_declarative_fact(raw):
+        return False
+    return bool(re.match(r"^(?:请|帮我|给我|写一|写首)", raw))
+
+
+def is_advice_question(text: str) -> bool:
+    """要办法、建议或做法。哪怕以「我」开头，也不是在问记住的事实。"""
+    raw = text or ""
+    return any(mark in raw for mark in _ADVICE)
+
+
+def is_question_fragment(text: str) -> bool:
+    """句首疑问词、句末语气词或问号。不在句子中间搜「什么」「哪」。"""
+    raw = (text or "").strip()
+    if not raw:
+        return True
+    if re.search(r"是.+还是", raw):
+        return True
+    if is_declarative_fact(raw):
+        return False
+    if is_imperative_request(raw):
+        return True
+    if raw.endswith(("?", "？")) or re.search(r"(?:吗|呢)[。！]?$", raw):
+        return True
+    if re.match(r"^(?:什么|谁|哪|咋|啥)", raw):
+        return True
+    if raw.endswith(("的名字", "啥名", "…", "...")) or raw.rstrip("。").endswith("啥名"):
+        return True
+    if re.search(r"叫啥|啥名|什么|是谁|哪一|多少|吗", raw):
+        return True
+    return False
+
+
+def is_self_fact_question(text: str) -> bool:
+    """只有在问使用者自己已经告诉过的事实时才走记忆。"""
+    raw = (text or "").strip()
+    if re.search(r"我的[\u4e00-\u9fff]{1,12}(?:是|叫|在|住|有)", raw):
+        return True
+    return any(raw.startswith(prefix) for prefix in ("我叫什么", "我是谁", "我的名字", "我住", "我的生日"))
+
+
 def _looks_like_question(sentence: str) -> bool:
     if sentence.endswith("?") or sentence.endswith("？"):
+        return True
+    if re.search(r"是.+还是", sentence):
         return True
     if any(hint in sentence for hint in _QUESTION_HINTS):
         return True
@@ -169,7 +237,9 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
-    if _looks_like_question(raw):
+    if _looks_like_question(raw) or is_question_fragment(raw) or re.search(r"是.+还是", raw):
+        return None
+    if re.search(r"啥|什么|谁|吗|呢|多少|还是", value) or re.search(r"是.+还是", entity):
         return None
     entity, attr = _peel_entity(entity, attr)
     attr = _refine_attr(attr, value, how, raw)
@@ -252,7 +322,8 @@ def _bind_subject(sentence: str, current: str | None) -> str:
 
 def _split_yu(sentence: str) -> tuple[str, str, str] | None:
     """「主语 + 一两字的动词 + 于 + 取值」。动词取紧挨着「于」的最短可用长度。"""
-    matched = re.match(r"^(.+)于([^，。]{1,24})$", sentence)
+    probe = sentence.replace("关于", "关○")
+    matched = re.match(r"^(.+)于([^，。]{1,24})$", probe)
     if not matched or "的" in matched.group(1):
         return None
     left, value = matched.group(1), matched.group(2)
@@ -478,12 +549,21 @@ def _leading_name(sentence: str) -> str | None:
     return None
 
 
+def drop_request_memories(home: Path) -> int:
+    """兼容旧调用。真正的清理在 migrate_0214，并且只针对 0.2.14。"""
+    from memory_core.migrate_0214 import migrate_0214_junk
+
+    return migrate_0214_junk(home)
+
+
 def pattern_extract(text: str) -> list[dict[str, Any]]:
     """按句式抽事实，不查属性词表。一段话里的 It / 它 沿用上一句的主语。"""
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
     for sentence in _split_sentences(text):
+        if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
+            continue
         found = _match_sentence(sentence, current)
         if found is None:
             named = _leading_name(sentence)
@@ -602,7 +682,7 @@ def model_extract(text: str, model, tok, device) -> list[dict[str, Any]]:
     gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
     if gen.startswith("无") or gen.lower().startswith("none"):
         return []
-    return _parse_model_block(gen)
+    return [fact for fact in _parse_model_block(gen) if not is_question_fragment(str(fact.get("statement") or ""))]
 
 
 class _nullctx:
@@ -774,7 +854,7 @@ def subject_names(text: str) -> list[str]:
     for fact in pattern_extract(text):
         add(str(fact.get("entity") or ""))
     for sentence in _split_sentences(text):
-        if _looks_like_question(sentence):
+        if _looks_like_question(sentence) or is_imperative_request(sentence) or is_advice_question(sentence):
             continue
         if not _looks_like_claim(sentence):
             continue
@@ -831,7 +911,11 @@ def _relation_questions(entity: str, attr: str, statement: str, english: bool) -
 
 
 def extract_fact_candidates(text: str, model=None, tok=None, device=None) -> list[dict[str, Any]]:
-    facts = pattern_extract(text)
+    facts = [
+        fact for fact in pattern_extract(text)
+        if not is_imperative_request(str(fact.get("statement") or ""))
+        and not is_advice_question(str(fact.get("statement") or ""))
+    ]
     try:
         facts.extend(company_pipeline_extract(text))
     except Exception:

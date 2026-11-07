@@ -23,7 +23,9 @@ from memory_core.span_guard import (
     is_open_task,
     mentions_stored,
     predicate_covered,
-    relation_answer,
+    relation_decision,
+    span_fits,
+    predicate_in_statement,
 )
 
 TOP_K = 3
@@ -236,6 +238,54 @@ def _hosts(query: str, pool: list[dict]) -> list[dict]:
     return usable
 
 
+_NOT_SUBJECT = {"女儿", "闺女", "父亲", "爸爸", "老爸", "主人", "工匠", "师傅", "灯塔", "海鸥", "丫头"}
+
+
+def _names_in_query(query: str, facts: list[dict]) -> list[str]:
+    blob = "\n".join(_statement(fact) for fact in facts)
+    found: list[str] = []
+    text = query or ""
+    for size in (4, 3, 2):
+        for index in range(0, max(0, len(text) - size + 1)):
+            token = text[index:index + size]
+            if token in _NOT_SUBJECT or token in {"打磨", "守护", "看守", "什么", "怎么"}:
+                continue
+            if any(token in longer for longer in found):
+                continue
+            if token in blob:
+                found.append(token)
+    return found
+
+
+def _statement_has_query_names(query: str, statement: str, facts: list[dict]) -> bool:
+    names = _names_in_query(query, facts)
+    if not names:
+        return True
+    return all(name in (statement or "") for name in names)
+
+
+def _subject_in_statement(query: str, statement: str) -> bool:
+    """「白鹭塔的闺女」不能拿柯岚的女儿那一句来答。"""
+    names = []
+    for chunk in re.findall(r"([\u4e00-\u9fff]{2,8})的", query or ""):
+        piece = chunk
+        changed = True
+        while changed and len(piece) > 2:
+            changed = False
+            for role in sorted(_NOT_SUBJECT | {"养"}, key=len, reverse=True):
+                if piece.endswith(role) and len(piece) > len(role):
+                    piece = piece[: -len(role)]
+                    changed = True
+                    break
+        if piece in _NOT_SUBJECT or len(piece) < 2:
+            continue
+        names.append(piece[-4:])
+    if not names:
+        return True
+    text = statement or ""
+    return any(name in text for name in names)
+
+
 def _asked_relation(query: str) -> str:
     """紧挨着疑问词的那个关系，不管前面用来指路的字。"""
     match = re.search(r"的([\u4e00-\u9fff]{1,6})(?:叫什么|是谁|是什么|有多|在哪|哪年|什么时候)", query or "")
@@ -446,6 +496,15 @@ def _finish(span: str) -> str:
     return text
 
 
+def _slot_ok(query: str, span: str, fact: dict, names: list[str]) -> bool:
+    from memory_core.answer_type import accept_span
+
+    statement = _statement(fact)
+    if names and not all(name in statement for name in names):
+        return False
+    return bool(span) and accept_span(query, span, statement, require_subject=False)
+
+
 def read_memory(
     query: str,
     facts: list[dict],
@@ -457,10 +516,17 @@ def read_memory(
 
     返回 {"text", "fact", "miss"}。miss 为真时不要再调用基座编造。
     """
+    from memory_core.extract import is_question_fragment
+
+    facts = [fact for fact in facts if isinstance(fact, dict) and not is_question_fragment(str(fact.get("statement") or ""))]
     if not facts or not str(query or "").strip():
         return None
     if is_open_task(query):
         return None
+    if re.search(r"是.+还是", query or ""):
+        from memory_core.span_guard import fixed_refusal
+
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.grounding import open_entity_question
     from memory_core.paraphrase import is_polar
@@ -480,22 +546,25 @@ def read_memory(
             continue
         missed = near_miss_span(entity, query)
         if missed:
-            # 「守护白鹭塔」前面是动词，名字本身还在。后面多出来的字才是另一个名字。
+            # 前面是动词（守护白鹭塔）仍是这个名字。后面只多一两个字才是另一个名字。
             if missed.endswith(entity) and not missed.startswith(entity):
+                continue
+            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的")):
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
+    from memory_core.answer_type import choose_typed, grounded_subjects
+
+    names = grounded_subjects(query, facts)
+
+    picked = choose_typed(query, facts)
+    if picked:
+        span, fact = picked
+        return {"text": _finish(span), "fact": fact, "miss": False}
+    if "我的" in query or query.startswith("我"):
+        return None
     if not memory_question(query, facts, best, pool):
         return None
-    linked = relation_answer(query, facts)
-    if linked is not None and not linked[0]:
-        return {"text": natural_refusal(query, facts), "fact": facts[0], "miss": True}
-    if linked:
-        span, fact = linked
-        checked = accept_aligned(query, span, fact, require_predicate=False)
-        if checked:
-            return {"text": _finish(checked), "fact": fact, "miss": False}
-        return {"text": natural_refusal(query, facts), "fact": fact, "miss": True}
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}
@@ -509,11 +578,11 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if checked:
+            if _slot_ok(query, checked, fact, names):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if checked:
+        if _slot_ok(query, checked, fact, names):
             return {"text": _finish(checked), "fact": fact, "miss": False}
-    return {"text": natural_refusal(query, hosts), "fact": hosts[0], "miss": True}
+    return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}

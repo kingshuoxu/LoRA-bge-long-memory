@@ -552,6 +552,8 @@ def spoken_fact(query: str, fact: dict) -> str:
     """回答只给问句要的那一段。引用仍留在事实原句上。"""
     statement = str(fact.get("statement") or "").strip()
     value = str(fact.get("value") or fact.get("answer") or "").strip()
+    if ("我的" in (query or "") or (query or "").startswith("我")) and "我" not in statement and str(fact.get("entity") or "") not in {"我", "用户"}:
+        return ""
     span = answer_span(query, statement)
     if span:
         text = span
@@ -559,6 +561,11 @@ def spoken_fact(query: str, fact: dict) -> str:
         text = value
     else:
         text = statement
+    from memory_core.span_guard import asked_kind, predicate_in_statement, span_fits
+
+    # 问的是人数、年份、年限时，不能把整句或另一种单位当成答案。
+    if asked_kind(query) and (not span_fits(query, text) or not predicate_in_statement(query, statement)):
+        return ""
     text = text.strip()
     if text and text[-1] not in "。.!！？?":
         text += "。"

@@ -212,6 +212,39 @@ def _public_fact(fact: dict) -> dict[str, Any]:
     }
 
 
+_CHAPTER = re.compile(r"第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇]")
+
+
+def _refusal_answer(text: str) -> bool:
+    return any(mark in (text or "") for mark in (
+        "不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我",
+        "没提到", "不记得", "没记过", "我不确定",
+    ))
+
+
+def _is_chapter(text: str) -> bool:
+    return bool(_CHAPTER.search(text or ""))
+
+
+def _nebula_attr(attr: str, statement: str) -> str:
+    """星云上的属性不写章节名。"""
+    if not _is_chapter(attr):
+        return attr
+    body = _CHAPTER.sub("", statement or "")
+    body = re.sub(r"^[\s　，,。]+", "", body).strip().rstrip("。")
+    clause = re.split(r"[，,]", body)[0].strip()
+    return clause[:18] or "这条事实"
+
+
+def _nebula_value(value: str, statement: str) -> str:
+    if not _is_chapter(value):
+        return value
+    named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", statement or "")
+    if named:
+        return named.group(1)
+    return _nebula_attr(value, statement)
+
+
 class MemoryService:
     def __init__(
         self,
@@ -228,8 +261,10 @@ class MemoryService:
 
             migrate_legacy(self.home, self.models_dir)
         from memory_core.identity import migrate_user_identity
+        from memory_core.migrate_0214 import migrate_0214_junk
 
         migrate_user_identity(self.home)
+        migrate_0214_junk(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:
@@ -489,7 +524,11 @@ class MemoryService:
         """没教过的个人问题不交给基座编。常识题仍走基座。"""
         if self_ask(content) or not utterance_is_question(content):
             return None
-        personal = bool(re.search(r"我的|我最|我比较|我非常|我喜欢|我在哪|我在什么", content)) or bool(re.search(r"\bmy\b", content.casefold()))
+        from memory_core.extract import is_advice_question, is_imperative_request
+
+        if is_advice_question(content) or is_imperative_request(content):
+            return None
+        personal = bool(re.search(r"我的|我最喜欢|我最爱|我比较|我非常|我喜欢|我在哪|我在什么", content)) or bool(re.search(r"\bmy\b", content.casefold()))
         if re.search(r"我", content) and re.search(r"公司|上班", content) and "我们" not in content:
             personal = True
         if not personal:
@@ -691,7 +730,9 @@ class MemoryService:
                     "fact_pass": False,
                 }
                 return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal, "recall": recall}
-            if not utterance_is_question(content):
+            from memory_core.extract import is_advice_question, is_imperative_request
+
+            if not utterance_is_question(content) and not is_imperative_request(content) and not is_advice_question(content):
                 remember_statement(self.home, content)
                 stated = pattern_extract(content)
                 if stated and all(self._remembered_match(fact) for fact in stated):
@@ -904,7 +945,7 @@ class MemoryService:
                         mount_memory(decision, recall, expert, facts, "entity_first")
                         recall["reason_text"] = "回答来自已记住的原句"
                         grounded = True
-            if not fact_answer:
+            if not fact_answer and not open_task:
                 unknown = self._personal_unknown(content)
                 if unknown:
                     fact_answer = unknown
@@ -1003,7 +1044,7 @@ class MemoryService:
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
             if utterance_is_question(content) and not open_task:
-                from memory_core.span_guard import fixed_refusal, relation_answer
+                from memory_core.span_guard import relation_decision
 
                 remembered = []
                 for record in experts:
@@ -1011,8 +1052,62 @@ class MemoryService:
                     for fact in memory.get("facts") or []:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
-                linked = relation_answer(content, remembered) if remembered else None
-                if linked is not None and not linked[0]:
+                linked = relation_decision(content, remembered) if remembered else None
+                if linked and linked.get("status") == "abstain":
+                    fact_answer = linked["text"]
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["reason_text"] = "关系没有走完，所以不把中间的人当成答案，也不挂引用"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                elif linked and linked.get("status") == "answer":
+                    from memory_core.answer_type import accept_span
+                    from memory_core.span_guard import statement_of
+
+                    span = str(linked["span"])
+                    host = statement_of(linked.get("fact") or {})
+                    if accept_span(content, span, host) and (
+                        not fact_answer
+                        or _refusal_answer(fact_answer)
+                        or len(fact_answer) > 18
+                        or not accept_span(content, fact_answer.strip().rstrip("。"), host)
+                    ):
+                        fact_answer = span if span[-1:] in "。." else span + "。"
+                        owner = next(
+                            (record for record in experts if linked["fact"] in ((record.fact_memory or {}).get("facts") or [])),
+                            None,
+                        )
+                        if owner is not None:
+                            mount_memory(decision, recall, owner, [linked["fact"]], "entity_first")
+                            recall["reason_text"] = "回答是顺着已经记下的关系摘出来的"
+            if utterance_is_question(content) and not open_task:
+                from memory_core.answer_type import accept_span, choose_typed, grounded_subjects, memory_topic, question_kind
+                from memory_core.span_guard import fixed_refusal, statement_of
+
+                remembered = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                picked = choose_typed(content, remembered) if remembered else None
+                personal = "我的" in content or content.startswith("我")
+                if (
+                    not picked
+                    and not fact_answer
+                    and not personal
+                    and question_kind(content)
+                    and grounded_subjects(content, remembered)
+                    and recall.get("reason") not in {"document", "document_miss", "entity_clarify", "entity_grounded"}
+                ):
                     fact_answer = fixed_refusal(content, remembered)
                     decision.fired = False
                     decision.expert = None
@@ -1023,21 +1118,141 @@ class MemoryService:
                     recall["abstain"] = True
                     recall["reason"] = "memory_miss"
                     recall["matched_facts"] = []
-                    recall["reason_text"] = "关系没有走到最后一问，所以不把中间的人交出去"
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "问到了已经记住的对象，但这一种取值没有写在句子里"
+                if recall.get("reason") == "document" and fact_answer and picked and picked[0] in fact_answer:
+                    pass
+                elif picked and (
+                    not fact_answer
+                    or _refusal_answer(fact_answer)
+                    or not accept_span(content, fact_answer.strip().rstrip("。"), statement_of(picked[1]))
+                ):
+                    span, fact = picked
+                    fact_answer = span if span[-1:] in "。." else span + "。"
+                    owner = next(
+                        (record for record in experts if fact in ((record.fact_memory or {}).get("facts") or [])),
+                        None,
+                    )
+                    if owner is not None:
+                        mount_memory(decision, recall, owner, [fact], "entity_first")
+                        recall["doc_chips"] = []
+                        recall["reason_text"] = "回答用的是和问句种类一致的取值"
+                elif (
+                    fact_answer
+                    and not _refusal_answer(fact_answer)
+                    and question_kind(content)
+                    and recall.get("reason") not in {"document", "document_miss", "entity_clarify", "entity_grounded"}
+                ):
+                    host = ""
+                    needle = fact_answer.strip().rstrip("。")
+                    for fact in remembered:
+                        if needle and needle in statement_of(fact):
+                            host = statement_of(fact)
+                            break
+                    if not accept_span(content, needle, host or fact_answer):
+                        linked_names = grounded_subjects(content, remembered)
+                        decision.fired = False
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["matched_facts"] = []
+                        recall["doc_chips"] = []
+                        if not linked_names and not memory_topic(content, remembered):
+                            fact_answer = None
+                        else:
+                            fact_answer = fixed_refusal(content, remembered)
+                            decision.expert = None
+                            decision.label = "基座"
+                            decision.reason = "memory_miss"
+                            recall["abstain"] = True
+                            recall["reason"] = "memory_miss"
+                            recall["reason_text"] = "取值种类对不上，所以不把原句当成答案，也不挂引用"
+                            recall["expert"] = None
+                            recall["mounted_expert"] = None
+                            recall["mounted_label"] = "基座"
+            if utterance_is_question(content) and not open_task and recall.get("reason") not in {
+                "document", "document_miss", "entity_overview", "statement_ack", "personal_unknown", "assistant_intro", "already",
+            }:
+                from memory_core.answer_type import accept_span, memory_topic
+                from memory_core.span_guard import fixed_refusal, statement_of
+
+                remembered = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                if re.search(r"是.+还是", content or ""):
+                    fact_answer = fixed_refusal(content, remembered)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "是A还是B没有写在记忆里，不选其中一边"
                     recall["expert"] = None
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
-                elif linked and linked[0] and (
-                    not fact_answer
-                    or len(fact_answer) > 18
-                    or (linked[0] not in fact_answer and "记住的是" not in fact_answer)
-                ):
-                    span = linked[0]
-                    fact_answer = span if span[-1] in "。." else span + "。"
-                    owner = next((record for record in experts if linked[1] in ((record.fact_memory or {}).get("facts") or [])), None)
-                    if owner is not None:
-                        mount_memory(decision, recall, owner, [linked[1]], "entity_first")
-                        recall["reason_text"] = "回答是顺着关系从已记住的句子里摘出来的"
+                elif memory_topic(content, remembered):
+                    needle = (fact_answer or "").strip().rstrip("。")
+                    host = ""
+                    for fact in remembered:
+                        if needle and needle in statement_of(fact):
+                            host = statement_of(fact)
+                            break
+                    polar = bool(re.match(r"^(?:是|不是|Yes|No)\b", (fact_answer or "").strip(), re.IGNORECASE))
+                    polar_ok = False
+                    if polar and fact_answer and len(fact_answer) <= 40:
+                        for fact in remembered:
+                            statement = statement_of(fact)
+                            for piece in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,16}", fact_answer):
+                                if piece in statement and accept_span(content, piece, statement):
+                                    polar_ok = True
+                                    break
+                            if polar_ok:
+                                break
+                    valid = bool(fact_answer) and (
+                        _refusal_answer(fact_answer) or polar_ok or (host and accept_span(content, needle, host))
+                    )
+                    if not valid:
+                        from memory_core.answer_type import choose_typed
+
+                        picked_now = choose_typed(content, remembered)
+                        if picked_now:
+                            span, fact = picked_now
+                            picked_host = statement_of(fact)
+                            if accept_span(content, span, picked_host, allow_chain=True):
+                                fact_answer = span if span[-1:] in "。." else span + "。"
+                                owner = next(
+                                    (record for record in experts if fact in ((record.fact_memory or {}).get("facts") or [])),
+                                    None,
+                                )
+                                if owner is not None:
+                                    mount_memory(decision, recall, owner, [fact], "entity_first")
+                                    recall["doc_chips"] = []
+                                    recall["abstain"] = False
+                                    recall["reason_text"] = "回答用的是和问句种类一致的取值"
+                                valid = True
+                    if not valid:
+                        fact_answer = fixed_refusal(content, remembered)
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["doc_chips"] = []
+                        recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里，所以不交给基座编"
+                        recall["expert"] = None
+                        recall["mounted_expert"] = None
+                        recall["mounted_label"] = "基座"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
@@ -1067,8 +1282,12 @@ class MemoryService:
         seen: set[str] = set()
 
         def take(fact: dict) -> None:
+            from memory_core.extract import is_imperative_request, is_question_fragment
+
             statement = str(fact.get("statement") or "")
-            if not statement or any(is_same_memory(statement, item) for item in stored if item):
+            if not statement or is_question_fragment(statement) or is_imperative_request(statement):
+                return
+            if any(is_same_memory(statement, item) for item in stored if item):
                 return
             key = normalize_fact_key(statement)
             if not key or key in seen:
@@ -1912,7 +2131,12 @@ class MemoryService:
         centroids = {}
         canonical: dict[str, list[str]] = {}
         for record in records:
-            stored_facts = list((record.fact_memory or {}).get("facts") or [])
+            stored_facts = [
+                fact for fact in ((record.fact_memory or {}).get("facts") or [])
+                if isinstance(fact, dict) and not fact.get("superseded")
+            ]
+            if not stored_facts and not (record.fact_memory or {}).get("self"):
+                continue
             experts.append({
                 "id": f"expert:{record.name}",
                 "name": record.name,
@@ -1959,8 +2183,8 @@ class MemoryService:
                     "expert_label": record.display_name,
                     "statement": fact.get("statement") or "",
                     "entity": fact.get("entity") or "",
-                    "attr": fact.get("attr") or "",
-                    "value": fact.get("value") or fact.get("answer") or "",
+                    "attr": _nebula_attr(str(fact.get("attr") or ""), str(fact.get("statement") or "")),
+                    "value": _nebula_value(str(fact.get("value") or fact.get("answer") or ""), str(fact.get("statement") or "")),
                     "question": qa[0]["q"] if qa else fact.get("question") or "",
                     "superseded": bool(fact.get("superseded")),
                     "superseded_by": fact.get("superseded_by") or "",
@@ -1978,13 +2202,20 @@ class MemoryService:
                 names = [entity for entity in record.entities if 2 <= len(entity) <= 12]
             canonical[record.name] = names
             bank = ensure_fact_bank(record) if record.explicit else None
+            vec = None
             if bank is not None and bank.question_vecs.numel():
-                vec = bank.question_vecs.mean(dim=0)
-            else:
-                vec = record.key.float().mean(dim=0)
+                raw = bank.question_vecs
+                if not (getattr(raw, "is_meta", False) or getattr(raw.device, "type", "") == "meta"):
+                    vec = raw.detach().float().cpu().mean(dim=0)
+            if vec is None and record.key is not None and not (
+                getattr(record.key, "is_meta", False) or getattr(record.key.device, "type", "") == "meta"
+            ):
+                vec = record.key.detach().float().cpu().mean(dim=0)
+            if vec is None:
+                continue
             norm = float(vec.norm()) or 1.0
             centroids[record.name] = vec / norm
-        names_in_order = [record.name for record in records]
+        names_in_order = [name for name in centroids]
         for index, left in enumerate(names_in_order):
             for right in names_in_order[index + 1 :]:
                 shared = [entity for entity in canonical.get(left, []) if entity in canonical.get(right, [])]
