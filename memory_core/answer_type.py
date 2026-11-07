@@ -59,9 +59,35 @@ def _asks_father(query: str) -> bool:
     return bool(_FATHER_MARK.search(text)) and bool(re.search(r"叫什么|叫啥|是谁|什么名字|啥名", text))
 
 
+def head_type(query: str) -> str:
+    """问句要的是人还是塔，看问的那个中心词，不看句子里顺手出现的年份或地名。"""
+    text = query or ""
+    if re.search(r"多高|塔高|多少米|多少面|几条|几面|哪一年|哪年|什么时候|何时|什么鸟|什么动物|哪国|国籍|什么颜色|什么材料", text):
+        return ""
+    focus = re.split(r"[，,。；;]", text)[-1]
+    asked = re.search(r"叫什么|叫啥|啥名|什么名字", focus)
+    if asked:
+        before = focus[: asked.start()]
+        if re.search(r"(?:人|那位|哪位)$", before):
+            return "person"
+        if re.search(r"塔$", before):
+            return "tower"
+    if re.search(r"哪个人|哪一位|什么人|是谁|谁管|谁守", focus):
+        return "person"
+    if re.search(r"哪座塔|什么塔|最早.{0,6}塔|第一.{0,6}塔|头一.{0,4}塔|灯塔叫|一座塔叫", focus):
+        return "tower"
+    if re.search(r"守塔|看守|守护|看管|管着|负责守|看着", focus) and re.search(r"叫什么|叫啥|谁", focus):
+        if not re.search(r"塔叫", focus):
+            return "person"
+    return ""
+
+
 def question_kind(query: str) -> str:
     """问句要的取值种类。空字符串表示这句没有强制种类。"""
     text = query or ""
+    headed = head_type(text)
+    if headed:
+        return headed
     if re.search(r"什么颜色|啥颜色|哪种颜色|颜色|什么色", text):
         return "colour"
     if re.search(r"什么材料|啥材料|哪种材料|什么做的|用什么做|材料", text):
@@ -130,13 +156,20 @@ def _asked_role(query: str) -> str:
     text = query or ""
     marks: list[tuple[int, str]] = []
     for word, role in (
+        ("负责守", "keeper"),
+        ("谁管", "keeper"),
+        ("管着", "keeper"),
         ("看守人", "keeper"),
         ("守护人", "keeper"),
         ("守塔人", "keeper"),
         ("看守", "keeper"),
         ("守护", "keeper"),
+        ("守塔", "keeper"),
         ("谁守", "keeper"),
         ("在守", "keeper"),
+        ("守着", "keeper"),
+        ("看着", "keeper"),
+        ("看管", "keeper"),
         ("打磨", "maker"),
         ("磨镜", "maker"),
         ("磨", "maker"),
@@ -178,8 +211,23 @@ def _asked_role(query: str) -> str:
         marks.append((text.rfind("养"), "owner"))
     if not marks:
         return ""
-    marks.sort()
-    return marks[-1][1]
+    anchors = [item.start() for item in re.finditer(r"哪个人|哪一位|什么人|谁|叫什么|叫啥|啥名", text)]
+    anchor = anchors[-1] if anchors else len(text)
+    marks.sort(key=lambda item: (abs(item[0] - anchor), -item[0]))
+    return marks[0][1]
+
+
+def _bound_makers(query: str) -> set[str]:
+    """问句里已经说成「打磨/磨」的那个人，不能再拿来回答守塔。"""
+    text = query or ""
+    found: set[str] = set()
+    for match in re.finditer(r"([\u4e00-\u9fff]{2,3})(?:是|为).{0,10}(?:打磨|磨镜|磨)", text):
+        if _person_shape(match.group(1)) and "谁" not in match.group(1):
+            found.add(match.group(1))
+    for match in re.finditer(r"([\u4e00-\u9fff]{2,3})打磨", text):
+        if _person_shape(match.group(1)) and "谁" not in match.group(1) and "镜" not in match.group(1):
+            found.add(match.group(1))
+    return found
 
 
 def _keeper(statement: str) -> str:
@@ -452,7 +500,7 @@ def _same_thing(query: str, statement: str) -> bool:
         return False
     if "花" in asked and "花" not in text:
         return False
-    if "盐" in asked and "盐" not in text:
+    if "盐" in asked and "盐" not in text and head_type(query) != "tower":
         return False
     if "讨厌" in asked and "讨厌" not in text:
         return False
@@ -491,6 +539,13 @@ def accept_span(
         if subjects and not any(subject in (statement or "") for subject in subjects):
             return False
     kind = question_kind(query)
+    headed = head_type(query)
+    if headed == "person" and not _person_shape(text):
+        return False
+    if headed == "tower" and not text.endswith("塔"):
+        return False
+    if headed == "person" and _asked_role(query) == "keeper" and text in _bound_makers(query):
+        return False
     if _wrong_event(query, statement):
         return False
     if kind == "tower" and _lens_required(query, statement):
@@ -764,9 +819,9 @@ def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
         return None
     if _asks_daughter(asked) or _asks_spouse(asked) or _asks_maker(asked):
         return None
-    if not re.search(r"守护|看守|守塔|谁守|在守|守着|看着|看管|值守", asked):
+    if not re.search(r"守护|看守|守塔|谁守|在守|守着|看着|看管|值守|管着|负责守|谁管", asked):
         return None
-    if not re.search(r"谁|叫什么|叫啥|啥名|什么名字", asked):
+    if not re.search(r"谁|哪个人|哪一位|什么人|叫什么|叫啥|啥名|什么名字", asked):
         return None
     target = re.search(r"(?:守护|看守|守着|守)([\u4e00-\u9fff]{1,8})", asked)
     if target and not re.search(r"塔|灯", target.group(1)) and target.group(1) not in {"人", "的人", "者"}:
@@ -888,6 +943,12 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
             return None
     if re.search(r"是.+还是", query or ""):
         return None
+    if head_type(query) == "tower" and re.search(r"最早|第一|头一", query or "") and re.search(r"盐|霜降|晾|晒|港|地方|特产", query or ""):
+        for fact in rows:
+            text = statement_of(fact)
+            tower = _named_tower(text)
+            if tower and ("第一座" in text or ("守护" in text and "名叫" in text)):
+                return tower, fact
     child = _daughter_chain(query, rows)
     if child:
         return child
