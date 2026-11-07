@@ -556,11 +556,32 @@ def drop_request_memories(home: Path) -> int:
     return migrate_0214_junk(home)
 
 
+def _block_contains_question(text: str) -> bool:
+    """整段里只要有一处在问，前面的陈述也不是在教事实。"""
+    raw = text or ""
+    if "？" in raw or "?" in raw or re.search(r"是.+还是", raw):
+        return True
+    if _looks_like_question(raw) or is_question_fragment(raw):
+        return True
+    return any(
+        _looks_like_question(sentence) or is_question_fragment(sentence)
+        for sentence in _split_sentences(raw)
+    )
+
+
 def pattern_extract(text: str) -> list[dict[str, Any]]:
     """按句式抽事实，不查属性词表。一段话里的 It / 它 沿用上一句的主语。"""
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
+    for block in re.split(r"\n+", text or ""):
+        if _block_contains_question(block):
+            continue
+        _extract_block(block, facts, seen, current)
+    return facts
+
+
+def _extract_block(text: str, facts: list[dict[str, Any]], seen: set[tuple[str, str, str]], current: str | None) -> None:
     for sentence in _split_sentences(text):
         if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
             continue

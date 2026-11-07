@@ -233,9 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261208, "抽查")
+    _generated(service, 20261210, "抽查")
     _open_chat(service)
-    _generated(service, 20261209, "盲测")
+    _generated(service, 20261211, "盲测")
     _known_fence(service)
     _spouse_and_kin(service)
     _new_traps(service)
@@ -331,7 +331,16 @@ def _role_sets(service: MemoryService) -> None:
                 print(f"{label} {question} -> {answer}", flush=True)
         return hits
 
-    from memory_core.blind_heldout import diverse_guards, diverse_towers, duty_watchers
+    from memory_core.blind_heldout import (
+        diverse_guards,
+        diverse_towers,
+        duty_watchers,
+        named_towers,
+        omitted_tower_guards,
+        question_prefixes,
+        relative_makers,
+    )
+    from memory_core.extract import pattern_extract
 
     daughter = ask("DAUGHTER", _DAUGHTER_CHAINS, "柯小满", "柯岚")
     towers = ask("SALT_TOWER", _SALT_TOWERS, "白鹭塔", "星砂盐")
@@ -366,13 +375,44 @@ def _role_sets(service: MemoryService) -> None:
             duty_hits += 1
         else:
             print(f"DUTY {question} -> {answer}", flush=True)
+    name_hits = 0
+    for question in named_towers():
+        conv = service.create_conversation("塔名")["id"]
+        answer = _ask(service, conv, question)
+        head = answer.splitlines()[0] if answer else ""
+        if "白鹭塔" in head and "柯岚" not in head and "星砂盐" not in head:
+            name_hits += 1
+        else:
+            print(f"TOWER_NAME {question} -> {answer}", flush=True)
+    omit_hits = 0
+    for question in omitted_tower_guards():
+        conv = service.create_conversation("不提塔")["id"]
+        answer = _ask(service, conv, question)
+        if "柯岚" in answer and "诺丁" not in answer and "打磨" not in answer and "1931" not in answer:
+            omit_hits += 1
+        else:
+            print(f"OMIT_GUARD {question} -> {answer}", flush=True)
+    made_hits = 0
+    for question, _gold in relative_makers():
+        conv = service.create_conversation("磨的")["id"]
+        answer = _ask(service, conv, question)
+        head = answer.splitlines()[0] if answer else ""
+        if "诺丁" in head and "柯岚" not in head:
+            made_hits += 1
+        else:
+            print(f"REL_MADE {question} -> {answer}", flush=True)
+    prefix_kept = [item for item in question_prefixes() if pattern_extract(item)]
     print(
         f"DAUGHTER {daughter}/{len(_DAUGHTER_CHAINS)} "
         f"SALT_TOWER {towers}/{len(_SALT_TOWERS)} "
         f"GUARD {guards}/{len(_GUARD_NOT_MAKE)} "
         f"FRESH_GUARD {guard_hits}/{len(fresh_guards)} type {type_ok} "
         f"FRESH_TOWER {tower_hits}/{len(fresh_towers)} "
-        f"DUTY {duty_hits}/{len(duties)}",
+        f"DUTY {duty_hits}/{len(duties)} "
+        f"TOWER_NAME {name_hits}/{len(named_towers())} "
+        f"OMIT_GUARD {omit_hits}/{len(omitted_tower_guards())} "
+        f"REL_MADE {made_hits}/{len(relative_makers())} "
+        f"PREFIX {len(prefix_kept)}",
         flush=True,
     )
     if daughter < len(_DAUGHTER_CHAINS):
@@ -387,6 +427,14 @@ def _role_sets(service: MemoryService) -> None:
         _fail(f"换说法的早塔题 {tower_hits}/{len(fresh_towers)}")
     if len(duties) < 12 or duty_hits < len(duties):
         _fail(f"换说法的尽责守塔 {duty_hits}/{len(duties)}")
+    if len(named_towers()) < 12 or name_hits < len(named_towers()):
+        _fail(f"灯塔叫什么答成了人 {name_hits}/{len(named_towers())}")
+    if len(omitted_tower_guards()) < 12 or omit_hits < len(omitted_tower_guards()):
+        _fail(f"后半句没提塔的守塔题 {omit_hits}/{len(omitted_tower_guards())}")
+    if len(relative_makers()) < 6 or made_hits < len(relative_makers()):
+        _fail(f"定语里看守、问的是谁磨 {made_hits}/{len(relative_makers())}")
+    if prefix_kept:
+        _fail(f"问句的前半句被当成事实：{prefix_kept[:2]}")
 
 
 def _spouse_and_kin(service: MemoryService) -> None:
