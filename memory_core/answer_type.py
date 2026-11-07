@@ -1074,7 +1074,7 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         ]
         if not rows:
             return None
-    if re.search(r"是.+还是", query or ""):
+    if re.search(r"是.+还是|是不是", query or ""):
         return None
     if head_type(query) == "tower" and re.search(r"最早|第一|头一", query or "") and re.search(r"盐|霜降|晾|晒|港|地方|特产", query or ""):
         for fact in rows:

@@ -1181,7 +1181,8 @@ class MemoryService:
                     for fact in memory.get("facts") or []:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
-                if re.search(r"是.+还是", content or ""):
+                polar_answer = bool(re.match(r"^(?:是|不是|有|Yes|No)\b", (fact_answer or "").strip(), re.IGNORECASE))
+                if re.search(r"是.+还是", content or "") or (re.search(r"是不是", content or "") and not polar_answer):
                     fact_answer = fixed_refusal(content, remembered)
                     decision.fired = False
                     decision.expert = None
