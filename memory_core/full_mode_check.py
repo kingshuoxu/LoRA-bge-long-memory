@@ -233,12 +233,13 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261202, "抽查")
+    _generated(service, 20261204, "抽查")
     _open_chat(service)
-    _generated(service, 20261203, "盲测")
+    _generated(service, 20261205, "盲测")
     _known_fence(service)
     _spouse_and_kin(service)
     _new_traps(service)
+    _role_sets(service)
     print("FULL_LEARNING_OK", flush=True)
 
 
@@ -305,6 +306,46 @@ def _new_traps(service: MemoryService) -> None:
         _fail(f"谁磨的只答对 {made_hits}/{len(_WHO_MADE)}")
     if leaked:
         _fail(f"问句被存成了事实：{leaked[:3]}")
+    pending_bad = [
+        str(item.get("statement") or "")
+        for item in service.list_pending()
+        if is_question_fragment(str(item.get("statement") or "")) or "还是" in str(item.get("statement") or "")
+    ]
+    print(f"PENDING_QUESTIONS {len(pending_bad)}", flush=True)
+    if pending_bad:
+        _fail(f"待巩固里还有问句：{pending_bad[:3]}")
+
+
+def _role_sets(service: MemoryService) -> None:
+    """闺女要答到孩子，盐的地方的灯塔要答塔，守塔不能答成磨透镜的人。"""
+    from memory_core.blind_heldout import _DAUGHTER_CHAINS, _GUARD_NOT_MAKE, _SALT_TOWERS
+
+    def ask(label, pairs, gold_ok, bad_name):
+        hits = 0
+        for question, gold in pairs:
+            conv = service.create_conversation(label)["id"]
+            answer = _ask(service, conv, question)
+            if gold in answer and bad_name not in answer:
+                hits += 1
+            else:
+                print(f"{label} {question} -> {answer}", flush=True)
+        return hits
+
+    daughter = ask("DAUGHTER", _DAUGHTER_CHAINS, "柯小满", "柯岚")
+    towers = ask("SALT_TOWER", _SALT_TOWERS, "白鹭塔", "星砂盐")
+    guards = ask("GUARD", _GUARD_NOT_MAKE, "柯岚", "诺丁")
+    print(
+        f"DAUGHTER {daughter}/{len(_DAUGHTER_CHAINS)} "
+        f"SALT_TOWER {towers}/{len(_SALT_TOWERS)} "
+        f"GUARD {guards}/{len(_GUARD_NOT_MAKE)}",
+        flush=True,
+    )
+    if daughter < len(_DAUGHTER_CHAINS):
+        _fail(f"闺女链只答对 {daughter}/{len(_DAUGHTER_CHAINS)}")
+    if towers < len(_SALT_TOWERS):
+        _fail(f"盐的地方的灯塔只答对 {towers}/{len(_SALT_TOWERS)}")
+    if guards < len(_GUARD_NOT_MAKE):
+        _fail(f"守塔和打磨只答对 {guards}/{len(_GUARD_NOT_MAKE)}")
 
 
 def _spouse_and_kin(service: MemoryService) -> None:

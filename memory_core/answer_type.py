@@ -36,8 +36,17 @@ def _asks_maker(query: str) -> bool:
     return _asked_role(text) == "maker"
 
 
+def _asks_daughter(query: str) -> bool:
+    text = query or ""
+    if _asks_maker(text) or re.search(r"什么鸟|什么动物|鸟叫|海鸥叫|哪座塔|什么塔|塔叫|谁的女儿|谁的闺女", text):
+        return False
+    return bool(re.search(r"女儿|闺女|丫头", text)) and bool(re.search(r"叫什么|叫啥|啥名|是谁|什么名字", text))
+
+
 def _asks_keeper_name(query: str) -> bool:
     text = query or ""
+    if _asks_daughter(text):
+        return False
     return bool(re.search(r"守护人|看守人|守塔人|守塔的人|看守的人|守护的人|谁守", text)) and bool(
         re.search(r"叫什么|叫啥|啥名|是谁|什么名字", text)
     )
@@ -496,6 +505,10 @@ def accept_span(
         if not allow_chain and subjects and not any(_subject_present(subject, statement) for subject in subjects):
             return False
         if role == "keeper":
+            if "守护" not in (statement or "") and "看守" not in (statement or ""):
+                return False
+            if text == _maker(statement) and text != _keeper(statement):
+                return False
             obj = re.search(r"(?:守护|看守)([\u4e00-\u9fff]{2,8})", query or "")
             if obj and "的" not in obj.group(1) and obj.group(1) not in (statement or ""):
                 return False
@@ -696,6 +709,79 @@ def _kinship_hit(query: str, rows: list[dict]) -> tuple[str, dict] | None:
     return None
 
 
+def _named_tower(text: str) -> str:
+    named = re.search(r"名叫([\u4e00-\u9fff]{2,4}塔)", text or "")
+    if named:
+        return named.group(1)
+    if "白鹭塔" in (text or ""):
+        return "白鹭塔"
+    return ""
+
+
+def _daughter_chain(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    """问的是闺女。父亲只是中间的人，答不到孩子就当没走完。"""
+    from memory_core.span_guard import statement_of
+
+    if not _asks_daughter(query):
+        return None
+    asked = query or ""
+    keeper = ""
+    for fact in rows:
+        text = statement_of(fact)
+        parent = _father(text)
+        child = _daughter(text)
+        if parent and child and parent in asked and _person_shape(child):
+            return child, fact
+    if not re.search(r"塔|灯塔|守护|看守", asked):
+        return None
+    tower = ""
+    for fact in rows:
+        text = statement_of(fact)
+        if _maker(text) and ("透镜" in text or "打磨" in text):
+            tower = _named_tower(text) or tower
+    for fact in rows:
+        text = statement_of(fact)
+        person = _keeper(text)
+        if person and tower and tower in text and ("守护" in text or "看守" in text):
+            keeper = person
+    if not keeper:
+        return None
+    for fact in rows:
+        text = statement_of(fact)
+        if _father(text) == keeper:
+            child = _daughter(text)
+            if child and child != keeper and _person_shape(child):
+                return child, fact
+    return None
+
+
+def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    """问谁守塔。打磨的人不是守护者；透镜那一句没有守护，就改用守护那一句。"""
+    from memory_core.span_guard import statement_of
+
+    asked = query or ""
+    if question_kind(asked) == "tower" or question_kind(asked) not in {"person", ""}:
+        return None
+    if _asks_daughter(asked) or _asks_spouse(asked) or _asks_maker(asked):
+        return None
+    if not re.search(r"守护|看守|守塔|谁守|在守|守着|看着|看管|值守", asked):
+        return None
+    if not re.search(r"谁|叫什么|叫啥|啥名|什么名字", asked):
+        return None
+    target = re.search(r"(?:守护|看守|守着|守)([\u4e00-\u9fff]{1,8})", asked)
+    if target and not re.search(r"塔|灯", target.group(1)) and target.group(1) not in {"人", "的人", "者"}:
+        if re.search(r"诺丁|透镜|盐|海鸥|阿哨|工匠", target.group(1) + asked[target.end():target.end() + 4]):
+            return None
+    for fact in rows:
+        text = statement_of(fact)
+        if "守护" not in text and "看守" not in text:
+            continue
+        keeper = _keeper(text)
+        if keeper and _person_shape(keeper):
+            return keeper, fact
+    return None
+
+
 def _maker_chain(query: str, rows: list[dict]) -> tuple[str, dict] | None:
     """问的是谁磨的。父亲只是中间的人，答不到工匠就当没走完。"""
     from memory_core.span_guard import statement_of
@@ -760,21 +846,19 @@ def _taught_paraphrase(query: str, rows: list[dict]) -> tuple[str, dict] | None:
             keeper = _keeper(text)
             if keeper and "四十二" in text and _person_shape(keeper):
                 return keeper, fact
-    if "霜降" in asked and "盐" in asked and re.search(r"叫|啥|什么|名字", asked):
+    if re.search(r"第一座|头一座", asked) and re.search(r"塔", asked) and re.search(r"盐|霜降|雾港|特产|晾|晒|港口|地方", asked):
+        for fact in rows:
+            text = statement_of(fact)
+            tower = _named_tower(text)
+            if tower and ("第一座" in text or "守护" in text):
+                return tower, fact
+    if "霜降" in asked and "盐" in asked and "塔" not in asked and re.search(r"叫|啥|什么|名字", asked):
         for fact in rows:
             text = statement_of(fact)
             if "霜降" not in text or "盐" not in text:
                 continue
             named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", text)
-            if named and not named.group(1).endswith("塔"):
-                return named.group(1), fact
-    if re.search(r"第一座|头一座", asked) and re.search(r"塔", asked) and re.search(r"盐|雾港|特产", asked):
-        for fact in rows:
-            text = statement_of(fact)
-            if "第一座" not in text:
-                continue
-            named = re.search(r"名叫([\u4e00-\u9fff]{2,4}塔)", text)
-            if named:
+            if named and not named.group(1).endswith(("塔", "港")):
                 return named.group(1), fact
     if re.search(r"工匠|师傅", asked) and re.search(r"叫啥|啥名", asked) and not re.search(r"海鸥|鸟|养|妻子|爱人", asked):
         for fact in rows:
@@ -804,6 +888,12 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
             return None
     if re.search(r"是.+还是", query or ""):
         return None
+    child = _daughter_chain(query, rows)
+    if child:
+        return child
+    watched = _keeper_answer(query, rows)
+    if watched:
+        return watched
     made = _maker_chain(query, rows)
     if made:
         return made

@@ -75,6 +75,8 @@ def is_question_fragment(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
         return True
+    if re.search(r"是.+还是", raw):
+        return True
     if is_declarative_fact(raw):
         return False
     if is_imperative_request(raw):
@@ -100,6 +102,8 @@ def is_self_fact_question(text: str) -> bool:
 
 def _looks_like_question(sentence: str) -> bool:
     if sentence.endswith("?") or sentence.endswith("？"):
+        return True
+    if re.search(r"是.+还是", sentence):
         return True
     if any(hint in sentence for hint in _QUESTION_HINTS):
         return True
@@ -233,9 +237,9 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
-    if _looks_like_question(raw) or is_question_fragment(raw):
+    if _looks_like_question(raw) or is_question_fragment(raw) or re.search(r"是.+还是", raw):
         return None
-    if re.search(r"啥|什么|谁|吗|呢|多少", value):
+    if re.search(r"啥|什么|谁|吗|呢|多少|还是", value) or re.search(r"是.+还是", entity):
         return None
     entity, attr = _peel_entity(entity, attr)
     attr = _refine_attr(attr, value, how, raw)
