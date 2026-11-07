@@ -233,9 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261210, "抽查")
+    _generated(service, 20261212, "抽查")
     _open_chat(service)
-    _generated(service, 20261211, "盲测")
+    _generated(service, 20261213, "盲测")
     _known_fence(service)
     _spouse_and_kin(service)
     _new_traps(service)
@@ -339,6 +339,8 @@ def _role_sets(service: MemoryService) -> None:
         omitted_tower_guards,
         question_prefixes,
         relative_makers,
+        gull_father_towers,
+        gull_owner_makers,
     )
     from memory_core.extract import pattern_extract
 
@@ -402,6 +404,24 @@ def _role_sets(service: MemoryService) -> None:
         else:
             print(f"REL_MADE {question} -> {answer}", flush=True)
     prefix_kept = [item for item in question_prefixes() if pattern_extract(item)]
+    gull_hits = 0
+    for question in gull_father_towers():
+        conv = service.create_conversation("海鸥姑娘")["id"]
+        answer = _ask(service, conv, question)
+        head = answer.splitlines()[0] if answer else ""
+        if "白鹭塔" in head and "柯岚" not in head and "柯小满" not in head:
+            gull_hits += 1
+        else:
+            print(f"GULL_TOWER {question} -> {answer}", flush=True)
+    owner_hits = 0
+    for question, _gold in gull_owner_makers():
+        conv = service.create_conversation("海鸥师傅")["id"]
+        answer = _ask(service, conv, question)
+        head = answer.splitlines()[0] if answer else ""
+        if "诺丁" in head and "柯岚" not in head:
+            owner_hits += 1
+        else:
+            print(f"GULL_MADE {question} -> {answer}", flush=True)
     print(
         f"DAUGHTER {daughter}/{len(_DAUGHTER_CHAINS)} "
         f"SALT_TOWER {towers}/{len(_SALT_TOWERS)} "
@@ -412,7 +432,9 @@ def _role_sets(service: MemoryService) -> None:
         f"TOWER_NAME {name_hits}/{len(named_towers())} "
         f"OMIT_GUARD {omit_hits}/{len(omitted_tower_guards())} "
         f"REL_MADE {made_hits}/{len(relative_makers())} "
-        f"PREFIX {len(prefix_kept)}",
+        f"PREFIX {len(prefix_kept)} "
+        f"GULL_TOWER {gull_hits}/{len(gull_father_towers())} "
+        f"GULL_MADE {owner_hits}/{len(gull_owner_makers())}",
         flush=True,
     )
     if daughter < len(_DAUGHTER_CHAINS):
@@ -435,6 +457,10 @@ def _role_sets(service: MemoryService) -> None:
         _fail(f"定语里看守、问的是谁磨 {made_hits}/{len(relative_makers())}")
     if prefix_kept:
         _fail(f"问句的前半句被当成事实：{prefix_kept[:2]}")
+    if len(gull_father_towers()) < 12 or gull_hits < len(gull_father_towers()):
+        _fail(f"三条腿海鸥姑娘她爸爸的灯塔 {gull_hits}/{len(gull_father_towers())}")
+    if len(gull_owner_makers()) < 12 or owner_hits < len(gull_owner_makers()):
+        _fail(f"海鸥主人她爸爸看守、问师傅 {owner_hits}/{len(gull_owner_makers())}")
 
 
 def _spouse_and_kin(service: MemoryService) -> None:
