@@ -31,6 +31,8 @@ def _asks_spouse(query: str) -> bool:
 
 def _asks_maker(query: str) -> bool:
     text = query or ""
+    if _tower_duty(text):
+        return False
     if not re.search(r"打磨|磨镜|谁磨|磨的|磨了", text):
         return False
     return _asked_role(text) == "maker"
@@ -62,6 +64,8 @@ def _asks_father(query: str) -> bool:
 def head_type(query: str) -> str:
     """问句要的是人还是塔，看问的那个中心词，不看句子里顺手出现的年份或地名。"""
     text = query or ""
+    if _tower_duty(text):
+        return "person"
     if re.search(r"多高|塔高|多少米|多少面|几条|几面|哪一年|哪年|什么时候|何时|什么鸟|什么动物|哪国|国籍|什么颜色|什么材料", text):
         return ""
     focus = re.split(r"[，,。；;]", text)[-1]
@@ -72,7 +76,7 @@ def head_type(query: str) -> str:
             return "person"
         if re.search(r"塔$", before):
             return "tower"
-    if re.search(r"哪个人|哪一位|什么人|是谁|谁管|谁守", focus):
+    if re.search(r"哪个人|哪一位|哪位|什么人|是谁|谁管|谁守", focus):
         return "person"
     if re.search(r"哪座塔|什么塔|最早.{0,6}塔|第一.{0,6}塔|头一.{0,4}塔|灯塔叫|一座塔叫", focus):
         return "tower"
@@ -152,8 +156,42 @@ def question_subjects(query: str) -> list[str]:
     return found
 
 
+def _asked_clause(query: str) -> str:
+    """带疑问词的那一小句。前面用来交代别人的分句不算在问的角色里。"""
+    parts = [part.strip() for part in re.split(r"[，,。；;]", query or "") if part.strip()]
+    for part in reversed(parts):
+        if re.search(r"谁|哪个人|哪一位|哪位|什么人|叫什么|叫啥|啥名|什么名字", part):
+            return part
+    return parts[-1] if parts else ""
+
+
+def _tower_duty(query: str) -> bool:
+    """问的是谁对这座塔尽责。磨透镜、建塔、塔叫什么都不是这个角色。
+
+    尽责用的是哪一个动词不重要。问句把塔交给一个人，又不是让这个人去磨或者去建，就是看守。
+    """
+    clause = _asked_clause(query)
+    if not clause or not re.search(r"谁|哪个人|哪一位|哪位|什么人|叫什么|叫啥|啥名|什么名字", clause):
+        return False
+    if re.search(r"第一次|点亮|点灯|建成|发明|设计", clause):
+        return False
+    if re.search(r"打磨|磨镜|磨透镜|研磨|磨了|磨的|磨成|磨好|谁磨|建于|建造|修建|谁建", clause):
+        return False
+    if re.search(r"谁的女儿|谁的闺女|女儿叫|妻子|爱人|老婆|丈夫|老公|太太", clause):
+        return False
+    if re.search(r"塔(?:的名字)?(?:叫什么|叫啥|啥名)", clause) and "人" not in clause:
+        return False
+    if re.search(r"哪座塔|什么塔", clause) and not re.search(r"谁|人", clause):
+        return False
+    if "塔" in clause:
+        return True
+    return "塔" in (query or "") and bool(_bound_makers(query))
+
+
 def _asked_role(query: str) -> str:
     text = query or ""
+    if _tower_duty(text):
+        return "keeper"
     marks: list[tuple[int, str]] = []
     for word, role in (
         ("负责守", "keeper"),
@@ -211,7 +249,7 @@ def _asked_role(query: str) -> str:
         marks.append((text.rfind("养"), "owner"))
     if not marks:
         return ""
-    anchors = [item.start() for item in re.finditer(r"哪个人|哪一位|什么人|谁|叫什么|叫啥|啥名", text)]
+    anchors = [item.start() for item in re.finditer(r"哪个人|哪一位|哪位|什么人|谁|叫什么|叫啥|啥名", text)]
     anchor = anchors[-1] if anchors else len(text)
     marks.sort(key=lambda item: (abs(item[0] - anchor), -item[0]))
     return marks[0][1]
@@ -226,6 +264,15 @@ def _bound_makers(query: str) -> set[str]:
             found.add(match.group(1))
     for match in re.finditer(r"([\u4e00-\u9fff]{2,3})打磨", text):
         if _person_shape(match.group(1)) and "谁" not in match.group(1) and "镜" not in match.group(1):
+            found.add(match.group(1))
+    for match in re.finditer(r"(?:打磨|磨镜|磨透镜|磨).{0,8}是([\u4e00-\u9fff]{2,3})", text):
+        if _person_shape(match.group(1)) and "谁" not in match.group(1):
+            found.add(match.group(1))
+    for match in re.finditer(r"是([\u4e00-\u9fff]{2,3})(?:打磨|磨)", text):
+        if _person_shape(match.group(1)):
+            found.add(match.group(1))
+    for match in re.finditer(r"([\u4e00-\u9fff]{2,3})只(?:是|负责).{0,10}(?:磨|打磨|工匠|师傅)", text):
+        if _person_shape(match.group(1)):
             found.add(match.group(1))
     return found
 
@@ -819,9 +866,10 @@ def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
         return None
     if _asks_daughter(asked) or _asks_spouse(asked) or _asks_maker(asked):
         return None
-    if not re.search(r"守护|看守|守塔|谁守|在守|守着|看着|看管|值守|管着|负责守|谁管", asked):
+    duty = _tower_duty(asked)
+    if not duty and not re.search(r"守护|看守|守塔|谁守|在守|守着|看着|看管|管着|负责守|谁管", asked):
         return None
-    if not re.search(r"谁|哪个人|哪一位|什么人|叫什么|叫啥|啥名|什么名字", asked):
+    if not re.search(r"谁|哪个人|哪一位|哪位|什么人|叫什么|叫啥|啥名|什么名字", asked):
         return None
     target = re.search(r"(?:守护|看守|守着|守)([\u4e00-\u9fff]{1,8})", asked)
     if target and not re.search(r"塔|灯", target.group(1)) and target.group(1) not in {"人", "的人", "者"}:

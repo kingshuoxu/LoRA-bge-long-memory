@@ -233,9 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261206, "抽查")
+    _generated(service, 20261208, "抽查")
     _open_chat(service)
-    _generated(service, 20261207, "盲测")
+    _generated(service, 20261209, "盲测")
     _known_fence(service)
     _spouse_and_kin(service)
     _new_traps(service)
@@ -331,13 +331,14 @@ def _role_sets(service: MemoryService) -> None:
                 print(f"{label} {question} -> {answer}", flush=True)
         return hits
 
-    from memory_core.blind_heldout import diverse_guards, diverse_towers
+    from memory_core.blind_heldout import diverse_guards, diverse_towers, duty_watchers
 
     daughter = ask("DAUGHTER", _DAUGHTER_CHAINS, "柯小满", "柯岚")
     towers = ask("SALT_TOWER", _SALT_TOWERS, "白鹭塔", "星砂盐")
     guards = ask("GUARD", _GUARD_NOT_MAKE, "柯岚", "诺丁")
     fresh_guards = diverse_guards()
     fresh_towers = diverse_towers()
+    duties = duty_watchers()
     guard_hits = 0
     type_ok = 0
     for question in fresh_guards:
@@ -357,12 +358,21 @@ def _role_sets(service: MemoryService) -> None:
             tower_hits += 1
         else:
             print(f"FRESH_TOWER {question} -> {answer}", flush=True)
+    duty_hits = 0
+    for question in duties:
+        conv = service.create_conversation("尽责")["id"]
+        answer = _ask(service, conv, question)
+        if "柯岚" in answer and "诺丁" not in answer and not any(mark in answer for mark in ("没提到", "不确定", "不在记忆")):
+            duty_hits += 1
+        else:
+            print(f"DUTY {question} -> {answer}", flush=True)
     print(
         f"DAUGHTER {daughter}/{len(_DAUGHTER_CHAINS)} "
         f"SALT_TOWER {towers}/{len(_SALT_TOWERS)} "
         f"GUARD {guards}/{len(_GUARD_NOT_MAKE)} "
         f"FRESH_GUARD {guard_hits}/{len(fresh_guards)} type {type_ok} "
-        f"FRESH_TOWER {tower_hits}/{len(fresh_towers)}",
+        f"FRESH_TOWER {tower_hits}/{len(fresh_towers)} "
+        f"DUTY {duty_hits}/{len(duties)}",
         flush=True,
     )
     if daughter < len(_DAUGHTER_CHAINS):
@@ -375,6 +385,8 @@ def _role_sets(service: MemoryService) -> None:
         _fail(f"换说法的守塔题 {guard_hits}/{len(fresh_guards)}，类型对的 {type_ok}")
     if len(fresh_towers) < 8 or tower_hits < len(fresh_towers):
         _fail(f"换说法的早塔题 {tower_hits}/{len(fresh_towers)}")
+    if len(duties) < 12 or duty_hits < len(duties):
+        _fail(f"换说法的尽责守塔 {duty_hits}/{len(duties)}")
 
 
 def _spouse_and_kin(service: MemoryService) -> None:
