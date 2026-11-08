@@ -233,9 +233,9 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
-    _generated(service, 20261212, "抽查")
+    _generated(service, 20261214, "抽查")
     _open_chat(service)
-    _generated(service, 20261213, "盲测")
+    _generated(service, 20261215, "盲测")
     _known_fence(service)
     _spouse_and_kin(service)
     _new_traps(service)
@@ -341,6 +341,8 @@ def _role_sets(service: MemoryService) -> None:
         relative_makers,
         gull_father_towers,
         gull_owner_makers,
+        duty_lighthouse_names,
+        charged_grinders,
     )
     from memory_core.extract import pattern_extract
 
@@ -422,6 +424,24 @@ def _role_sets(service: MemoryService) -> None:
             owner_hits += 1
         else:
             print(f"GULL_MADE {question} -> {answer}", flush=True)
+    duty_name_hits = 0
+    for question in duty_lighthouse_names():
+        conv = service.create_conversation("执勤塔")["id"]
+        answer = _ask(service, conv, question)
+        head = answer.splitlines()[0] if answer else ""
+        if "白鹭塔" in head and not any(mark in head for mark in ("柯岚", "柯小满", "阿哨")):
+            duty_name_hits += 1
+        else:
+            print(f"DUTY_NAME {question} -> {answer}", flush=True)
+    grind_hits = 0
+    for question, _gold in charged_grinders():
+        conv = service.create_conversation("负责磨")["id"]
+        answer = _ask(service, conv, question)
+        head = answer.splitlines()[0] if answer else ""
+        if "诺丁" in head and "柯岚" not in head:
+            grind_hits += 1
+        else:
+            print(f"CHARGED {question} -> {answer}", flush=True)
     print(
         f"DAUGHTER {daughter}/{len(_DAUGHTER_CHAINS)} "
         f"SALT_TOWER {towers}/{len(_SALT_TOWERS)} "
@@ -434,7 +454,9 @@ def _role_sets(service: MemoryService) -> None:
         f"REL_MADE {made_hits}/{len(relative_makers())} "
         f"PREFIX {len(prefix_kept)} "
         f"GULL_TOWER {gull_hits}/{len(gull_father_towers())} "
-        f"GULL_MADE {owner_hits}/{len(gull_owner_makers())}",
+        f"GULL_MADE {owner_hits}/{len(gull_owner_makers())} "
+        f"DUTY_NAME {duty_name_hits}/{len(duty_lighthouse_names())} "
+        f"CHARGED {grind_hits}/{len(charged_grinders())}",
         flush=True,
     )
     if daughter < len(_DAUGHTER_CHAINS):
@@ -461,6 +483,10 @@ def _role_sets(service: MemoryService) -> None:
         _fail(f"三条腿海鸥姑娘她爸爸的灯塔 {gull_hits}/{len(gull_father_towers())}")
     if len(gull_owner_makers()) < 12 or owner_hits < len(gull_owner_makers()):
         _fail(f"海鸥主人她爸爸看守、问师傅 {owner_hits}/{len(gull_owner_makers())}")
+    if len(duty_lighthouse_names()) < 12 or duty_name_hits < len(duty_lighthouse_names()):
+        _fail(f"执勤或站岗的灯塔名称 {duty_name_hits}/{len(duty_lighthouse_names())}")
+    if len(charged_grinders()) < 12 or grind_hits < len(charged_grinders()):
+        _fail(f"负责打磨仍答成看守 {grind_hits}/{len(charged_grinders())}")
 
 
 def _spouse_and_kin(service: MemoryService) -> None:

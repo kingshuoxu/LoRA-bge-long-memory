@@ -166,6 +166,15 @@ def _asked_kind(query: str) -> str:
     clause = re.sub(r"到底|究竟|又", "", _asked_clause(query)).rstrip("？?。 ")
     if not clause:
         return ""
+    # 问的是灯塔本身：叫什么、名称、是哪一座。值守、执勤、站岗只是指出哪一座。
+    if re.search(r"(?:灯塔|这座塔|那座塔|的塔|一座塔)(?:叫什么|叫啥|啥名|名称|的名称|的名字)", clause):
+        return "tower"
+    if re.search(r"是哪一座|哪一座灯塔|哪座灯塔|什么灯塔", clause):
+        return "tower"
+    if re.search(r"哪一座灯塔|是哪一座|哪座灯塔|什么灯塔|哪一座塔", clause):
+        return "tower"
+    if re.search(r"名称是什么|的名称", clause) and "塔" in (query or "") and "盐" not in clause:
+        return "tower"
     if re.search(r"(?:师傅|工匠)(?:叫什么|叫啥|啥名|什么名字)", clause):
         return "person"
     if re.search(r"的(?:叫什么|叫啥|啥名)", clause) and not re.search(r"塔叫", clause):
@@ -207,11 +216,30 @@ def _verb_near_wh(clause: str) -> str:
     return ""
 
 
+def _charged_with(clause: str) -> str:
+    """「负责 V」的角色看 V。负责打磨是工匠，负责看守是守护者。"""
+    matched = re.search(r"负责([\u4e00-\u9fff]{1,6})", clause or "")
+    if not matched:
+        return ""
+    verb = matched.group(1)
+    if re.match(r"(?:打磨|磨)", verb):
+        return "maker"
+    if re.match(r"(?:看守|守护|值守|看管|照看|守)", verb):
+        return "keeper"
+    return ""
+
+
 def _asking_is_make(query: str) -> bool:
     """问的是磨镜的师傅，不是定语里负责看守的那个人。"""
     if _asked_kind(query) == "tower":
         return False
     clause = re.sub(r"到底|究竟|又", "", _asked_clause(query))
+    if _charged_with(clause) == "maker":
+        return True
+    if re.search(r"(?:师傅|工匠)", clause) and re.search(r"磨|打磨|镜", query or "") and re.search(
+        r"叫什么|叫啥|啥名|是谁|哪位", clause
+    ):
+        return True
     if re.search(r"磨|镜|打磨", clause) and re.search(
         r"(?:师傅|工匠).{0,6}(?:叫什么|叫啥|啥名|是谁|是哪)", clause
     ):
@@ -232,7 +260,7 @@ def _tower_duty(query: str) -> bool:
     if _asked_kind(query) != "person" or _asking_is_make(query):
         return False
     clause = _asked_clause(query)
-    if _verb_near_wh(clause) in {"maker", "kin"}:
+    if _charged_with(clause) == "maker" or _verb_near_wh(clause) in {"maker", "kin"}:
         return False
     if re.search(r"谁的女儿|谁的闺女|女儿叫", clause):
         return False
@@ -240,10 +268,17 @@ def _tower_duty(query: str) -> bool:
         return False
     if re.search(r"妻子|爱人|老婆|丈夫|老公|太太|配偶", clause):
         return False
-    if "塔" in (query or ""):
+    if _charged_with(clause) == "keeper":
         return True
-    clause_has_grind = bool(re.search(r"磨|打磨", clause))
-    if _bound_makers(query) and not clause_has_grind:
+    if re.search(r"日常", clause) and re.search(r"谁|哪位|守护|看守|值守", clause):
+        return True
+    if re.search(r"守护|看守|值守|看管|守塔|守着|站岗|执勤|守望|在守|谁守|管着", clause) and re.search(
+        r"谁|哪位|哪个人|那位|人", clause
+    ):
+        return True
+    if "塔" in clause:
+        return True
+    if _bound_makers(query) and not re.search(r"磨|打磨", clause):
         return True
     return False
 
@@ -576,7 +611,7 @@ def _claimed_role_mismatch(query: str, statement: str) -> bool:
     """「诺丁守护的塔」不能用诺丁只是工匠的那一句。"""
     text = query or ""
     claimed = re.search(r"([\u4e00-\u9fff]{2,4})(?:在.{0,4})?(?:守护|看守)", text)
-    if claimed and "谁" not in claimed.group(1) and "的" not in claimed.group(1) and not claimed.group(1).endswith(("父亲", "女儿", "爸爸", "主人", "闺女", "老爸", "爹", "爸")) and claimed.group(1) not in {"父亲", "女儿", "爸爸", "主人", "闺女", "老爸"} and _person_shape(claimed.group(1)):
+    if claimed and not re.search(r"谁|哪|什么", claimed.group(1)) and "的" not in claimed.group(1) and not claimed.group(1).endswith(("父亲", "女儿", "爸爸", "主人", "闺女", "老爸", "爹", "爸")) and claimed.group(1) not in {"父亲", "女儿", "爸爸", "主人", "闺女", "老爸"} and _person_shape(claimed.group(1)):
         if _keeper(statement) != claimed.group(1):
             return True
     asked = _asked_role(text)
@@ -903,7 +938,7 @@ def _tower_name_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
                     return tower, fact
     if re.search(r"诺丁|工匠|师傅", asked) and not re.search(r"父亲|爸|爹|女儿|主人|十六|透镜", asked):
         return None
-    if re.search(r"叫什么|叫啥|啥名|什么名字|的名字|哪座|什么塔", asked):
+    if re.search(r"叫什么|叫啥|啥名|什么名字|的名字|名称|哪座|哪一座|什么塔|是哪一", asked):
         for fact in rows:
             text = statement_of(fact)
             if "名叫" not in text:
@@ -998,7 +1033,9 @@ def _maker_chain(query: str, rows: list[dict]) -> tuple[str, dict] | None:
     asked = query or ""
     if re.search(r"海鸥|阿哨|鸟", asked) and "透镜" not in asked and "塔" not in asked:
         return None
-    claimed = re.search(r"([\u4e00-\u9fff]{2,4})打磨", asked)
+    claimed = re.search(r"([\u4e00-\u9fff]{2,3})打磨", asked)
+    if claimed and claimed.group(1) in {"负责", "正在", "给人", "前来"}:
+        claimed = None
     tower = ""
     parent = _parent_fact(query, rows)
     if parent:
