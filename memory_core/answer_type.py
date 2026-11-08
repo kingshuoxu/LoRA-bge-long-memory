@@ -613,11 +613,13 @@ def _claimed_role_mismatch(query: str, statement: str) -> bool:
     """「诺丁守护的塔」不能用诺丁只是工匠的那一句。"""
     text = query or ""
     claimed = re.search(r"([\u4e00-\u9fff]{2,4})(?:在.{0,4})?(?:守护|看守)", text)
-    if claimed and not re.search(r"谁|哪|什么", claimed.group(1)) and "的" not in claimed.group(1) and not claimed.group(1).endswith(("父亲", "女儿", "爸爸", "主人", "闺女", "老爸", "爹", "爸")) and claimed.group(1) not in {"父亲", "女儿", "爸爸", "主人", "闺女", "老爸"} and _person_shape(claimed.group(1)):
+    if claimed and not re.search(r"谁|哪|什么|负责|父亲|主人|爸爸|女儿|闺女|看守|守护", claimed.group(1)) and "的" not in claimed.group(1) and not claimed.group(1).endswith(("爹", "爸")) and _person_shape(claimed.group(1)):
         if _keeper(statement) != claimed.group(1):
             return True
     asked = _asked_role(text)
-    claimed_make = re.search(r"([\u4e00-\u9fff]{2,4})打磨", text)
+    claimed_make = re.search(r"([\u4e00-\u9fff]{2,3})打磨", text)
+    if claimed_make and claimed_make.group(1) in {"负责", "正在", "给人", "前来"}:
+        claimed_make = None
     if (
         asked != "keeper"
         and claimed_make
