@@ -168,7 +168,9 @@ def _asked_kind(query: str) -> str:
     clause = re.sub(r"到底|究竟|又", "", _asked_clause(query)).rstrip("？?。 ")
     if not clause:
         return ""
-    # 问的是灯塔本身：叫什么、名称、是哪一座。值守、执勤、站岗只是指出哪一座。
+    # 问的是灯塔本身：叫什么、名叫啥、名称、是哪一座。值守、执勤、站岗只是指出哪一座。
+    if re.search(r"塔名?叫(?:啥来着|什么名字|什么|啥名|啥)", clause):
+        return "tower"
     if re.search(r"(?:灯塔|这座塔|那座塔|的塔|一座塔)(?:叫什么|叫啥|啥名|名称|的名称|的名字)", clause):
         return "tower"
     if re.search(r"是哪一座|哪一座灯塔|哪座灯塔|什么灯塔", clause):
@@ -184,7 +186,7 @@ def _asked_kind(query: str) -> str:
     named = re.search(r"(?:叫什么名字|叫什么名|叫什么|叫啥名|叫啥|啥名|什么名字|的名字)", clause)
     if named:
         before = clause[: named.start()]
-        if re.search(r"塔$", before):
+        if re.search(r"塔名?$", before):
             return "tower"
         if re.search(r"(?:人|那位|哪位|谁|一位)$", before):
             return "person"
@@ -192,9 +194,8 @@ def _asked_kind(query: str) -> str:
             return "tower"
     if re.fullmatch(r"(?:名字)?(?:叫什么|叫啥|叫做什么|名字是什么)(?:名字)?", clause) and "塔" in (query or ""):
         return "tower"
-    if re.search(r"名字是什么|名叫什么|叫做什么|名字叫什么", clause) and "塔" in (query or ""):
-        if not re.search(r"谁|哪位|那位|哪个人", clause):
-            return "tower"
+    if re.search(r"塔名?叫(?:啥来着|什么|啥)", clause) and not re.search(r"谁|哪位|那位|哪个人", clause):
+        return "tower"
     if re.search(r"谁|哪个人|哪一位|哪位|什么人", clause) and not re.search(r"塔叫", clause):
         return "person"
     if re.search(r"哪座塔|什么塔|哪一座塔|哪座灯塔", clause):

@@ -9,7 +9,7 @@ const path = require("path");
 const { _electron: electron } = require("playwright");
 
 const root = path.resolve(__dirname, "..", "..");
-const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.27");
+const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.28");
 const pdf = path.join(root, "tests", "fixtures", "wugang", "wugang_chrome.pdf");
 const report = [];
 
