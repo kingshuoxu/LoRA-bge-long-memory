@@ -37,6 +37,8 @@ def _asks_daughter(query: str) -> bool:
     text = query or ""
     if _asks_maker(text) or re.search(r"什么鸟|什么动物|鸟叫|海鸥叫|哪座塔|什么塔|塔叫|谁的女儿|谁的闺女|丈夫|妻子|老婆|老公|配偶|爱人", text):
         return False
+    if re.search(r"塔的(?:女儿|闺女|丫头)", text) and not re.search(r"(?:人|谁|爸|父|爹)的(?:女儿|闺女|丫头)", text):
+        return False
     return bool(re.search(r"女儿|闺女|丫头", text)) and bool(re.search(r"叫什么|叫啥|啥名|是谁|什么名字", text))
 
 
