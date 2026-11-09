@@ -12,8 +12,6 @@ from pathlib import Path
 
 import re
 
-import torch
-
 from memory_core.paths import ensure_scripts_path
 from memory_core.prompts import has_cjk
 
@@ -346,6 +344,8 @@ def entity_mentioned(name: str, query: str) -> bool:
         return _mentions_self(query)
     if name_bounded(name, query):
         return True
+    if has_cjk(name):
+        return False
     ensure_scripts_path()
     from router import entity_key
 
@@ -538,6 +538,8 @@ class FactBank:
 
 
 def build_fact_bank(facts: list[dict]) -> FactBank | None:
+    import torch
+
     ensure_scripts_path()
     from router import embed
 
@@ -574,6 +576,8 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
 
 
 def save_fact_bank(path: Path, bank: FactBank) -> None:
+    import torch
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -588,6 +592,8 @@ def save_fact_bank(path: Path, bank: FactBank) -> None:
 
 
 def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
+    import torch
+
     path = Path(path)
     if not path.is_file():
         return None
