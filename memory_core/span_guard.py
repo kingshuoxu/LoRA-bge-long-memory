@@ -237,12 +237,82 @@ def about_user(query: str) -> bool:
     return bool(re.search(r"(?<![\u4e00-\u9fff])我(?:的|住|叫|是)?", text))
 
 
+# 从长到短。先去掉「叫什么名字」，不能只削掉「什么名字」而留下一个「叫」。
+_QUESTION_TAILS = (
+    "叫什么名字来着",
+    "叫什么名字",
+    "叫啥名字",
+    "叫啥来着",
+    "叫什么名",
+    "叫啥名",
+    "是什么名字",
+    "的名字是什么",
+    "的名字是啥",
+    "什么名字",
+    "叫什么",
+    "叫啥",
+    "是什么",
+    "是谁",
+    "是啥",
+    "是多少",
+    "有多少",
+    "多少",
+    "吗",
+    "呢",
+)
+
+_DANGLING_END = set("叫是的于为和与被把给从向对让使由")
+
+
+def _strip_question_tail(text: str) -> str:
+    changed = True
+    while text and changed:
+        changed = False
+        for tail in _QUESTION_TAILS:
+            if text.endswith(tail) and len(text) > len(tail):
+                text = text[: -len(tail)].strip()
+                changed = True
+                break
+    text = re.sub(
+        r"^(?P<who>[\u4e00-\u9fff·]{1,8})毕业于哪所(?P<what>[\u4e00-\u9fff]{1,8})$",
+        r"\g<who>的\g<what>",
+        text,
+    )
+    text = re.sub(
+        r"^(?P<who>[\u4e00-\u9fff·]{1,8})就读的(?P<what>[\u4e00-\u9fff]{1,8})$",
+        r"\g<who>的\g<what>",
+        text,
+    )
+    if text.endswith("的名字") and len(text) > len("的名字"):
+        text = text[: -len("的名字")].strip()
+    while text and text[-1] in _DANGLING_END:
+        if text[-1] == "的" and ("还是" in text or text.endswith(("男的", "女的", "公的", "母的", "对的", "错的"))):
+            break
+        text = text[:-1].strip()
+    return text
+
+
 def _asked_clause(query: str) -> str:
-    """保留问句里真正在问的那一段，不改写成另一个属性。"""
+    """保留问句里真正在问的那一段。问句尾巴不能剩一个叫、是、的、于。"""
     text = (query or "").strip().rstrip("？?。！!")
     text = re.sub(r"^(?:请问|问一下|告诉我)", "", text).strip()
-    text = re.sub(r"(?:是谁|叫什么|叫啥|是什么|什么名字)$", "", text).strip()
+    text = _strip_question_tail(text)
     return text or (query or "").strip().rstrip("？?")
+
+
+def refusal_dangling(answer: str) -> str:
+    """弃权句末如果停在叫、是、的、于，返回那个字。完整的「女的」「还是」不算。"""
+    raw = answer or ""
+    if not any(mark in raw for mark in ("没记过", "没提到", "不在记忆里", "不记得", "还没告诉", "我不确定")):
+        return ""
+    text = raw.strip().rstrip("。！!？? \n")
+    if not text or "还是" in text:
+        return ""
+    if text.endswith(("男的", "女的", "公的", "母的", "对的", "错的")):
+        return ""
+    if text[-1] in _DANGLING_END:
+        return text[-1]
+    return ""
 
 
 def _subject(query: str, facts: list[dict]) -> str:

@@ -636,11 +636,14 @@ class CrossEntityTests(unittest.TestCase):
             "沈星河的学校的名字是什么？",
             "沈星河毕业于哪所学校？",
         ]
+        from memory_core.span_guard import refusal_dangling
+
         for question in questions:
             answer = (read_memory(question, [cat, home], None) or {}).get("text") or ""
             self.assertNotIn("云朵", answer, question)
             self.assertNotIn("青岚", answer, question)
             self.assertIn("没记过", answer, question)
+            self.assertEqual(refusal_dangling(answer), "", answer)
             known = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
             self.assertIn("青藤中学", known, question)
             self.assertNotIn("云朵", known, question)
@@ -648,10 +651,35 @@ class CrossEntityTests(unittest.TestCase):
             answer = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
             self.assertNotIn("云朵", answer, question)
             self.assertNotIn("青藤", answer, question)
+            self.assertEqual(refusal_dangling(answer), "", answer)
         for question in ("沈星河的猫叫什么名字？", "沈星河养的那只猫叫什么名字？", "沈星河家的猫咪叫啥？"):
             answer = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
             self.assertIn("云朵", answer, question)
             self.assertNotIn("青藤", answer, question)
+
+    def test_abstain_wording_keeps_the_attribute(self):
+        from memory_core.span_guard import fixed_refusal, refusal_dangling
+
+        expected = {
+            "沈星河就读的学校叫什么名字？": "我没记过沈星河的学校。",
+            "周晚宁就读的学校叫什么名字？": "我没记过周晚宁的学校。",
+            "请问沈星河的学校叫啥？": "我没记过沈星河的学校。",
+            "沈星河的学校的名字是什么？": "我没记过沈星河的学校。",
+            "沈星河毕业于哪所学校？": "我没记过沈星河的学校。",
+            "沈星河在哪所学校上学？": "我没记过沈星河在哪所学校上学。",
+            "沈星河的学校叫什么？": "我没记过沈星河的学校。",
+            "沈星河的狗叫什么名字？": "我没记过沈星河的狗。",
+            "沈星河养的狗叫啥？": "我没记过沈星河养的狗。",
+            "沈星河的母亲是谁？": "我没记过沈星河的母亲。",
+            "沈星河的电话是多少？": "我没记过沈星河的电话。",
+            "沈星河的汽车颜色是什么？": "我没记过沈星河的汽车颜色。",
+        }
+        for question, answer in expected.items():
+            got = fixed_refusal(question, [])
+            self.assertEqual(got, answer, question)
+            self.assertEqual(refusal_dangling(got), "", got)
+        self.assertEqual(refusal_dangling("我没记过沈星河就读的学校叫。"), "叫")
+        self.assertEqual(refusal_dangling("我记得柯小满，但没提到是男的还是女的。"), "")
 
     def test_wrong_cited_value_fails_the_job(self):
         from memory_core.e2e_check import wrong_citations

@@ -338,6 +338,18 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         print(line, flush=True)
     if cited:
         raise RuntimeError("答成了错误的取值，验收不能靠比例放过：" + cited[0])
+    from memory_core.span_guard import refusal_dangling
+
+    dangling = []
+    for item in abstain_details:
+        mark = refusal_dangling(str(item.get("answer") or ""))
+        if mark:
+            dangling.append(f"Q: {item.get('q')} A: {item.get('answer')} dangling={mark}")
+    print("E2E_DANGLING", len(dangling), flush=True)
+    for line in dangling:
+        print(line, flush=True)
+    if dangling:
+        raise RuntimeError("弃权句被截断了：" + dangling[0])
     print("E2E_GENERAL_ACTIVATED", f"{report['general_activated_new_expert']}/{report['general_total']}", flush=True)
     print("E2E_CMMLU_ACTIVATED", f"{report['cmmlu_activated_new_expert']}/{report['cmmlu_total']}", flush=True)
     print("E2E_DEVICE", report["device"], "lr", status.get("lr"), "dtype", status.get("dtype"), "best_loss", status.get("best_loss"), flush=True)
