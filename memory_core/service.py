@@ -1259,6 +1259,25 @@ class MemoryService:
                         recall["expert"] = None
                         recall["mounted_expert"] = None
                         recall["mounted_label"] = "基座"
+            if not fact_answer and not open_task:
+                from memory_core.span_guard import fixed_refusal, personal_attribute_question
+
+                if personal_attribute_question(content):
+                    fact_answer = fixed_refusal(content)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "没记住的个人属性不交给基座编"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)

@@ -311,6 +311,10 @@ def abstain_reply(entity: str, text: str) -> str:
         if who:
             return f"我不记得你告诉过我{who}的生日。"
         return "我不记得你告诉过我生日。"
+    if not english and any(mark in text for mark in ("学校", "上学", "毕业", "就读")):
+        from memory_core.span_guard import fixed_refusal
+
+        return fixed_refusal(text)
     if english:
         if topic:
             return f"{topic} is not in memory."

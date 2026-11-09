@@ -336,8 +336,9 @@ class ReplyPolicyTests(unittest.TestCase):
         self.assertIn("手动磨豆机", product[0])
         self.assertEqual(product[3], "entity_first")
         school = reply("周衡川毕业于哪所大学？")
-        self.assertIn("不在记忆里", school[0])
+        self.assertTrue("不在记忆里" in school[0] or "没记过" in school[0], school[0])
         self.assertNotIn("豆青", school[0])
+        self.assertEqual(school[0], "我没记过周衡川的大学。")
         self.assertEqual(school[3], "entity_grounded")
         overview = reply("overview of 周衡川")
         self.assertEqual(overview[3], "entity_overview")
@@ -680,6 +681,21 @@ class CrossEntityTests(unittest.TestCase):
             self.assertEqual(refusal_dangling(got), "", got)
         self.assertEqual(refusal_dangling("我没记过沈星河就读的学校叫。"), "叫")
         self.assertEqual(refusal_dangling("我记得柯小满，但没提到是男的还是女的。"), "")
+        from memory_core.e2e_check import abstain_ok, invented_school, wrong_citations
+        from memory_core.grounding import abstain_reply
+
+        self.assertEqual(abstain_reply("沈星河", "沈星河在哪所学校上学？"), "我没记过沈星河在哪所学校上学。")
+        self.assertEqual(abstain_reply("周晚宁", "周晚宁的学校叫什么？"), "我没记过周晚宁的学校。")
+        invented = "周晚宁的学校叫北京师范大学附属中学。"
+        self.assertEqual(invented_school("周晚宁的学校叫什么？", invented), "中学")
+        self.assertTrue(wrong_citations([
+            {"q": "周晚宁的学校叫什么？", "answer": invented, "abstain": True, "kind": "never"},
+        ]))
+        self.assertTrue(abstain_ok(
+            {"reason": "entity_grounded", "expert": None, "fired": False},
+            "没有存过关于沈星河的这件事。",
+            "沈星河",
+        ))
 
     def test_wrong_cited_value_fails_the_job(self):
         from memory_core.e2e_check import wrong_citations

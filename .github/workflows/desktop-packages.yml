@@ -134,11 +134,22 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           # 没有证书时保持 signAndEditExecutable=false。填了 CSC_LINK 才签名。
+          # GitHub 下载 appimage 工具偶发 504，隔开再试。
           if [ -n "${CSC_LINK:-}" ]; then
-            npx electron-builder --publish never -c.win.signAndEditExecutable=true
+            build=(npx electron-builder --publish never -c.win.signAndEditExecutable=true)
           else
-            npx electron-builder --publish never
+            build=(npx electron-builder --publish never)
           fi
+          ok=0
+          for attempt in 1 2 3; do
+            if "${build[@]}"; then
+              ok=1
+              break
+            fi
+            echo "electron-builder failed, attempt ${attempt}"
+            sleep $((attempt * 20))
+          done
+          test "$ok" = 1
 
       - name: Cache embedding and base models
         uses: actions/cache@v4

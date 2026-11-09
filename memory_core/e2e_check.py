@@ -159,17 +159,33 @@ def cited_stored_value(answer: str, allowed: str = "") -> str:
     return ""
 
 
+def invented_school(question: str, answer: str) -> str:
+    """学校没记下时，回答里却出现了一所学校的名字。"""
+    if not any(mark in (question or "") for mark in ("学校", "上学", "毕业", "就读")):
+        return ""
+    if any(mark in (answer or "") for mark in ("没记过", "不在记忆里", "没提到", "不记得", "没有存过", "还没告诉", "我不确定", "没有找到")):
+        return ""
+    for suffix in ("中学", "小学", "大学", "学院"):
+        if suffix in (answer or ""):
+            return suffix
+    return ""
+
+
 def wrong_citations(rows: list[dict]) -> list[str]:
     """答成了别的取值，或没教过的属性没有弃权。调用方应据此让进程失败。"""
     found = []
     for item in rows:
         answer = str(item.get("answer") or "")
         gold = str(item.get("gold") or "")
+        question = str(item.get("q") or "")
         value = cited_stored_value(answer, gold)
+        school = invented_school(question, answer)
         if value:
-            found.append(f"Q: {item.get('q')} A: {answer} cited={value}")
+            found.append(f"Q: {question} A: {answer} cited={value}")
+        elif school:
+            found.append(f"Q: {question} A: {answer} cited={school}")
         elif item.get("kind") == "never" and not item.get("abstain"):
-            found.append(f"Q: {item.get('q')} A: {answer} cited=not-abstained")
+            found.append(f"Q: {question} A: {answer} cited=not-abstained")
     return found
 
 
@@ -180,8 +196,9 @@ def abstain_ok(route: dict, answer: str, expert: str) -> bool:
     """
     if route.get("reason") == "entity_grounded":
         text = answer or ""
-        named = any(mark in text for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得", "没记过")) or "not in memory" in text.casefold() or "haven't told me" in text.casefold()
-        return bool(named and route.get("expert") == expert)
+        named = any(mark in text for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得", "没记过", "没有存过")) or "not in memory" in text.casefold() or "haven't told me" in text.casefold()
+        route_expert = route.get("expert")
+        return bool(named and (not route_expert or route_expert == expert))
     return not (route.get("fired") and route.get("expert") == expert)
 
 

@@ -300,6 +300,16 @@ def _asked_clause(query: str) -> str:
     return text or (query or "").strip().rstrip("？?")
 
 
+def personal_attribute_question(text: str) -> bool:
+    """某人的学校、猫、电话这类属性。没记下时不能交给基座编一个。"""
+    raw = text or ""
+    if not any(mark in raw for mark in ("学校", "上学", "毕业", "就读", "猫", "猫咪", "狗", "宠物", "电话", "母亲", "父亲", "生日", "汽车")):
+        return False
+    if not re.search(r"[？?]|什么|啥|哪|谁|多少|吗", raw):
+        return False
+    return bool(re.search(r"[\u4e00-\u9fff]{2,4}(?:的|在哪|就读|毕业)", raw))
+
+
 def refusal_dangling(answer: str) -> str:
     """弃权句末如果停在叫、是、的、于，返回那个字。完整的「女的」「还是」不算。"""
     raw = answer or ""
