@@ -185,13 +185,13 @@ def _inside(home: Path, path: Path) -> bool:
     return True
 
 
-def _append_missing_fact(home: Path, relative: str, fact: dict) -> bool:
-    """把一条不再判定为垃圾的事实放回原来的专家文件。已有的不重复放。"""
+def _append_missing_fact(home: Path, relative: str, fact: dict, *, allow_junk: bool = False) -> bool:
+    """把事实放回原来的专家文件。已有的不重复放。自动恢复时跳过仍然是垃圾的句子。"""
     target = home / relative
     if not _inside(home, target) or target.name != "fact_memory.json":
         return False
     statement = _statement_of(fact)
-    if not statement or is_0214_junk(statement):
+    if not statement or (not allow_junk and is_0214_junk(statement)):
         return False
     memory = _read(target)
     if not isinstance(memory, dict):
@@ -235,6 +235,9 @@ def restore_legitimate_from_cleanup(home: Path) -> int:
         if fact and text and not is_0214_junk(text) and _append_missing_fact(home, relative, fact):
             restored += 1
             continue
+        if not fact and text and not is_0214_junk(text) and _append_pending(home, relative, text):
+            restored += 1
+            continue
         remaining.append(item)
     if quarantine_path.is_file():
         atomic_write_json(quarantine_path, {"items": remaining})
@@ -254,8 +257,31 @@ def restore_legitimate_from_cleanup(home: Path) -> int:
     return restored
 
 
+def _pending_has(rows: list, text: str) -> bool:
+    for item in rows:
+        if item == text:
+            return True
+        if isinstance(item, dict) and str(item.get("text") or item.get("statement") or "") == text:
+            return True
+    return False
+
+
+def _append_pending(home: Path, relative: str, text: str) -> bool:
+    target = home / relative
+    if not text or not _inside(home, target) or target.name != "queued.json":
+        return False
+    rows = _read(target)
+    if not isinstance(rows, list):
+        rows = []
+    if _pending_has(rows, text):
+        return False
+    rows.append(text)
+    _atomic_write_any(target, rows)
+    return True
+
+
 def restore_0214_junk(home: Path) -> int:
-    """把隔离出去的条目放回原来的文件。备份不动。"""
+    """把隔离出去的事实和待巩固放回原处。再调一次不会复制。备份不动。"""
     home = Path(home)
     path = home / QUARANTINE
     data = _read(path)
@@ -264,16 +290,14 @@ def restore_0214_junk(home: Path) -> int:
         return 0
     restored = 0
     for item in items:
-        if not isinstance(item, dict) or "fact" not in item:
+        if not isinstance(item, dict):
             continue
-        target = home / str(item.get("file") or "")
-        if target.name != "fact_memory.json":
+        relative = str(item.get("file") or "")
+        if isinstance(item.get("fact"), dict):
+            if _append_missing_fact(home, relative, item["fact"], allow_junk=True):
+                restored += 1
             continue
-        memory = _read(target)
-        if not isinstance(memory, dict):
-            memory = {"facts": [], "entities": []}
-        facts = memory.setdefault("facts", [])
-        facts.append(item["fact"])
-        atomic_write_json(target, memory)
-        restored += 1
+        text = str(item.get("text") or "")
+        if text and _append_pending(home, relative, text):
+            restored += 1
     return restored

@@ -17,6 +17,7 @@ LEGIT = [
     "她喜欢别人推荐的书",
     "我做产品推荐工作",
     "我喜欢写诗",
+    "张三喜欢《十万个为什么》",
 ]
 JUNK = [
     "写一首关于秋天的四行小诗",
@@ -73,10 +74,16 @@ class Migrate0214Tests(unittest.TestCase):
         again = migrate_0214_junk(home)
         self.assertEqual(again, 0)
         self.assertEqual(len(list(home.glob("memory.bak-*"))), 1)
-        self.assertEqual(restore_0214_junk(home), len(JUNK))
+        self.assertEqual(restore_0214_junk(home), len(JUNK) + 3)
         restored = _facts(home)
         for text in JUNK:
             self.assertIn(text, restored)
+            self.assertEqual(restored.count(text), 1)
+        queued = json.loads(next((home / "documents").glob("*/queued.json")).read_text(encoding="utf-8"))
+        self.assertIn("啥名", queued)
+        self.assertEqual(queued.count("啥名"), 1)
+        self.assertEqual(restore_0214_junk(home), 0)
+        self.assertEqual(_facts(home).count("柯小满是男的还是女的"), 1)
 
     def test_same_facts_in_a_027_home_stay(self):
         home = _home("0.2.7", self._rows(LEGIT + JUNK, "0.2.7"), created_at="2026-09-01T00:00:00+00:00")
@@ -90,6 +97,7 @@ class Migrate0214Tests(unittest.TestCase):
 
     def test_translator_writer_is_not_a_question(self):
         self.assertFalse(is_question_fragment("我是翻译，还是作家"))
+        self.assertFalse(is_question_fragment("张三喜欢《十万个为什么》"))
         self.assertFalse(is_question_fragment("我的职业是翻译"))
         self.assertFalse(is_question_fragment("她喜欢别人推荐的书"))
         self.assertTrue(is_question_fragment("柯小满平时穿布鞋还是皮鞋？"))
@@ -101,6 +109,7 @@ class Migrate0214Tests(unittest.TestCase):
         migrate_0214_junk(home)
         self.assertEqual(hashlib.sha256(FIXTURE.read_bytes()).hexdigest(), original)
         self.assertIn("我是翻译，还是作家", _facts(home))
+        self.assertIn("张三喜欢《十万个为什么》", _facts(home))
         self.assertNotIn("柯小满平时穿布鞋还是皮鞋？", _facts(home))
 
     def test_mistaken_quarantine_is_restored_once(self):

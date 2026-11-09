@@ -42,14 +42,23 @@ _ADVICE = (
 )
 
 
+def _outside_titles(text: str) -> str:
+    """书名号里的「为什么」不是问句。"""
+    return re.sub(r"《[^》]*》|「[^」]*」|“[^”]*”", "", text or "")
+
+
 def is_declarative_fact(text: str) -> bool:
-    """陈述句。里面出现「翻译」「推荐」也不能当成要求句删掉。"""
+    """陈述句。里面出现「翻译」「推荐」或书名里的「为什么」也不能当成要求句删掉。"""
     raw = (text or "").strip().rstrip("。")
     if not raw:
+        return False
+    if re.search(r"[？?吗呢]", raw):
         return False
     if re.match(r"^(?:我|他|她)(?:的[\u4e00-\u9fffA-Za-z0-9]{0,12})?是", raw):
         return True
     if re.match(r"^(?:我|他|她)喜欢", raw):
+        return True
+    if re.match(r"^[\u4e00-\u9fff·]{1,8}喜欢", raw) and not re.search(r"什么|谁|哪", _outside_titles(raw)):
         return True
     if re.match(r"^我在.+工作", raw) or re.match(r"^我做.+工作", raw):
         return True
@@ -101,7 +110,8 @@ def is_question_fragment(text: str) -> bool:
         return True
     if raw.endswith(("的名字", "啥名", "…", "...")) or raw.rstrip("。").endswith("啥名"):
         return True
-    if re.search(r"叫啥|啥名|什么|是谁|哪一|多少|吗", raw):
+    visible = _outside_titles(raw)
+    if re.search(r"叫啥|啥名|什么|是谁|哪一|多少|吗", visible):
         return True
     return False
 

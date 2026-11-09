@@ -609,5 +609,19 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertFalse(memory_topic("水的化学式是什么？", facts))
 
 
+class CrossEntityTests(unittest.TestCase):
+    def test_pet_name_is_not_the_school(self):
+        from memory_core.fact_reader import read_memory
+
+        school = {"entity": "沈星河", "statement": "沈星河的学校叫青藤中学。", "value": "青藤中学"}
+        cat = {"entity": "沈星河", "statement": "沈星河的猫的名字是云朵。", "value": "云朵"}
+        both = read_memory("沈星河的猫叫什么名字？", [school, cat], None) or {}
+        self.assertIn("云朵", both.get("text") or "")
+        self.assertNotIn("青藤", both.get("text") or "")
+        only_school = read_memory("沈星河的宠物叫什么名字？", [school], None) or {}
+        self.assertNotIn("青藤", only_school.get("text") or "")
+        self.assertIn("没记过", only_school.get("text") or "")
+
+
 if __name__ == "__main__":
     unittest.main()

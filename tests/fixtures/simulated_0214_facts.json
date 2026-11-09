@@ -1,5 +1,6 @@
 [
   {"entity": "我", "statement": "我是翻译，还是作家", "value": "我是翻译，还是作家", "app_version": "0.2.14"},
   {"entity": "我", "statement": "我的职业是翻译", "value": "我的职业是翻译", "app_version": "0.2.14"},
+  {"entity": "张三", "statement": "张三喜欢《十万个为什么》", "value": "张三喜欢《十万个为什么》", "app_version": "0.2.14"},
   {"entity": "柯小满", "statement": "柯小满平时穿布鞋还是皮鞋？", "value": "柯小满平时穿布鞋还是皮鞋？", "app_version": "0.2.14"}
 ]

@@ -649,7 +649,7 @@ def _same_thing(query: str, statement: str) -> bool:
     text = statement or ""
     if "狗" in asked and "狗" not in text:
         return False
-    if "猫" in asked and "猫" not in text:
+    if any(mark in asked for mark in ("猫", "猫咪", "宠物")) and not any(mark in text for mark in ("猫", "宠物")):
         return False
     if "茶" in asked and "茶" not in text:
         return False
