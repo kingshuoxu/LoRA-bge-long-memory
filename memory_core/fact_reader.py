@@ -615,6 +615,12 @@ def assert_school_is_recalled() -> None:
         "沈星河就读的学校叫什么名字？",
         "沈星河毕业于哪所学校？",
         "沈星河的学校你知道吗？",
+        "沈星河是在哪个学校读书的？",
+        "沈星河现在在哪儿念书？",
+    ]
+    people = [
+        ("陆远毕业于南开大学。", "陆远是哪个学校毕业的？", "南开大学"),
+        ("许诺是青藤中学的学生。", "许诺是哪个学校的学生？", "青藤中学"),
     ]
     for statement in forms:
         fact = {"entity": "沈星河", "statement": statement, "value": "青藤中学"}
@@ -625,3 +631,11 @@ def assert_school_is_recalled() -> None:
         other = (read_memory("周晚宁的学校叫什么？", [fact, cat], None) or {}).get("text") or ""
         if "青藤" in other or "云朵" in other:
             raise RuntimeError(f"别人的学校拿了沈星河的取值：{other}")
+        missed = (read_memory("陆远是哪个学校毕业的？", [fact, cat], None) or {}).get("text") or ""
+        if "青藤" in missed or "云朵" in missed or "是的学校" in missed:
+            raise RuntimeError(f"没教过的学校说错了：{missed}")
+    for statement, question, school in people:
+        fact = {"entity": statement[:2], "statement": statement, "value": school}
+        answer = (read_memory(question, [fact, cat], None) or {}).get("text") or ""
+        if school not in answer or "没记过" in answer or "云朵" in answer:
+            raise RuntimeError(f"教过的学校没有答出来：{statement} / {question} -> {answer}")

@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install pypdf
-          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs
+          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs tests.test_migrate_0214
 
       - name: Build embedded CPython and PyTorch
         shell: bash
@@ -96,6 +96,15 @@ jobs:
             packaging/runtime/bin/python3 -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
           else
             packaging/runtime/python.exe -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
+          fi
+
+      - name: Dead training job can be cancelled
+        shell: bash
+        run: |
+          if [ -x packaging/runtime/bin/python3 ]; then
+            packaging/runtime/bin/python3 packaging/job_recover_check.py
+          else
+            packaging/runtime/python.exe packaging/job_recover_check.py
           fi
 
       - name: Linux packaging tools
@@ -311,7 +320,7 @@ jobs:
 
   publish:
     name: publish-desktop-release
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    if: always() && startsWith(github.ref, 'refs/tags/desktop-v') && needs.package.result == 'success'
     needs: package
     runs-on: ubuntu-22.04
     permissions:
@@ -344,6 +353,20 @@ jobs:
             --out release \
             --tag "${GITHUB_REF_NAME}" \
             --notes-file release-notes.txt
+          python - << 'PY'
+          import json, os
+          from pathlib import Path
+          Path("release").mkdir(parents=True, exist_ok=True)
+          Path("release/provenance.json").write_text(json.dumps({
+              "tag": os.environ.get("GITHUB_REF_NAME"),
+              "sha": os.environ.get("GITHUB_SHA"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "workflow": os.environ.get("GITHUB_WORKFLOW"),
+              "repository": os.environ.get("GITHUB_REPOSITORY"),
+              "ref": os.environ.get("GITHUB_REF"),
+          }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: Publish prerelease
         env:

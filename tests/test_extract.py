@@ -322,6 +322,23 @@ class TeachAndRecallTests(unittest.TestCase):
             "沈星河的猫叫云朵。沈星河的学校叫什么？",
         ):
             self.assertEqual(pattern_extract(question), [], question)
+        taught = pattern_extract("沈星河在青藤中学上学。你知道吗？")
+        self.assertEqual([fact["value"] for fact in taught], ["青藤中学"])
+        from memory_core.extract import is_question_fragment
+
+        reported = pattern_extract("李四问过我沈星河住在哪里")
+        self.assertTrue(reported)
+        self.assertNotEqual(reported[0]["value"], "哪里")
+        self.assertFalse(is_question_fragment("她说她不知道为什么天会下雨"))
+        self.assertTrue(is_question_fragment("沈星河住在哪里"))
+        self.assertTrue(is_question_fragment("推荐几本书"))
+        from memory_core.job_recover import finalize_dead_job
+
+        dead = finalize_dead_job({"status": "running", "worker_pid": None, "message": "正在训练"})
+        self.assertEqual(dead["status"], "failed")
+        stopped = finalize_dead_job({"status": "running", "cancel_requested": True}, cancel_requested=True)
+        self.assertEqual(stopped["status"], "cancelled")
+        self.assertNotEqual(stopped["message"], "正在停止，当前这一小步结束后可以继续")
         for statement in (
             "沈星河就读于青藤中学",
             "沈星河毕业于青藤中学",
@@ -339,6 +356,16 @@ class TeachAndRecallTests(unittest.TestCase):
         assert_school_is_recalled()
         self.assertEqual(fixed_refusal("沈星河的学校你知道吗？", []), "我没记过沈星河的学校。")
         self.assertEqual(fixed_refusal("沈星河上的什么学校？", []), "我没记过沈星河的学校。")
+        self.assertEqual(fixed_refusal("沈星河是在哪个学校读书的？", []), "我没记过沈星河的学校。")
+        self.assertNotIn("你知道", fixed_refusal("会弹钢琴你知道吗？", []))
+        cat_fact = {"entity": "周乔", "statement": "周乔的猫叫米粒。", "value": "米粒"}
+        phone_fact = {"entity": "周乔", "statement": "周乔的电话是13800001111。", "value": "13800001111"}
+        wrong_phone = (read_memory("周乔的电话是多少？", [cat_fact], None) or {}).get("text") or ""
+        self.assertNotIn("米粒", wrong_phone)
+        self.assertIn("13800001111", (read_memory("周乔的电话是多少？", [cat_fact, phone_fact], None) or {}).get("text") or "")
+        wife = (read_memory("周乔的妻子是谁？", [cat_fact, phone_fact], None) or {}).get("text") or ""
+        self.assertNotIn("米粒", wife)
+        self.assertNotIn("13800001111", wife)
         gull = {"entity": "阿哨", "statement": "柯小满养了一只三条腿的海鸥，名叫阿哨。", "value": "阿哨", "source": "document"}
         refusal = fixed_refusal("那只三条腿海鸥叫什么名字？", [gull])
         self.assertFalse(refusal.startswith("我记得只三条腿") or refusal.startswith("我记得三条"), refusal)

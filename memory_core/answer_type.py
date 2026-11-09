@@ -86,9 +86,25 @@ def head_type(query: str) -> str:
 
 def _asks_school(query: str) -> bool:
     text = query or ""
-    if any(mark in text for mark in ("学校", "上学", "毕业", "就读", "念书", "读书")):
+    if any(mark in text for mark in ("学校", "上学", "毕业", "就读", "念书", "读书", "学生")):
         return True
-    return bool(re.search(r"念的哪|上的什么|上的哪|哪个学校|什么学校", text))
+    return bool(re.search(r"念的哪|上的什么|上的哪|哪个学校|什么学校|哪儿念|哪里念|在哪念|在哪读|在哪上", text))
+
+
+def _school_person(query: str) -> str:
+    """问学校时，句首那个人才是被问的人。"""
+    raw = re.sub(r"^(?:请问|请|那么)", "", query or "")
+    raw = re.sub(r"[？?].*$", "", raw)
+    matched = re.match(r"([\u4e00-\u9fff·]{2,4})", raw)
+    if not matched:
+        return ""
+    name = matched.group(1)
+    while len(name) > 2:
+        nxt = re.sub(r"(?:现在|是在|是|在|的|现|哪|念|上|读|就|毕)$", "", name)
+        if nxt == name:
+            break
+        name = nxt
+    return name if len(name) >= 2 else ""
 
 
 def _school_name(statement: str) -> str:
@@ -135,6 +151,8 @@ def question_kind(query: str) -> str:
         return "person"
     if "谁" in text:
         return "person"
+    if _asks_school(text):
+        return "name"
     if re.search(r"哪个村|哪个村子|哪个镇|哪个城市|哪座城市|住在哪|住哪", text):
         return "place"
     if re.search(r"哪里|哪儿|什么地方", text):
@@ -573,6 +591,9 @@ def extract_span(query: str, statement: str) -> str:
         return match.group(1) if match else ""
     if kind == "measure":
         asked = query or ""
+        if any(mark in asked for mark in ("电话", "手机")):
+            match = re.search(r"1[0-9]{6,}", text)
+            return match.group(0) if match and any(mark in text for mark in ("电话", "手机")) else ""
         if _wrong_event(asked, text):
             return ""
         if any(mark in asked for mark in ("多高", "塔高", "多少米", "几米")):
@@ -685,6 +706,15 @@ def _same_thing(query: str, statement: str) -> bool:
         return False
     if "茶" in asked and "茶" not in text:
         return False
+    for asked_marks, statement_marks in (
+        (("电话", "手机"), ("电话", "手机")),
+        (("妻子", "老婆"), ("妻子", "老婆", "夫人")),
+        (("丈夫", "老公"), ("丈夫", "老公")),
+        (("颜色", "什么色"), ("色",)),
+        (("同事",), ("同事",)),
+    ):
+        if any(mark in asked for mark in asked_marks) and not any(mark in text for mark in statement_marks):
+            return False
     if _asks_school(asked) and not _school_name(text) and not any(mark in text for mark in ("学校", "上学", "毕业", "就读", "念书", "读书", "学生")):
         return False
     if "花" in asked and "花" not in text:
@@ -712,7 +742,7 @@ def accept_span(
     text = (span or "").strip().rstrip("。")
     if not text or text not in (statement or ""):
         return False
-    if re.search(r"啥|什么|吗|呢|多少|是谁", text) or text in {"谁", "哪", "几", "啥名"}:
+    if re.search(r"啥|什么|吗|呢|多少|是谁", text) or text in {"谁", "哪", "几", "啥名", "哪里", "哪儿", "哪个", "哪所"}:
         return False
     if any(text == subject or (len(text) >= 2 and text in subject) for subject in question_subjects(query)):
         return False
@@ -769,15 +799,8 @@ def accept_span(
         expected = _school_name(statement)
         if not expected or (text != expected and expected not in text):
             return False
-        owners = []
-        for chunk in re.findall(r"([^的？?\s]{2,8})的", query or ""):
-            if chunk in {"学校", "名字", "什么", "哪所", "哪个"} or "的" in chunk:
-                continue
-            person = re.sub(r"^(?:请问|请|那么|那|这)", "", chunk)
-            person = re.sub(r"(?:念|上|读|就读|毕业|上学|念书|读书|家里|家中|家)$", "", person)
-            if len(person) >= 2:
-                owners.append(person)
-        if owners and not any(owner in (statement or "") for owner in owners):
+        person = _school_person(query)
+        if person and person not in (statement or ""):
             return False
         return True
     if kind == "name":
@@ -871,7 +894,7 @@ def _mentioned_names(query: str, facts: list[dict]) -> list[str]:
         ):
             continue
         after = text[end:end + 1]
-        if not after or after in "的守收有是在打养叫吗？?活岁住多几钱妻学城国第什怎就毕家读上念":
+        if not after or after in "的守收有是在打养叫吗？?活岁住多几钱妻学城国第什怎就毕家读上念现":
             hits.append(name)
     kept: list[str] = []
     for name in hits:
@@ -1197,6 +1220,12 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
             return None
     if re.search(r"是.+还是|是不是", query or ""):
         return None
+    if _asks_school(query):
+        for fact in rows:
+            text = statement_of(fact)
+            school = _school_name(text)
+            if school and accept_span(query, school, text):
+                return school, fact
     if head_type(query) == "tower" and re.search(r"最早|第一|头一", query or "") and re.search(r"盐|霜降|晾|晒|港|地方|特产", query or ""):
         for fact in rows:
             text = statement_of(fact)

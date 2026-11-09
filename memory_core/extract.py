@@ -53,11 +53,11 @@ def _visible_question_text(text: str) -> str:
 
 
 def is_reported_statement(text: str) -> bool:
-    """转述别人的话，句末没有？/吗，整句是事实。"""
+    """转述别人的话。句末没有？/吗时，嵌在里面的问话不是这句自己在问。"""
     raw = (text or "").strip().rstrip("。")
     if not raw or re.search(r"[？?]", raw) or re.search(r"(?:吗|呢)$", raw):
         return False
-    return bool(re.search(r"问过|说过|告诉|说道|说他|说她|说我|问我|问他|问她|不知道为什么", raw))
+    return bool(re.search(r"问过|说过|告诉|说道|说他|说她|说我|说你|问我|问他|问她|不知道", raw))
 
 
 def is_declarative_fact(text: str) -> bool:
@@ -81,11 +81,13 @@ def is_declarative_fact(text: str) -> bool:
 
 
 def is_imperative_request(text: str) -> bool:
-    """只看句首的要求。句中的「翻译」「推荐」不算。"""
+    """只看句首的要求。句中的「翻译」「推荐」不算。没有问号的要求也算。"""
     raw = (text or "").strip()
-    if not raw or is_declarative_fact(raw):
+    if not raw or is_declarative_fact(raw) or is_reported_statement(raw):
         return False
-    return bool(re.match(r"^(?:请(?!问)|帮我|给我|写一|写首)", raw))
+    if re.match(r"^(?:请(?!问)|帮我|给我|写一|写首|告诉我)", raw):
+        return True
+    return bool(re.match(r"^(?:推荐|写|翻译|查一下|搜一下)(?:一|几|个|首|下|点)", raw))
 
 
 def is_advice_question(text: str) -> bool:
@@ -108,25 +110,31 @@ def is_choice_question(text: str) -> bool:
     return True
 
 
+def is_main_clause_question(text: str) -> bool:
+    """主句在问。转述里的「哪里」「为什么」不算这句自己在问。"""
+    raw = (text or "").strip().rstrip("。")
+    if not raw or is_reported_statement(raw) or is_declarative_fact(raw):
+        return False
+    visible = _visible_question_text(raw)
+    if re.search(r"[？?]", visible) or re.search(r"(?:吗|呢)$", visible):
+        return True
+    if re.match(r"^(?:什么|谁|哪|咋|啥|怎么|如何|多少)", visible):
+        return True
+    if re.search(r"(?:哪里|哪儿|什么|谁|哪个|哪所|多少|怎么|如何|啥)$", visible):
+        return True
+    return bool(re.search(r"(?:叫|是|在|有|去|做)(?:什么|谁|哪|多少|几|啥)", visible))
+
+
 def is_question_fragment(text: str) -> bool:
-    """句首疑问词、句末语气词或问号。不在句子中间搜「什么」「哪」。"""
+    """句首疑问词、句末语气词或问号。转述和书名里的「什么」留下。"""
     raw = (text or "").strip()
     if not raw:
         return True
-    if is_declarative_fact(raw):
+    if is_declarative_fact(raw) or is_reported_statement(raw):
         return False
-    if is_choice_question(raw):
-        return True
-    if is_imperative_request(raw):
-        return True
-    if raw.endswith(("?", "？")) or re.search(r"(?:吗|呢)[。！]?$", raw):
-        return True
-    if re.match(r"^(?:什么|谁|哪|咋|啥)", raw):
+    if is_choice_question(raw) or is_imperative_request(raw) or is_main_clause_question(raw):
         return True
     if raw.endswith(("的名字", "啥名", "…", "...")) or raw.rstrip("。").endswith("啥名"):
-        return True
-    visible = _visible_question_text(raw)
-    if re.search(r"叫啥|啥名|什么|是谁|哪一|多少|吗", visible):
         return True
     return False
 
@@ -279,6 +287,8 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
+    if re.fullmatch(r"(?:什么|哪里|哪儿|哪个|哪所|哪|谁|多少|几|啥|怎么|如何)", value.strip()):
+        return None
     if _looks_like_question(raw) or is_question_fragment(raw) or is_choice_question(raw):
         return None
     if not is_declarative_fact(raw) and (
@@ -337,6 +347,8 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
         question = f"{entity}喜欢什么？"
     elif how == "role":
         question = f"{entity}是谁的{attr}？"
+    elif how == "said":
+        question = f"{entity}说过什么？"
     else:
         question = _attr_question(entity, attr, "是什么？")
     return {
@@ -621,6 +633,10 @@ def _match_life(sentence: str) -> dict[str, Any] | None:
     )
     if matched and matched.group("role") != "学生":
         return _make_fact(matched.group("entity"), matched.group("role"), matched.group("who"), "role", sentence)
+    if is_reported_statement(sentence):
+        who = re.match(r"^([\u4e00-\u9fff·]{1,6})", sentence)
+        entity = who.group(1) if who else "他"
+        return _make_fact(entity, "转述", sentence.rstrip("。"), "said", sentence)
     return None
 
 
@@ -645,19 +661,24 @@ def drop_request_memories(home: Path) -> int:
     return migrate_0214_junk(home)
 
 
+def _is_tag_question(sentence: str) -> bool:
+    """「你知道吗」只是追问，不把前面的事实变成问句。"""
+    compact = re.sub(r"[？?。！!\s]", "", sentence or "")
+    return compact in {"你知道吗", "你知道不", "知道吗", "知道不", "对吧", "是吗", "是不是", "对不对"}
+
+
 def _block_contains_question(text: str) -> bool:
-    """整段里只要有一处在问，前半句也不是在教事实。"""
+    """真在问的那句会带上前提。单纯的「你知道吗」不把前面的事实一起丢掉。"""
     raw = text or ""
-    if is_declarative_fact(raw):
+    if is_declarative_fact(raw) or is_reported_statement(raw):
         return False
-    if "？" in raw or "?" in raw or is_choice_question(raw):
-        return True
-    if _looks_like_question(raw) or is_question_fragment(raw):
-        return True
-    return any(
-        _looks_like_question(sentence) or is_question_fragment(sentence)
-        for sentence in _split_sentences(raw)
-    )
+    sentences = _split_sentences(raw) or [raw.strip()]
+    for sentence in sentences:
+        if _is_tag_question(sentence):
+            continue
+        if is_choice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
+            return True
+    return False
 
 
 def pattern_extract(text: str) -> list[dict[str, Any]]:

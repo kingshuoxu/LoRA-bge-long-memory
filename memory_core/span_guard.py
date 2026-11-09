@@ -240,8 +240,10 @@ def about_user(query: str) -> bool:
 # 从长到短。先去掉「叫什么名字」，不能只削掉「什么名字」而留下一个「叫」。
 _QUESTION_TAILS = (
     "你知道吗",
+    "你知道不",
     "你晓得吗",
     "知道吗",
+    "知道不",
     "你知道",
     "你晓得",
     "叫什么名字来着",
@@ -301,10 +303,30 @@ def _strip_question_tail(text: str) -> str:
     return text
 
 
+def _school_asker(text: str) -> str:
+    if not re.search(r"学校|上学|毕业|就读|念书|读书|学生|哪儿念|哪里念", text or ""):
+        return ""
+    raw = re.sub(r"^(?:请问|请|那么)", "", text or "")
+    matched = re.match(r"([\u4e00-\u9fff·]{2,4})", raw)
+    if not matched:
+        return ""
+    name = matched.group(1)
+    while len(name) > 2:
+        nxt = re.sub(r"(?:现在|是在|是|在|的|现|哪|念|上|读|就|毕)$", "", name)
+        if nxt == name:
+            break
+        name = nxt
+    return name if len(name) >= 2 else ""
+
+
 def _asked_clause(query: str) -> str:
     """保留问句里真正在问的那一段。问句尾巴不能剩一个叫、是、的、于。"""
     text = (query or "").strip().rstrip("？?。！!")
     text = re.sub(r"^(?:请问|问一下|告诉我)", "", text).strip()
+    text = re.sub(r"(?:你知道不|你知道吗|你知道|知道不|知道吗)$", "", text).strip()
+    asker = _school_asker(text) or _school_asker(query or "")
+    if asker:
+        return f"{asker}的学校"
     text = _strip_question_tail(text)
     return text or (query or "").strip().rstrip("？?")
 

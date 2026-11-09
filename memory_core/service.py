@@ -282,8 +282,10 @@ class MemoryService:
         self.chat = ChatEngine(qwen_path(self.models_dir), device)
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
+        self._proc_job: str | None = None
         self._download_thread: threading.Thread | None = None
         self._preview_thread: threading.Thread | None = None
+        self._reconcile_current_job()
 
     def device_name(self) -> str:
         return pick_device(self.device_pref).type
@@ -1740,6 +1742,7 @@ class MemoryService:
         return groups
 
     def start_consolidation(self, conversation_ids: list[str], facts: list[dict], preview_id: str | None = None) -> dict[str, Any]:
+        self._reconcile_current_job()
         if self.job_running() or self._preview_running():
             raise ServiceError("已有训练在进行")
         selected = [fact for fact in facts if keep_for_training(fact)]
@@ -1768,6 +1771,7 @@ class MemoryService:
         groups = self._consolidation_groups(expanded, sources)
         display = expert_display_name(expanded)
         job_id = time.strftime("job_%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:4]
+        self._proc_job = job_id
         job_dir = self.jobs_dir / job_id
         job_dir.mkdir(parents=True)
         request = {
@@ -1843,6 +1847,7 @@ class MemoryService:
         env["PYTHONPATH"] = root if not env.get("PYTHONPATH") else root + os.pathsep + env["PYTHONPATH"]
         env["PYTHONUNBUFFERED"] = "1"
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
+        self._proc_job = job_id
         self._proc = subprocess.Popen(
             [sys.executable, "-m", "memory_core.train_worker", "--home", str(self.home), "--job-id", job_id],
             cwd=root,
@@ -1851,6 +1856,9 @@ class MemoryService:
             stderr=subprocess.STDOUT,
         )
         proc = self._proc
+        status = self.job_status(job_id)
+        status["worker_pid"] = proc.pid
+        atomic_write_json(job_dir / "status.json", status)
 
         def _watch():
             code = proc.wait()
@@ -1882,8 +1890,39 @@ class MemoryService:
             raise ServiceError("找不到这个训练任务")
         return read_json(path)
 
+    def _worker_alive(self, job_id: str, status: dict) -> bool:
+        from memory_core.job_recover import pid_alive
+
+        if self._proc_job == job_id and (self._proc is None or self._proc.poll() is None):
+            return True
+        return pid_alive(status.get("worker_pid"))
+
+    def _reconcile_job(self, job_id: str) -> dict:
+        from memory_core.job_recover import finalize_dead_job
+
+        job_dir = self.jobs_dir / job_id
+        status = self.job_status(job_id)
+        if status.get("status") != "running" or self._worker_alive(job_id, status):
+            return status
+        status = finalize_dead_job(status, cancel_requested=(job_dir / "CANCEL").is_file() or bool(status.get("cancel_requested")))
+        atomic_write_json(job_dir / "status.json", status)
+        return status
+
+    def _reconcile_current_job(self) -> None:
+        pointer = self.jobs_dir / "current.json"
+        if not pointer.is_file():
+            return
+        try:
+            job_id = read_json(pointer)["id"]
+        except (json.JSONDecodeError, KeyError, OSError):
+            return
+        if not (self.jobs_dir / job_id / "status.json").is_file():
+            return
+        self._reconcile_job(job_id)
+
     def job_running(self) -> bool:
-        """状态已经结束时不再挡住对话。进程可能还要一瞬间才退出。"""
+        """状态已经结束时不再挡住对话。进程没了就先把任务标成中断。"""
+        self._reconcile_current_job()
         job = self.current_job()
         status = job.get("status") if job else None
         if status in {"done", "cancelled", "failed"}:
@@ -1897,13 +1936,16 @@ class MemoryService:
         if not (job_dir / "status.json").is_file():
             raise ServiceError("找不到这个训练任务")
         (job_dir / "CANCEL").write_text("1", encoding="utf-8")
-        status = self.job_status(job_id)
-        if status.get("status") == "running":
-            status["message"] = "正在停止，当前这一小步结束后可以继续"
-            atomic_write_json(job_dir / "status.json", status)
+        status = self._reconcile_job(job_id)
+        if status.get("status") != "running":
+            return status
+        status["cancel_requested"] = True
+        status["message"] = "正在停止，当前这一小步结束后可以继续"
+        atomic_write_json(job_dir / "status.json", status)
         return status
 
     def resume_job(self, job_id: str) -> dict:
+        self._reconcile_current_job()
         if self.job_running():
             raise ServiceError("已有训练在进行")
         status = self.job_status(job_id)
@@ -2058,6 +2100,7 @@ class MemoryService:
             {"stage": "gate", "statement": statement, "gate": "write", "gate_reason": "用户确认后写入", "selected": True, "value": new_value},
         ]
         job_id = time.strftime("job_%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:4]
+        self._proc_job = job_id
         job_dir = self.jobs_dir / job_id
         job_dir.mkdir(parents=True)
         request = {

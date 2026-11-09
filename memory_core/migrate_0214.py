@@ -20,6 +20,7 @@ WINDOW_START = "2026-11-05T04:53:48+00:00"
 WINDOW_END = "2026-11-05T08:59:07+00:00"
 MARKER = "migrations/cleanup-0214.json"
 RESTORE_MARKER = "migrations/restore-0214-kept.json"
+RESTORE_VERSION = 2
 QUARANTINE = "cleaned/0214-junk.json"
 
 
@@ -212,11 +213,26 @@ def _append_missing_fact(home: Path, relative: str, fact: dict, *, allow_junk: b
     return True
 
 
+def _restore_version(marker: Path) -> int:
+    if not marker.is_file():
+        return 0
+    data = _read(marker)
+    if not isinstance(data, dict):
+        return 1
+    try:
+        return int(data.get("version") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
 def restore_legitimate_from_cleanup(home: Path) -> int:
-    """只从隔离区或 memory.bak-* 把陈述句放回去。0.2.15 当时直接删、没有备份，就无从恢复。"""
+    """只从隔离区或 memory.bak-* 把陈述句放回去。0.2.15 当时直接删、没有备份，就无从恢复。
+
+    旧版本的恢复标记不会挡住后来收紧的分类器。已经放回去的句子不会再复制一份。
+    """
     home = Path(home)
     marker = home / RESTORE_MARKER
-    if marker.is_file():
+    if _restore_version(marker) >= RESTORE_VERSION:
         return 0
     restored = 0
     quarantine_path = home / QUARANTINE
@@ -253,7 +269,7 @@ def restore_legitimate_from_cleanup(home: Path) -> int:
                 if isinstance(fact, dict) and _append_missing_fact(home, relative, fact):
                     restored += 1
     marker.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(marker, {"done": True, "at": _now(), "restored": restored})
+    atomic_write_json(marker, {"done": True, "version": RESTORE_VERSION, "at": _now(), "restored": restored})
     return restored
 
 

@@ -145,6 +145,35 @@ class Migrate0214Tests(unittest.TestCase):
         self.assertEqual(hashlib.sha256((backup_dir / "fact_memory.json").read_bytes()).hexdigest(), backup_hash)
         self.assertEqual(restore_legitimate_from_cleanup(home), 0)
 
+    def test_old_restore_marker_repairs_later_classifier(self):
+        """0.2.29 已经写过恢复标记，隔离区里仍有被误清的转述。模拟数据。"""
+        sentence = "李四问过我为什么天是蓝的"
+        junk = "沈星河住在哪里"
+        pending = "她说她不知道为什么天会下雨"
+        rows = self._rows([sentence, junk], "0.2.14")
+        home = _home("0.2.14", [])
+        quarantine = home / "cleaned"
+        quarantine.mkdir(parents=True)
+        (quarantine / "0214-junk.json").write_text(json.dumps({
+            "items": [
+                {"file": "experts/expert_9/fact_memory.json", "fact": rows[0]},
+                {"file": "experts/expert_9/fact_memory.json", "fact": rows[1]},
+                {"file": "documents/doc1/queued.json", "text": pending},
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+        marker = home / "migrations"
+        marker.mkdir(parents=True)
+        (marker / "restore-0214-kept.json").write_text(json.dumps({"done": True, "restored": 1}), encoding="utf-8")
+        restored = restore_legitimate_from_cleanup(home)
+        self.assertGreaterEqual(restored, 2)
+        self.assertIn(sentence, _facts(home))
+        self.assertNotIn(junk, _facts(home))
+        queued = json.loads((home / "documents" / "doc1" / "queued.json").read_text(encoding="utf-8"))
+        self.assertIn(pending, queued)
+        self.assertEqual(restore_legitimate_from_cleanup(home), 0)
+        self.assertEqual(_facts(home).count(sentence), 1)
+        self.assertEqual(queued.count(pending), 1)
+
     def test_0215_without_backup_cannot_be_restored(self):
         """0.2.15 直接删掉含「翻译」的句子，没有备份也没有隔离。模拟数据，不是用户的真记忆。"""
         home = _home("0.2.15", self._rows(["我喜欢写诗"], "0.2.15"))

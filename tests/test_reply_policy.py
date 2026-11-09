@@ -338,7 +338,7 @@ class ReplyPolicyTests(unittest.TestCase):
         school = reply("周衡川毕业于哪所大学？")
         self.assertTrue("不在记忆里" in school[0] or "没记过" in school[0], school[0])
         self.assertNotIn("豆青", school[0])
-        self.assertEqual(school[0], "我没记过周衡川的大学。")
+        self.assertEqual(school[0], "我没记过周衡川的学校。")
         self.assertEqual(school[3], "entity_grounded")
         overview = reply("overview of 周衡川")
         self.assertEqual(overview[3], "entity_overview")
@@ -667,7 +667,7 @@ class CrossEntityTests(unittest.TestCase):
             "请问沈星河的学校叫啥？": "我没记过沈星河的学校。",
             "沈星河的学校的名字是什么？": "我没记过沈星河的学校。",
             "沈星河毕业于哪所学校？": "我没记过沈星河的学校。",
-            "沈星河在哪所学校上学？": "我没记过沈星河在哪所学校上学。",
+            "沈星河在哪所学校上学？": "我没记过沈星河的学校。",
             "沈星河的学校叫什么？": "我没记过沈星河的学校。",
             "沈星河的狗叫什么名字？": "我没记过沈星河的狗。",
             "沈星河养的狗叫啥？": "我没记过沈星河养的狗。",
@@ -684,7 +684,7 @@ class CrossEntityTests(unittest.TestCase):
         from memory_core.e2e_check import abstain_ok, invented_school, wrong_citations
         from memory_core.grounding import abstain_reply
 
-        self.assertEqual(abstain_reply("沈星河", "沈星河在哪所学校上学？"), "我没记过沈星河在哪所学校上学。")
+        self.assertEqual(abstain_reply("沈星河", "沈星河在哪所学校上学？"), "我没记过沈星河的学校。")
         self.assertEqual(abstain_reply("周晚宁", "周晚宁的学校叫什么？"), "我没记过周晚宁的学校。")
         invented = "周晚宁的学校叫北京师范大学附属中学。"
         self.assertEqual(invented_school("周晚宁的学校叫什么？", invented), "中学")

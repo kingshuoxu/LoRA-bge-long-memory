@@ -284,8 +284,10 @@ def _topic_piece(text: str, entity: str) -> str:
     if entity:
         rest = rest.replace(entity, "")
     if has_cjk(text):
+        rest = re.sub(r"(?:你知道不|你知道吗|你知道|知道不|知道吗)", "", rest)
         rest = re.sub(r"[的是叫吗呢吧什么哪谁多少几？?，。]", "", rest)
         rest = re.split(r"位于|在", rest)[0]
+        rest = re.sub(r"(?:你知道|知道不)$", "", rest)
         rest = re.sub(r"不+$", "", rest).strip()
         return rest[:12]
     rest = re.sub(r"\b(what|where|who|which|when|how|is|are|was|were|does|do|did|the|a|an|of|about)\b", " ", rest, flags=re.IGNORECASE)
@@ -311,7 +313,7 @@ def abstain_reply(entity: str, text: str) -> str:
         if who:
             return f"我不记得你告诉过我{who}的生日。"
         return "我不记得你告诉过我生日。"
-    if not english and any(mark in text for mark in ("学校", "上学", "毕业", "就读")):
+    if not english and any(mark in text for mark in ("学校", "上学", "毕业", "就读", "念书", "读书", "学生")):
         from memory_core.span_guard import fixed_refusal
 
         return fixed_refusal(text)
