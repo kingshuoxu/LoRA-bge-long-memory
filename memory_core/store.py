@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import torch
-
 from memory_core.gate import fact_gate_config
 from memory_core.paths import ensure_scripts_path
+
+# torch 只在读写 router_key.pt 时导入。打包流水线在装 PyTorch 之前就要能 import 本模块。
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -208,6 +208,8 @@ def load_record(experts_dir: Path, entry: dict, writable: bool) -> ExpertRecord 
     directory = key_path.parent
     if not key_path.is_file():
         return None
+    import torch
+
     key = torch.load(key_path, weights_only=True).float().cpu()
     if key.dim() == 1:
         key = key.unsqueeze(0)
@@ -381,6 +383,8 @@ def register_expert(
         from router import embed
 
         key = embed(key_texts)
+    import torch
+
     torch.save(key.cpu(), expert_dir / "router_key.pt")
     (expert_dir / "key_texts.json").write_text(json.dumps(key_texts, ensure_ascii=False), encoding="utf-8")
     alias_texts = list(key_texts)
