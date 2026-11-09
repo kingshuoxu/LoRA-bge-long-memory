@@ -609,6 +609,38 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertTrue(memory_topic("诺丁活到多少岁？", facts))
         self.assertFalse(memory_topic("水的化学式是什么？", facts))
 
+    def test_color_without_the_character_still_answers_the_same_object(self):
+        from memory_core.fact_reader import read_memory
+
+        person = [
+            _fact("禾昭闻", "猫的名字", "小山", "禾昭闻的猫叫小山。"),
+            _fact("禾昭闻", "汽车颜色", "墨黑", "禾昭闻的汽车是墨黑。"),
+        ]
+        pearl = [_fact("周衡", "汽车颜色", "珍珠白", "周衡的汽车是珍珠白的。")]
+        navy = [_fact("许澄", "汽车颜色", "藏青", "许澄的汽车是藏青。")]
+        bike = [
+            _fact("沈星河", "自行车颜色", "朱红色", "沈星河的自行车颜色是朱红色。"),
+            _fact("沈星河", "猫的名字", "云朵", "沈星河的猫的名字是云朵。"),
+        ]
+
+        def answer(question, facts):
+            return (read_memory(question, facts, None) or {}).get("text") or ""
+
+        for question in ("禾昭闻的汽车是什么颜色？", "禾昭闻开的车是什么颜色？", "禾昭闻的车啥颜色？"):
+            text = answer(question, person)
+            self.assertIn("墨黑", text, question)
+            self.assertNotIn("没记过", text, question)
+            self.assertNotIn("小山", text, question)
+        self.assertNotIn("墨黑", answer("禾昭闻的猫是什么颜色？", person))
+        self.assertNotIn("墨黑", answer("禾昭闻的自行车是什么颜色？", person))
+        self.assertIn("珍珠白", answer("周衡开的车是什么颜色？", pearl))
+        self.assertIn("藏青", answer("许澄的车啥颜色？", navy))
+        self.assertIn("朱红", answer("沈星河那辆自行车是什么颜色？", bike))
+        for question in ("沈星河的汽车颜色是什么？", "沈星河的车是什么颜色？", "沈星河开的车是什么颜色？"):
+            text = answer(question, bike)
+            self.assertNotIn("朱红", text, question)
+            self.assertNotIn("云朵", text, question)
+
 
 class CrossEntityTests(unittest.TestCase):
     def test_pet_name_is_not_the_school(self):

@@ -512,6 +512,9 @@ def extract_span(query: str, statement: str) -> str:
         for colour in sorted(_COLOURS, key=len, reverse=True):
             if colour in text:
                 return colour
+        assigned = _assigned_color(text)
+        if assigned:
+            return assigned
         return ""
     if kind == "material":
         for item in _MATERIALS:
@@ -696,6 +699,64 @@ def _subject_present(subject: str, statement: str) -> bool:
     return False
 
 
+def _assigned_color(text: str) -> str:
+    """「是墨黑」「是珍珠白的」这种写法里，颜色词本身可以没有「色」。"""
+    from memory_core.extract import _ZH_COLOR
+
+    for match in re.finditer(r"是([\u4e00-\u9fff]{1,8})", text or ""):
+        raw = match.group(1)
+        piece = re.sub(r"的$", "", raw)
+        if _ZH_COLOR.match(piece):
+            return piece
+        if _ZH_COLOR.match(raw):
+            return raw
+    return ""
+
+
+def _color_statement(text: str) -> bool:
+    if "色" in (text or ""):
+        return True
+    if any(colour in (text or "") for colour in _COLOURS):
+        return True
+    return bool(_assigned_color(text))
+
+
+_COLOR_ALIASES = (
+    frozenset({"汽车", "车"}),
+    frozenset({"猫咪", "猫", "宠物猫"}),
+    frozenset({"狗", "小狗"}),
+)
+
+
+def _color_object(text: str) -> str:
+    """颜色问句或颜色句子里的那个事物。车可以对上汽车，对不上自行车。"""
+    raw = text or ""
+    match = re.search(r"的([\u4e00-\u9fff]{1,8}?)(?:颜色)?是", raw)
+    if not match:
+        trimmed = re.sub(r"(?:是什么颜色|是啥颜色|什么颜色|啥颜色|哪种颜色|什么色|啥色).*$", "", raw)
+        match = re.search(r"的([\u4e00-\u9fff]{1,8})$", trimmed)
+    if not match:
+        match = re.search(r"(?:开的|骑的)([\u4e00-\u9fff]{1,4})", raw)
+    if not match:
+        return ""
+    head = re.split(r"是|的", match.group(1))[0]
+    return re.sub(r"^(?:那|这|一)?(?:辆|只|个|座)", "", head)
+
+
+def _color_objects_align(asked: str, statement: str) -> bool:
+    left = _color_object(asked)
+    right = _color_object(statement)
+    if not left or not right or left == right:
+        return True
+    if any(left in group and right in group for group in _COLOR_ALIASES):
+        return True
+    if len(right) == len(left) + 1 and right.endswith(left):
+        return True
+    if len(left) == len(right) + 1 and left.endswith(right):
+        return True
+    return False
+
+
 def _same_thing(query: str, statement: str) -> bool:
     """狗的问题不能用猫的句子，汽车的问题不能用自行车的句子。"""
     asked = query or ""
@@ -706,11 +767,13 @@ def _same_thing(query: str, statement: str) -> bool:
         return False
     if "茶" in asked and "茶" not in text:
         return False
+    if any(mark in asked for mark in ("颜色", "什么色", "啥颜色", "啥色")):
+        if not _color_statement(text) or not _color_objects_align(asked, text):
+            return False
     for asked_marks, statement_marks in (
         (("电话", "手机"), ("电话", "手机")),
         (("妻子", "老婆"), ("妻子", "老婆", "夫人")),
         (("丈夫", "老公"), ("丈夫", "老公")),
-        (("颜色", "什么色"), ("色",)),
         (("同事",), ("同事",)),
     ):
         if any(mark in asked for mark in asked_marks) and not any(mark in text for mark in statement_marks):
