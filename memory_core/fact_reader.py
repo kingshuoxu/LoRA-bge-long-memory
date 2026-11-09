@@ -536,7 +536,9 @@ def read_memory(
     from memory_core.paraphrase import is_polar
 
     # 是非题、介绍题、近似名字仍走原来的路径，摘录器不改写成一个取值。
-    if is_polar(query):
+    from memory_core.answer_type import _asks_school
+
+    if is_polar(query) and not _asks_school(query):
         return None
     for fact in facts:
         entity = str(fact.get("entity") or "").strip()
@@ -553,7 +555,7 @@ def read_memory(
             # 前面是动词（守护白鹭塔）仍是这个名字。后面只多一两个字才是另一个名字。
             if missed.endswith(entity) and not missed.startswith(entity):
                 continue
-            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家")):
+            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家", "念", "读")):
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)

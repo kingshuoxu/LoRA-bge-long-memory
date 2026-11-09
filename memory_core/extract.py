@@ -47,11 +47,26 @@ def _outside_titles(text: str) -> str:
     return re.sub(r"《[^》]*》|「[^」]*」|“[^”]*”", "", text or "")
 
 
+def _visible_question_text(text: str) -> str:
+    """书名和「为什么」里的「什么」不是在提问。"""
+    return _outside_titles(text).replace("为什么", "")
+
+
+def is_reported_statement(text: str) -> bool:
+    """转述别人的话，句末没有？/吗，整句是事实。"""
+    raw = (text or "").strip().rstrip("。")
+    if not raw or re.search(r"[？?]", raw) or re.search(r"(?:吗|呢)$", raw):
+        return False
+    return bool(re.search(r"问过|说过|告诉|说道|说他|说她|说我|问我|问他|问她|不知道为什么", raw))
+
+
 def is_declarative_fact(text: str) -> bool:
     """陈述句。里面出现「翻译」「推荐」或书名里的「为什么」也不能当成要求句删掉。"""
     raw = (text or "").strip().rstrip("。")
     if not raw:
         return False
+    if is_reported_statement(raw):
+        return True
     if re.search(r"[？?吗呢]", raw):
         return False
     if re.match(r"^(?:我|他|她)(?:的[\u4e00-\u9fffA-Za-z0-9]{0,12})?是", raw):
@@ -110,7 +125,7 @@ def is_question_fragment(text: str) -> bool:
         return True
     if raw.endswith(("的名字", "啥名", "…", "...")) or raw.rstrip("。").endswith("啥名"):
         return True
-    visible = _outside_titles(raw)
+    visible = _visible_question_text(raw)
     if re.search(r"叫啥|啥名|什么|是谁|哪一|多少|吗", visible):
         return True
     return False
@@ -131,7 +146,8 @@ def _looks_like_question(sentence: str) -> bool:
         return True
     if is_choice_question(sentence):
         return True
-    if any(hint in sentence for hint in _QUESTION_HINTS):
+    visible = _visible_question_text(sentence)
+    if any(hint in visible for hint in _QUESTION_HINTS):
         return True
     return bool(_EN_WH.search(sentence))
 
@@ -312,6 +328,15 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
         question = "我叫什么？" if has_cjk(entity + value) else "What is my name?"
     elif how == "owned":
         question = f"我的{attr}叫什么？"
+    elif how == "school":
+        question = f"{entity}的学校叫什么？"
+        attr = "学校"
+    elif how == "daily":
+        question = f"{entity}每天做什么？"
+    elif how == "like":
+        question = f"{entity}喜欢什么？"
+    elif how == "role":
+        question = f"{entity}是谁的{attr}？"
     else:
         question = _attr_question(entity, attr, "是什么？")
     return {
@@ -425,6 +450,8 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
         )
         if matched:
             found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "叫", sentence)
+    if found is None:
+        found = _match_life(sentence)
     if found is None:
         matched = re.match(r"^(?P<entity>[^，。]{1,16})住在(?P<value>[^，。]{1,32})$", sentence)
         if matched:
@@ -563,6 +590,40 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
     return found
 
 
+_SCHOOL_NAME = r"[\u4e00-\u9fffA-Za-z0-9·]{2,16}"
+
+
+def _match_life(sentence: str) -> dict[str, Any] | None:
+    """上学、每天、喜欢、同事。这些不是「的学校是」也能记下来。"""
+    school = (
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})在(?P<value>{_SCHOOL_NAME})(?:上学|读书|念书)$", "school"),
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})就读于(?P<value>{_SCHOOL_NAME})$", "school"),
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})毕业于(?P<value>{_SCHOOL_NAME})$", "school"),
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})是(?P<value>{_SCHOOL_NAME})的学生$", "school"),
+    )
+    for pattern, how in school:
+        matched = re.match(pattern, sentence)
+        if matched:
+            return _make_fact(matched.group("entity"), "学校", matched.group("value"), how, sentence)
+    matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})每天(?P<value>.{2,24})$", sentence)
+    if matched:
+        return _make_fact(matched.group("entity"), "日常", matched.group("value"), "daily", sentence)
+    matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})喜欢喝(?P<value>.{1,16})$", sentence)
+    if matched:
+        attr = "茶" if "茶" in matched.group("value") else "喜欢喝的"
+        return _make_fact(matched.group("entity"), attr, matched.group("value"), "like", sentence)
+    matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})喜欢(?P<value>.{1,24})$", sentence)
+    if matched:
+        return _make_fact(matched.group("entity"), "喜欢", matched.group("value"), "like", sentence)
+    matched = re.match(
+        r"^(?P<entity>[\u4e00-\u9fff·]{2,8})是(?P<who>[\u4e00-\u9fff·]{2,8})的(?P<role>[\u4e00-\u9fff]{1,6})$",
+        sentence,
+    )
+    if matched and matched.group("role") != "学生":
+        return _make_fact(matched.group("entity"), matched.group("role"), matched.group("who"), "role", sentence)
+    return None
+
+
 def _leading_name(sentence: str) -> str | None:
     if _looks_like_question(sentence):
         return None
@@ -584,29 +645,13 @@ def drop_request_memories(home: Path) -> int:
     return migrate_0214_junk(home)
 
 
-def _block_contains_question(text: str) -> bool:
-    """整段里只要有一处在问，前面的陈述也不是在教事实。"""
-    raw = text or ""
-    if is_declarative_fact(raw):
-        return False
-    if "？" in raw or "?" in raw or is_choice_question(raw):
-        return True
-    if _looks_like_question(raw) or is_question_fragment(raw):
-        return True
-    return any(
-        _looks_like_question(sentence) or is_question_fragment(sentence)
-        for sentence in _split_sentences(raw)
-    )
-
-
 def pattern_extract(text: str) -> list[dict[str, Any]]:
     """按句式抽事实，不查属性词表。一段话里的 It / 它 沿用上一句的主语。"""
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
     for block in re.split(r"\n+", text or ""):
-        if _block_contains_question(block):
-            continue
+        # 问句那一句丢掉。同一段里的陈述仍然记下。
         _extract_block(block, facts, seen, current)
     return facts
 

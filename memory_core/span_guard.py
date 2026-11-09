@@ -239,6 +239,11 @@ def about_user(query: str) -> bool:
 
 # 从长到短。先去掉「叫什么名字」，不能只削掉「什么名字」而留下一个「叫」。
 _QUESTION_TAILS = (
+    "你知道吗",
+    "你晓得吗",
+    "知道吗",
+    "你知道",
+    "你晓得",
     "叫什么名字来着",
     "叫什么名字",
     "叫啥名字",
@@ -285,6 +290,10 @@ def _strip_question_tail(text: str) -> str:
     )
     if text.endswith("的名字") and len(text) > len("的名字"):
         text = text[: -len("的名字")].strip()
+    text = re.sub(r"上的什么学校", "的学校", text)
+    text = re.sub(r"念的哪所(?:学校)?", "的学校", text)
+    text = re.sub(r"读的哪所(?:学校)?", "的学校", text)
+    text = re.sub(r"在哪个学校(?:读书|念书)?", "的学校", text)
     while text and text[-1] in _DANGLING_END:
         if text[-1] == "的" and ("还是" in text or text.endswith(("男的", "女的", "公的", "母的", "对的", "错的"))):
             break
@@ -303,7 +312,7 @@ def _asked_clause(query: str) -> str:
 def personal_attribute_question(text: str) -> bool:
     """某人的学校、猫、电话这类属性。没记下时不能交给基座编一个。"""
     raw = text or ""
-    if not any(mark in raw for mark in ("学校", "上学", "毕业", "就读", "猫", "猫咪", "狗", "宠物", "电话", "母亲", "父亲", "生日", "汽车")):
+    if not any(mark in raw for mark in ("学校", "上学", "毕业", "就读", "念书", "读书", "猫", "猫咪", "狗", "宠物", "电话", "母亲", "父亲", "生日", "汽车")):
         return False
     if not re.search(r"[？?]|什么|啥|哪|谁|多少|吗", raw):
         return False
@@ -333,6 +342,12 @@ def _subject(query: str, facts: list[dict]) -> str:
         for index in range(0, max(0, len(text) - size + 1)):
             token = text[index:index + size]
             if token in _STOP or token in best or "的" in token:
+                continue
+            if token.startswith(("只", "条", "个", "座", "辆", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "两")):
+                continue
+            if token[:2] in {"那只", "这只", "一只", "那条", "这条"}:
+                continue
+            if token in {"三条腿", "三腿", "只三", "条腿", "三条"}:
                 continue
             if any(mark in token for mark in ("是", "还", "公", "母", "男", "女", "啥", "什", "谁", "吗", "呢")):
                 continue

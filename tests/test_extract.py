@@ -289,5 +289,63 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(job["attr"], "job")
 
 
+class TeachAndRecallTests(unittest.TestCase):
+    def test_reported_why_is_not_quarantined(self):
+        from memory_core.extract import is_question_fragment
+
+        for sentence in ("李四问过我为什么天是蓝的", "李四说他不知道为什么下雨"):
+            self.assertFalse(is_question_fragment(sentence), sentence)
+        self.assertTrue(is_question_fragment("沈星河的学校叫什么"))
+        self.assertTrue(is_question_fragment("柯小满是男的还是女的"))
+
+    def test_one_message_keeps_every_declarative(self):
+        text = (
+            "沈星河的猫叫云朵。"
+            "沈星河住在杭州。"
+            "沈星河每天骑自行车。"
+            "沈星河喜欢喝龙井茶。"
+            "周晚宁是沈星河的同事。"
+            "沈星河在青藤中学上学。"
+            "沈星河的学校叫什么？"
+        )
+        facts = pattern_extract(text)
+        values = {fact["value"] for fact in facts}
+        self.assertIn("云朵", values)
+        self.assertIn("杭州", values)
+        self.assertIn("骑自行车", values)
+        self.assertIn("龙井茶", values)
+        self.assertIn("沈星河", values)
+        self.assertIn("青藤中学", values)
+        self.assertTrue(all("什么" not in fact["statement"] for fact in facts))
+        for statement in (
+            "沈星河就读于青藤中学",
+            "沈星河毕业于青藤中学",
+            "沈星河是青藤中学的学生",
+            "沈星河在青藤中学读书",
+            "沈星河在青藤中学念书",
+        ):
+            got = pattern_extract(statement)
+            self.assertTrue(got and got[0]["value"] == "青藤中学", statement)
+
+    def test_taught_school_is_not_a_false_miss(self):
+        from memory_core.e2e_check import assert_school_is_recalled
+        from memory_core.fact_reader import read_memory
+        from memory_core.span_guard import fixed_refusal
+
+        assert_school_is_recalled()
+        self.assertEqual(fixed_refusal("沈星河的学校你知道吗？", []), "我没记过沈星河的学校。")
+        self.assertEqual(fixed_refusal("沈星河上的什么学校？", []), "我没记过沈星河的学校。")
+        gull = {"entity": "阿哨", "statement": "柯小满养了一只三条腿的海鸥，名叫阿哨。", "value": "阿哨", "source": "document"}
+        refusal = fixed_refusal("那只三条腿海鸥叫什么名字？", [gull])
+        self.assertFalse(refusal.startswith("我记得只三条腿") or refusal.startswith("我记得三条"), refusal)
+        answer = (read_memory("那只三条腿海鸥叫什么名字？", [gull], None) or {}).get("text") or ""
+        self.assertIn("阿哨", answer)
+        self.assertNotIn("只三条腿", answer)
+        cat = {"entity": "云朵", "statement": "她养的那只猫的名字是云朵。", "value": "云朵"}
+        named = (read_memory("她养的那只猫叫什么名字？", [cat], None) or {}).get("text") or ""
+        self.assertIn("云朵", named)
+        self.assertNotIn("没记过", named)
+
+
 if __name__ == "__main__":
     unittest.main()

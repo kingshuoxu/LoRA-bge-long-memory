@@ -66,6 +66,7 @@ _GRAMMAR = frozenset(
     "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
     "老总主靠自居公相年手电邮职生习股我"
     "成偏毕建磨属"
+    "只条个座辆念"
 )
 
 _LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*")
