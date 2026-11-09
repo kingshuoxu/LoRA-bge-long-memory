@@ -19,6 +19,7 @@ log = logging.getLogger("memory_core.migrate_0214")
 WINDOW_START = "2026-11-05T04:53:48+00:00"
 WINDOW_END = "2026-11-05T08:59:07+00:00"
 MARKER = "migrations/cleanup-0214.json"
+RESTORE_MARKER = "migrations/restore-0214-kept.json"
 QUARANTINE = "cleaned/0214-junk.json"
 
 
@@ -170,6 +171,87 @@ def _atomic_write_any(path: Path, payload) -> None:
     tmp = path.with_name(f"{path.name}.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
+
+
+def _statement_of(fact: dict) -> str:
+    return str(fact.get("statement") or fact.get("value") or "").strip()
+
+
+def _inside(home: Path, path: Path) -> bool:
+    try:
+        path.resolve().relative_to(home.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _append_missing_fact(home: Path, relative: str, fact: dict) -> bool:
+    """把一条不再判定为垃圾的事实放回原来的专家文件。已有的不重复放。"""
+    target = home / relative
+    if not _inside(home, target) or target.name != "fact_memory.json":
+        return False
+    statement = _statement_of(fact)
+    if not statement or is_0214_junk(statement):
+        return False
+    memory = _read(target)
+    if not isinstance(memory, dict):
+        memory = {"facts": [], "entities": []}
+    facts = memory.setdefault("facts", [])
+    if any(isinstance(item, dict) and _statement_of(item) == statement for item in facts):
+        return False
+    facts.append(fact)
+    names = []
+    for item in facts:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("entity") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    memory["entities"] = names
+    atomic_write_json(target, memory)
+    return True
+
+
+def restore_legitimate_from_cleanup(home: Path) -> int:
+    """只从隔离区或 memory.bak-* 把陈述句放回去。0.2.15 当时直接删、没有备份，就无从恢复。"""
+    home = Path(home)
+    marker = home / RESTORE_MARKER
+    if marker.is_file():
+        return 0
+    restored = 0
+    quarantine_path = home / QUARANTINE
+    data = _read(quarantine_path)
+    items = data.get("items") if isinstance(data, dict) else []
+    if not isinstance(items, list):
+        items = []
+    remaining = []
+    for item in items:
+        if not isinstance(item, dict):
+            remaining.append(item)
+            continue
+        fact = item.get("fact") if isinstance(item.get("fact"), dict) else None
+        text = _statement_of(fact) if fact else str(item.get("text") or "")
+        relative = str(item.get("file") or "")
+        if fact and text and not is_0214_junk(text) and _append_missing_fact(home, relative, fact):
+            restored += 1
+            continue
+        remaining.append(item)
+    if quarantine_path.is_file():
+        atomic_write_json(quarantine_path, {"items": remaining})
+    for backup in sorted(home.glob("memory.bak-*")):
+        if not backup.is_dir():
+            continue
+        for path in backup.glob("experts/*/fact_memory.json"):
+            memory = _read(path)
+            if not isinstance(memory, dict):
+                continue
+            relative = path.relative_to(backup).as_posix()
+            for fact in memory.get("facts") or []:
+                if isinstance(fact, dict) and _append_missing_fact(home, relative, fact):
+                    restored += 1
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(marker, {"done": True, "at": _now(), "restored": restored})
+    return restored
 
 
 def restore_0214_junk(home: Path) -> int:

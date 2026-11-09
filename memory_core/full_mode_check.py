@@ -309,7 +309,7 @@ def _new_traps(service: MemoryService) -> None:
     pending_bad = [
         str(item.get("statement") or "")
         for item in service.list_pending()
-        if is_question_fragment(str(item.get("statement") or "")) or "还是" in str(item.get("statement") or "")
+        if is_question_fragment(str(item.get("statement") or ""))
     ]
     print(f"PENDING_QUESTIONS {len(pending_bad)}", flush=True)
     if pending_bad:

@@ -70,15 +70,29 @@ def is_advice_question(text: str) -> bool:
     return any(mark in raw for mark in _ADVICE)
 
 
+def is_choice_question(text: str) -> bool:
+    """「是A还是B」才是问句。逗号并列的「我是翻译，还是作家」是陈述。"""
+    raw = (text or "").strip()
+    if not re.search(r"是.+还是", raw):
+        return False
+    if is_declarative_fact(raw):
+        return False
+    if re.search(r"[？?吗呢]", raw) or re.match(r"^(?:什么|谁|哪|咋|啥|是不是)", raw):
+        return True
+    if re.search(r"[，,、；;].{0,16}还是", raw):
+        return False
+    return True
+
+
 def is_question_fragment(text: str) -> bool:
     """句首疑问词、句末语气词或问号。不在句子中间搜「什么」「哪」。"""
     raw = (text or "").strip()
     if not raw:
         return True
-    if re.search(r"是.+还是", raw):
-        return True
     if is_declarative_fact(raw):
         return False
+    if is_choice_question(raw):
+        return True
     if is_imperative_request(raw):
         return True
     if raw.endswith(("?", "？")) or re.search(r"(?:吗|呢)[。！]?$", raw):
@@ -101,9 +115,11 @@ def is_self_fact_question(text: str) -> bool:
 
 
 def _looks_like_question(sentence: str) -> bool:
+    if is_declarative_fact(sentence):
+        return False
     if sentence.endswith("?") or sentence.endswith("？"):
         return True
-    if re.search(r"是.+还是", sentence):
+    if is_choice_question(sentence):
         return True
     if any(hint in sentence for hint in _QUESTION_HINTS):
         return True
@@ -237,9 +253,11 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
-    if _looks_like_question(raw) or is_question_fragment(raw) or re.search(r"是.+还是", raw):
+    if _looks_like_question(raw) or is_question_fragment(raw) or is_choice_question(raw):
         return None
-    if re.search(r"啥|什么|谁|吗|呢|多少|还是", value) or re.search(r"是.+还是", entity):
+    if not is_declarative_fact(raw) and (
+        re.search(r"啥|什么|谁|吗|呢|多少|还是", value) or is_choice_question(raw) or is_choice_question(entity)
+    ):
         return None
     entity, attr = _peel_entity(entity, attr)
     attr = _refine_attr(attr, value, how, raw)
@@ -559,7 +577,9 @@ def drop_request_memories(home: Path) -> int:
 def _block_contains_question(text: str) -> bool:
     """整段里只要有一处在问，前面的陈述也不是在教事实。"""
     raw = text or ""
-    if "？" in raw or "?" in raw or re.search(r"是.+还是", raw):
+    if is_declarative_fact(raw):
+        return False
+    if "？" in raw or "?" in raw or is_choice_question(raw):
         return True
     if _looks_like_question(raw) or is_question_fragment(raw):
         return True

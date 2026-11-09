@@ -261,10 +261,11 @@ class MemoryService:
 
             migrate_legacy(self.home, self.models_dir)
         from memory_core.identity import migrate_user_identity
-        from memory_core.migrate_0214 import migrate_0214_junk
+        from memory_core.migrate_0214 import migrate_0214_junk, restore_legitimate_from_cleanup
 
         migrate_user_identity(self.home)
         migrate_0214_junk(self.home)
+        restore_legitimate_from_cleanup(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:

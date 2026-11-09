@@ -1,15 +1,19 @@
 """0.2.14 的清理不能误删含有「翻译」「推荐」的陈述句。"""
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from memory_core.migrate_0214 import migrate_0214_junk, restore_0214_junk
+from memory_core.extract import is_question_fragment
+from memory_core.migrate_0214 import migrate_0214_junk, restore_0214_junk, restore_legitimate_from_cleanup
 
 
 LEGIT = [
     "我的职业是翻译",
     "我是一名翻译",
+    "我是翻译，还是作家",
+    "她是老师，还是画家",
     "她喜欢别人推荐的书",
     "我做产品推荐工作",
     "我喜欢写诗",
@@ -18,7 +22,10 @@ JUNK = [
     "写一首关于秋天的四行小诗",
     "帮我翻译这句话",
     "给我推荐几本书",
+    "柯小满平时穿布鞋还是皮鞋？",
+    "柯小满是男的还是女的",
 ]
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "simulated_0214_facts.json"
 
 
 def _home(version: str, facts: list[dict], created_at: str = "") -> Path:
@@ -50,7 +57,7 @@ class Migrate0214Tests(unittest.TestCase):
     def test_legit_facts_survive_and_junk_is_quarantined_only_for_0214(self):
         home = _home("0.2.14", self._rows(LEGIT + JUNK, "0.2.14"))
         removed = migrate_0214_junk(home)
-        self.assertEqual(removed, 3 + 3)
+        self.assertEqual(removed, len(JUNK) + 3)
         left = _facts(home)
         for text in LEGIT:
             self.assertIn(text, left)
@@ -66,7 +73,7 @@ class Migrate0214Tests(unittest.TestCase):
         again = migrate_0214_junk(home)
         self.assertEqual(again, 0)
         self.assertEqual(len(list(home.glob("memory.bak-*"))), 1)
-        self.assertEqual(restore_0214_junk(home), 3)
+        self.assertEqual(restore_0214_junk(home), len(JUNK))
         restored = _facts(home)
         for text in JUNK:
             self.assertIn(text, restored)
@@ -78,6 +85,60 @@ class Migrate0214Tests(unittest.TestCase):
         left = _facts(home)
         for text in LEGIT + JUNK:
             self.assertIn(text, left)
+        self.assertFalse((home / "cleaned" / "0214-junk.json").exists())
+        self.assertEqual(list(home.glob("memory.bak-*")), [])
+
+    def test_translator_writer_is_not_a_question(self):
+        self.assertFalse(is_question_fragment("我是翻译，还是作家"))
+        self.assertFalse(is_question_fragment("我的职业是翻译"))
+        self.assertFalse(is_question_fragment("她喜欢别人推荐的书"))
+        self.assertTrue(is_question_fragment("柯小满平时穿布鞋还是皮鞋？"))
+        self.assertTrue(is_question_fragment("柯小满是男的还是女的"))
+
+    def test_fixture_file_is_not_rewritten(self):
+        original = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
+        home = _home("0.2.14", json.loads(FIXTURE.read_text(encoding="utf-8")))
+        migrate_0214_junk(home)
+        self.assertEqual(hashlib.sha256(FIXTURE.read_bytes()).hexdigest(), original)
+        self.assertIn("我是翻译，还是作家", _facts(home))
+        self.assertNotIn("柯小满平时穿布鞋还是皮鞋？", _facts(home))
+
+    def test_mistaken_quarantine_is_restored_once(self):
+        """模拟 0.2.28 已经用过宽的分类器清过、并且打过一次性标记。不是用户的真记忆。"""
+        rows = self._rows(["我是翻译，还是作家", "柯小满平时穿布鞋还是皮鞋？"], "0.2.14")
+        home = _home("0.2.14", [])
+        expert = next((home / "experts").glob("*/fact_memory.json"))
+        backup_dir = home / "memory.bak-20261108T000000Z" / "experts" / "expert_9"
+        backup_dir.mkdir(parents=True)
+        original = {"app_version": "0.2.14", "entities": ["我"], "facts": rows}
+        (backup_dir / "fact_memory.json").write_text(json.dumps(original, ensure_ascii=False), encoding="utf-8")
+        backup_hash = hashlib.sha256((backup_dir / "fact_memory.json").read_bytes()).hexdigest()
+        quarantine = home / "cleaned"
+        quarantine.mkdir(parents=True)
+        (quarantine / "0214-junk.json").write_text(json.dumps({
+            "items": [
+                {"file": "experts/expert_9/fact_memory.json", "fact": rows[0]},
+                {"file": "experts/expert_9/fact_memory.json", "fact": rows[1]},
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+        marker = home / "migrations"
+        marker.mkdir(parents=True)
+        (marker / "cleanup-0214.json").write_text(json.dumps({"done": True, "removed": 2}), encoding="utf-8")
+        restored = restore_legitimate_from_cleanup(home)
+        self.assertGreaterEqual(restored, 1)
+        self.assertIn("我是翻译，还是作家", _facts(home))
+        self.assertNotIn("柯小满平时穿布鞋还是皮鞋？", _facts(home))
+        left = [item["fact"]["statement"] for item in json.loads((quarantine / "0214-junk.json").read_text(encoding="utf-8"))["items"]]
+        self.assertIn("柯小满平时穿布鞋还是皮鞋？", left)
+        self.assertNotIn("我是翻译，还是作家", left)
+        self.assertEqual(hashlib.sha256((backup_dir / "fact_memory.json").read_bytes()).hexdigest(), backup_hash)
+        self.assertEqual(restore_legitimate_from_cleanup(home), 0)
+
+    def test_0215_without_backup_cannot_be_restored(self):
+        """0.2.15 直接删掉含「翻译」的句子，没有备份也没有隔离。模拟数据，不是用户的真记忆。"""
+        home = _home("0.2.15", self._rows(["我喜欢写诗"], "0.2.15"))
+        self.assertEqual(restore_legitimate_from_cleanup(home), 0)
+        self.assertEqual(_facts(home), ["我喜欢写诗"])
         self.assertFalse((home / "cleaned" / "0214-junk.json").exists())
         self.assertEqual(list(home.glob("memory.bak-*")), [])
 
