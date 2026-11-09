@@ -70,7 +70,7 @@ def is_imperative_request(text: str) -> bool:
     raw = (text or "").strip()
     if not raw or is_declarative_fact(raw):
         return False
-    return bool(re.match(r"^(?:请|帮我|给我|写一|写首)", raw))
+    return bool(re.match(r"^(?:请(?!问)|帮我|给我|写一|写首)", raw))
 
 
 def is_advice_question(text: str) -> bool:

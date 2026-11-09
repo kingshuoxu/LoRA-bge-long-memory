@@ -1152,12 +1152,16 @@ class MemoryService:
                             break
                     if not accept_span(content, needle, host or fact_answer):
                         linked_names = grounded_subjects(content, remembered)
+                        stored_value = any(
+                            needle and (needle == str(fact.get("value") or "") or needle in statement_of(fact))
+                            for fact in remembered
+                        )
                         decision.fired = False
                         recall["fired"] = False
                         recall["mounted"] = False
                         recall["matched_facts"] = []
                         recall["doc_chips"] = []
-                        if not linked_names and not memory_topic(content, remembered):
+                        if not linked_names and not memory_topic(content, remembered) and not stored_value:
                             fact_answer = None
                         else:
                             fact_answer = fixed_refusal(content, remembered)

@@ -207,6 +207,10 @@ def _overlaps(query: str, fact: dict) -> bool:
 def memory_question(query: str, facts: list[dict], best_sim: float, pool: list[dict] | None = None) -> bool:
     if touches_memory(query, facts) or mentions_stored(query, facts):
         return True
+    from memory_core.answer_type import grounded_subjects, question_kind
+
+    if question_kind(query) and grounded_subjects(query, facts):
+        return True
     if best_sim < MEMORY_SIM:
         return False
     return any(_overlaps(query, fact) for fact in (pool or facts[:TOP_K]))
@@ -549,7 +553,7 @@ def read_memory(
             # 前面是动词（守护白鹭塔）仍是这个名字。后面只多一两个字才是另一个名字。
             if missed.endswith(entity) and not missed.startswith(entity):
                 continue
-            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的")):
+            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家")):
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)

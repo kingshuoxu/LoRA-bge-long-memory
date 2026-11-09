@@ -622,6 +622,51 @@ class CrossEntityTests(unittest.TestCase):
         self.assertNotIn("青藤", only_school.get("text") or "")
         self.assertIn("没记过", only_school.get("text") or "")
 
+    def test_school_question_never_returns_the_cat(self):
+        from memory_core.fact_reader import read_memory
+
+        cat = {"entity": "沈星河", "statement": "沈星河的猫的名字是云朵。", "value": "云朵"}
+        home = {"entity": "沈星河", "statement": "沈星河的住址是青岚镇。", "value": "青岚镇"}
+        school = {"entity": "沈星河", "statement": "沈星河的学校叫青藤中学。", "value": "青藤中学"}
+        questions = [
+            "沈星河的学校叫什么？",
+            "沈星河在哪所学校上学？",
+            "沈星河就读的学校叫什么名字？",
+            "请问沈星河的学校叫啥？",
+            "沈星河的学校的名字是什么？",
+            "沈星河毕业于哪所学校？",
+        ]
+        for question in questions:
+            answer = (read_memory(question, [cat, home], None) or {}).get("text") or ""
+            self.assertNotIn("云朵", answer, question)
+            self.assertNotIn("青岚", answer, question)
+            self.assertIn("没记过", answer, question)
+            known = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
+            self.assertIn("青藤中学", known, question)
+            self.assertNotIn("云朵", known, question)
+        for question in ("周晚宁的学校叫什么？", "周晚宁就读的学校叫什么名字？"):
+            answer = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
+            self.assertNotIn("云朵", answer, question)
+            self.assertNotIn("青藤", answer, question)
+        for question in ("沈星河的猫叫什么名字？", "沈星河养的那只猫叫什么名字？", "沈星河家的猫咪叫啥？"):
+            answer = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
+            self.assertIn("云朵", answer, question)
+            self.assertNotIn("青藤", answer, question)
+
+    def test_wrong_cited_value_fails_the_job(self):
+        from memory_core.e2e_check import wrong_citations
+
+        missed = wrong_citations([
+            {"q": "沈星河的学校叫什么？", "answer": "云朵。", "abstain": False, "kind": "never"},
+        ])
+        self.assertTrue(missed)
+        self.assertIn("云朵", missed[0])
+        clean = wrong_citations([
+            {"q": "沈星河的学校叫什么？", "answer": "我没记过沈星河的学校。", "abstain": True, "kind": "never"},
+            {"q": "沈星河的猫叫什么名字？", "answer": "云朵。", "gold": "云朵", "kind": "primary"},
+        ])
+        self.assertEqual(clean, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -129,6 +129,8 @@ def question_kind(query: str) -> str:
         return "name"
     if "茶" in text and re.search(r"什么|哪种|啥", text):
         return "name"
+    if any(mark in text for mark in ("学校", "上学", "毕业", "就读")):
+        return "name"
     if re.search(r"叫什么|叫啥|什么名字|是什么", text):
         return "name"
     return ""
@@ -653,6 +655,8 @@ def _same_thing(query: str, statement: str) -> bool:
         return False
     if "茶" in asked and "茶" not in text:
         return False
+    if any(mark in asked for mark in ("学校", "上学", "毕业", "就读")) and not any(mark in text for mark in ("学校", "上学", "毕业", "就读")):
+        return False
     if "花" in asked and "花" not in text:
         return False
     if "盐" in asked and "盐" not in text and head_type(query) != "tower":
@@ -738,6 +742,17 @@ def accept_span(
             return False
         if text != expected and expected not in text:
             return False
+        if any(mark in (query or "") for mark in ("学校", "上学", "毕业", "猫", "狗", "茶", "宠物")):
+            owners = []
+            for chunk in re.findall(r"([\u4e00-\u9fff]{2,8})的", query or ""):
+                if chunk in {"学校", "猫", "狗", "茶", "名字", "宠物", "猫咪", "自行车"}:
+                    continue
+                person = re.sub(r"^(?:请问|请|那么|那|这)", "", chunk)
+                person = re.sub(r"(?:家里|家中|家|养|就读|毕业|上学|喜欢|居住|住在|住)$", "", person)
+                if len(person) >= 2:
+                    owners.append(person)
+            if owners and not any(owner in (statement or "") for owner in owners):
+                return False
         if subjects and not any(_subject_present(subject, statement) for subject in subjects):
             return allow_chain
         return True
@@ -811,7 +826,7 @@ def _mentioned_names(query: str, facts: list[dict]) -> list[str]:
         ):
             continue
         after = text[end:end + 1]
-        if not after or after in "的守收有是在打养叫吗？?活岁住多几钱妻学城国第什怎":
+        if not after or after in "的守收有是在打养叫吗？?活岁住多几钱妻学城国第什怎就毕家读上":
             hits.append(name)
     kept: list[str] = []
     for name in hits:
@@ -1190,7 +1205,10 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         pool = [fact for fact in rows if any(mark in statement_of(fact) for mark in ("十六", "透镜"))]
         focus = []
     elif subjects:
-        anchored = [fact for fact in rows if all(name in statement_of(fact) for name in subjects)]
+        attribute_heads = {"名字", "学校", "猫", "狗", "茶", "宠物", "猫咪", "自行车", "住址", "颜色", "汽车"}
+        people = [name for name in subjects if name not in attribute_heads]
+        anchors = people or subjects
+        anchored = [fact for fact in rows if all(name in statement_of(fact) for name in anchors)]
         pool = anchored
     found: list[tuple[int, str, dict]] = []
     for fact in pool:
