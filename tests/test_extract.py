@@ -306,7 +306,6 @@ class TeachAndRecallTests(unittest.TestCase):
             "沈星河喜欢喝龙井茶。"
             "周晚宁是沈星河的同事。"
             "沈星河在青藤中学上学。"
-            "沈星河的学校叫什么？"
         )
         facts = pattern_extract(text)
         values = {fact["value"] for fact in facts}
@@ -317,6 +316,12 @@ class TeachAndRecallTests(unittest.TestCase):
         self.assertIn("沈星河", values)
         self.assertIn("青藤中学", values)
         self.assertTrue(all("什么" not in fact["statement"] for fact in facts))
+        for question in (
+            "磨这座灯塔透镜的工匠是诺丁。夜里值守的那位是谁？",
+            "诺丁是磨镜的那位。值班的那位是谁？",
+            "沈星河的猫叫云朵。沈星河的学校叫什么？",
+        ):
+            self.assertEqual(pattern_extract(question), [], question)
         for statement in (
             "沈星河就读于青藤中学",
             "沈星河毕业于青藤中学",
