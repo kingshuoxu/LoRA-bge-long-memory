@@ -328,8 +328,7 @@ class TeachAndRecallTests(unittest.TestCase):
             self.assertTrue(got and got[0]["value"] == "青藤中学", statement)
 
     def test_taught_school_is_not_a_false_miss(self):
-        from memory_core.e2e_check import assert_school_is_recalled
-        from memory_core.fact_reader import read_memory
+        from memory_core.fact_reader import assert_school_is_recalled, read_memory
         from memory_core.span_guard import fixed_refusal
 
         assert_school_is_recalled()

@@ -592,3 +592,36 @@ def read_memory(
         if _slot_ok(query, checked, fact, names):
             return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}
+
+
+def assert_school_is_recalled() -> None:
+    """教过的学校必须答出来。事实在而说没记过，验收直接失败。"""
+    cat = {"entity": "沈星河", "statement": "沈星河的猫的名字是云朵。", "value": "云朵"}
+    forms = [
+        "沈星河在青藤中学上学。",
+        "沈星河的学校是青藤中学。",
+        "沈星河就读于青藤中学。",
+        "沈星河毕业于青藤中学。",
+        "沈星河是青藤中学的学生。",
+    ]
+    questions = [
+        "沈星河的学校叫什么？",
+        "沈星河在哪所学校上学？",
+        "沈星河念的哪所学校？",
+        "沈星河上的什么学校？",
+        "沈星河在哪个学校读书？",
+        "请问沈星河的学校叫啥？",
+        "沈星河的学校的名字是什么？",
+        "沈星河就读的学校叫什么名字？",
+        "沈星河毕业于哪所学校？",
+        "沈星河的学校你知道吗？",
+    ]
+    for statement in forms:
+        fact = {"entity": "沈星河", "statement": statement, "value": "青藤中学"}
+        for question in questions:
+            answer = (read_memory(question, [fact, cat], None) or {}).get("text") or ""
+            if "青藤" not in answer or "没记过" in answer or "云朵" in answer:
+                raise RuntimeError(f"教过的学校没有答出来：{statement} / {question} -> {answer}")
+        other = (read_memory("周晚宁的学校叫什么？", [fact, cat], None) or {}).get("text") or ""
+        if "青藤" in other or "云朵" in other:
+            raise RuntimeError(f"别人的学校拿了沈星河的取值：{other}")
