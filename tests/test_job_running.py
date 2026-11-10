@@ -10,6 +10,33 @@ from memory_core.service import MemoryService
 from memory_core.store import atomic_write_json, read_json
 
 
+class ChatIntakeTests(unittest.TestCase):
+    def test_tag_question_reaches_pending_and_empty_chain_does_not_invent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            service = MemoryService(home=home, models_dir=home / "models", device="cpu", use_repo_experts=False)
+            service.chat.reply = lambda *args, **kwargs: "约翰。"
+            conv = service.create_conversation()["id"]
+            for text in (
+                "我家养了一只狗，叫胡椒。你知道吗？",
+                "我会修钟表。你知道吗",
+                "周晚宁是沈星河的妹妹。你知道吗？",
+                "沈星河的猫叫云朵，你知道吗？",
+            ):
+                service.send_message(conv, text)
+            pending = " ".join(
+                str(item.get("statement") or "") + str(item.get("value") or "")
+                for item in service.list_pending()
+            )
+            for needle in ("胡椒", "修钟表", "周晚宁", "云朵"):
+                self.assertIn(needle, pending, needle)
+            fresh = service.create_conversation("空")["id"]
+            answer = service.send_message(fresh, "诺丁打磨透镜的那座塔是谁守护的？")["assistant"]["content"]
+            self.assertNotIn("约翰", answer)
+            self.assertNotEqual(answer.strip().rstrip("。"), "诺丁")
+            self.assertTrue("没记过" in answer or "不在记忆里" in answer, answer)
+
+
 class JobRunningTests(unittest.TestCase):
     def test_finished_job_does_not_block_chat(self):
         with tempfile.TemporaryDirectory() as tmp:

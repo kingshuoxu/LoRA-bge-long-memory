@@ -641,6 +641,44 @@ class AnswerTypeTests(unittest.TestCase):
             self.assertNotIn("朱红", text, question)
             self.assertNotIn("云朵", text, question)
 
+    def test_book_memory_does_not_swap_type_role_or_pet(self):
+        from memory_core.fact_reader import read_memory
+
+        facts = [
+            {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔", "source": "document"},
+            {"entity": "诺丁", "statement": "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "value": "诺丁", "source": "document"},
+            {"entity": "阿哨", "statement": "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "value": "阿哨", "source": "document"},
+            {"entity": "星砂盐", "statement": "雾港的特产是一种蓝色的海盐，名叫星砂盐，每年霜降开始晾晒。", "value": "星砂盐", "source": "document"},
+        ]
+
+        def answer(question):
+            return (read_memory(question, facts, None) or {}).get("text") or ""
+
+        self.assertIn("瑞典", answer("诺丁是哪国人？"))
+        self.assertIn("柯岚", answer("谁守护白鹭塔？"))
+        self.assertIn("诺丁", answer("谁打磨了透镜？"))
+        self.assertIn("柯小满", answer("柯岚的女儿叫什么？"))
+        self.assertIn("白鹭塔", answer("雾港有哪座灯塔？"))
+        for question in (
+            "白鹭塔是哪国的？",
+            "瑞典是哪座塔？",
+            "白鹭塔在哪个国家？",
+            "诺丁是哪座建筑？",
+            "柯岚是哪座塔？",
+            "雾港是哪座塔？",
+        ):
+            text = answer(question)
+            self.assertTrue("没记过" in text or "不在记忆里" in text or "没提到" in text or "不确定" in text, (question, text))
+            self.assertFalse(text.startswith("瑞典") or text.startswith("白鹭塔"), (question, text))
+        for question in ("谁建造了白鹭塔？", "白鹭塔的建筑师是谁？", "谁设计了白鹭塔？", "透镜的建造者是谁？"):
+            text = answer(question)
+            self.assertNotIn("柯岚", text, question)
+            self.assertNotIn("诺丁", text, question)
+        for question in ("柯岚的兄弟是谁？", "柯小满的姐姐叫什么？", "柯小满的叔叔是谁？", "阿哨的爷爷是谁？"):
+            text = answer(question)
+            self.assertFalse(text.startswith("阿哨") or text.startswith("柯小满"), (question, text))
+            self.assertTrue("没提到" in text or "没记过" in text or "不在记忆里" in text or "不确定" in text, (question, text))
+
 
 class CrossEntityTests(unittest.TestCase):
     def test_pet_name_is_not_the_school(self):

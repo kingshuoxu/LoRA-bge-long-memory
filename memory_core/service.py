@@ -758,9 +758,26 @@ class MemoryService:
                 decision.label = "基座"
                 decision.fired = False
                 return self._finish_turn(conv_id, user_msg, text, decision, recall)
-            from memory_core.span_guard import is_open_task
+            from memory_core.span_guard import asks_memory_chain, fixed_refusal, is_open_task
 
             open_task = is_open_task(content)
+            if asks_memory_chain(content) and not open_task and not any(
+                isinstance(fact, dict) and not fact.get("superseded")
+                for record in experts
+                for fact in ((record.fact_memory or {}).get("facts") or [])
+            ):
+                decision = route_with_trace(content, [], None)[0]
+                decision.fired = False
+                decision.reason = "memory_miss"
+                decision.label = "基座"
+                decision.expert = None
+                recall = statement_trace()
+                recall["reason"] = "memory_miss"
+                recall["abstain"] = True
+                recall["fired"] = False
+                recall["mounted"] = False
+                recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
+                return self._finish_turn(conv_id, user_msg, fixed_refusal(content), decision, recall)
             memory_block = ""
             if utterance_is_question(content) and not asked and not open_task:
                 read = self._read_memory(content, experts)
@@ -1278,6 +1295,23 @@ class MemoryService:
                     recall["doc_chips"] = []
                     recall["reason_text"] = "没记住的个人属性不交给基座编"
                     recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+            if not fact_answer and not open_task and utterance_is_question(content):
+                from memory_core.span_guard import asks_memory_chain, fixed_refusal
+
+                if asks_memory_chain(content):
+                    fact_answer = fixed_refusal(content)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
@@ -1893,7 +1927,9 @@ class MemoryService:
     def _worker_alive(self, job_id: str, status: dict) -> bool:
         from memory_core.job_recover import pid_alive
 
-        if self._proc_job == job_id and (self._proc is None or self._proc.poll() is None):
+        if self._proc is not None and self._proc.poll() is None and self._proc_job in {None, "", job_id}:
+            return True
+        if self._proc_job == job_id and self._proc is None:
             return True
         return pid_alive(status.get("worker_pid"))
 

@@ -53,11 +53,19 @@ def _visible_question_text(text: str) -> str:
 
 
 def is_reported_statement(text: str) -> bool:
-    """转述别人的话。句末没有？/吗时，嵌在里面的问话不是这句自己在问。"""
+    """转述别人的话。句末没有？/吗时，嵌在里面的问话不是这句自己在问。
+
+    句首的「告诉我谁」是要求，不是转述。
+    """
     raw = (text or "").strip().rstrip("。")
     if not raw or re.search(r"[？?]", raw) or re.search(r"(?:吗|呢)$", raw):
         return False
-    return bool(re.search(r"问过|说过|告诉|说道|说他|说她|说我|说你|问我|问他|问她|不知道", raw))
+    if re.match(r"^(?:请)?告诉我", raw):
+        return False
+    return bool(re.search(
+        r"问过|说过|说道|说他|说她|说我|说你|问我|问他|问她|不知道|告诉过|告诉他|告诉她|他告诉|她告诉|我告诉|告诉我",
+        raw,
+    ))
 
 
 def is_declarative_fact(text: str) -> bool:
@@ -85,7 +93,13 @@ def is_imperative_request(text: str) -> bool:
     raw = (text or "").strip()
     if not raw or is_declarative_fact(raw) or is_reported_statement(raw):
         return False
-    if re.match(r"^(?:请(?!问)|帮我|给我|写一|写首|告诉我)", raw):
+    if re.match(r"^(?:请(?!问)|帮我|给我|写一|写首)", raw):
+        return True
+    if re.match(r"^(?:请)?告诉我(?:谁|哪|什么|啥)", raw):
+        return True
+    if re.match(r"^(?:写|留)(?:一)?(?:张|个|条)?(?:留言|纸条)", raw):
+        return True
+    if re.match(r"^给[\u4e00-\u9fff]{1,8}(?:写|留)", raw):
         return True
     return bool(re.match(r"^(?:推荐|写|翻译|查一下|搜一下)(?:一|几|个|首|下|点)", raw))
 
@@ -112,13 +126,15 @@ def is_choice_question(text: str) -> bool:
 
 def is_main_clause_question(text: str) -> bool:
     """主句在问。转述里的「哪里」「为什么」不算这句自己在问。"""
-    raw = (text or "").strip().rstrip("。")
+    raw = without_tag_question(text).strip().rstrip("。")
     if not raw or is_reported_statement(raw) or is_declarative_fact(raw):
         return False
     visible = _visible_question_text(raw)
     if re.search(r"[？?]", visible) or re.search(r"(?:吗|呢)$", visible):
         return True
     if re.match(r"^(?:什么|谁|哪|咋|啥|怎么|如何|多少)", visible):
+        return True
+    if re.search(r"(?:有多高|多高|高多少|多少米)$", visible) and not re.search(r"[0-9一二三四五六七八九十百千两]+米", visible):
         return True
     if re.search(r"(?:哪里|哪儿|什么|谁|哪个|哪所|多少|怎么|如何|啥)$", visible):
         return True
@@ -147,7 +163,18 @@ def is_self_fact_question(text: str) -> bool:
     return any(raw.startswith(prefix) for prefix in ("我叫什么", "我是谁", "我的名字", "我住", "我的生日"))
 
 
+_TAG_TAIL = re.compile(
+    r"(?:[，,。\s]*)(?:你知道吗|你知道不|你知道|知道吗|知道不|对吧|是吗|对不对)[？?。]*$"
+)
+
+
+def without_tag_question(text: str) -> str:
+    """去掉句尾的「你知道吗」。前面的事实还在。"""
+    return _TAG_TAIL.sub("", (text or "").strip()).strip()
+
+
 def _looks_like_question(sentence: str) -> bool:
+    sentence = without_tag_question(sentence)
     if is_declarative_fact(sentence):
         return False
     if sentence.endswith("?") or sentence.endswith("？"):
@@ -628,11 +655,14 @@ def _match_life(sentence: str) -> dict[str, Any] | None:
     if matched:
         return _make_fact(matched.group("entity"), "喜欢", matched.group("value"), "like", sentence)
     matched = re.match(
-        r"^(?P<entity>[\u4e00-\u9fff·]{2,8})是(?P<who>[\u4e00-\u9fff·]{2,8})的(?P<role>[\u4e00-\u9fff]{1,6})$",
+        r"^(?P<value>[\u4e00-\u9fff·]{2,8})是(?P<entity>[\u4e00-\u9fff·]{2,8})的(?P<role>[\u4e00-\u9fff]{1,6})$",
         sentence,
     )
     if matched and matched.group("role") != "学生":
-        return _make_fact(matched.group("entity"), matched.group("role"), matched.group("who"), "role", sentence)
+        return _make_fact(matched.group("entity"), matched.group("role"), matched.group("value"), "role", sentence)
+    matched = re.match(r"^(?P<entity>我|他|她|[\u4e00-\u9fff·]{2,8})(?:会|擅长)(?P<value>[\u4e00-\u9fffA-Za-z0-9]{1,16})$", sentence)
+    if matched:
+        return _make_fact(matched.group("entity"), "技能", matched.group("value"), "skill", sentence)
     if is_reported_statement(sentence):
         who = re.match(r"^([\u4e00-\u9fff·]{1,6})", sentence)
         entity = who.group(1) if who else "他"
@@ -695,6 +725,9 @@ def pattern_extract(text: str) -> list[dict[str, Any]]:
 
 def _extract_block(text: str, facts: list[dict[str, Any]], seen: set[tuple[str, str, str]], current: str | None) -> None:
     for sentence in _split_sentences(text):
+        sentence = without_tag_question(sentence)
+        if not sentence:
+            continue
         if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
             continue
         found = _match_sentence(sentence, current)

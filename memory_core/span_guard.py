@@ -146,8 +146,10 @@ def predicate_covered(query: str, statement: str, fact: dict | None = None) -> b
         return any(mark in text for mark in ("出生", "生日", "生于"))
     if any(mark in asked for mark in ("哪个省", "什么省", "省份")) or "属于哪" in asked:
         return "省" in text
-    if any(mark in asked for mark in ("哪国", "国籍", "哪国人")):
-        return any(country in text for country in _COUNTRIES)
+    if any(mark in asked for mark in ("哪国", "国籍", "哪国人", "哪个国家", "什么国家", "在哪个国家")):
+        from memory_core.answer_type import nation_supported
+
+        return nation_supported(asked, text)
     if any(mark in asked for mark in ("多少钱", "价格", "卖多少")):
         return any(mark in text for mark in ("钱", "价格", "元"))
     if any(mark in asked for mark in ("性别", "是男", "是女", "是公", "是母", "公是母")):
@@ -191,6 +193,10 @@ def predicate_covered(query: str, statement: str, fact: dict | None = None) -> b
         return any(mark in text for mark in ("家乡", "老家", "长大"))
     if kind == "time":
         return bool(re.search(r"\d{3,4}年", text)) or any(term in text for term in _SOLAR)
+    from memory_core.answer_type import role_supported
+
+    if not role_supported(asked, text):
+        return False
     return True
 
 
@@ -319,6 +325,24 @@ def _school_asker(text: str) -> str:
     return name if len(name) >= 2 else ""
 
 
+def _awkward_clause(clause: str) -> bool:
+    """没有主语的「会弹钢琴」，或整段转述，都不能当成弃权的主语。"""
+    text = (clause or "").strip()
+    if not text:
+        return False
+    if re.match(r"^(?:会|能|可以|要|想)", text):
+        return True
+    if re.search(r"问过|说过|说道|不知道|告诉", text):
+        return True
+    return False
+
+
+def asks_memory_chain(query: str) -> bool:
+    from memory_core.answer_type import asks_memory_chain as _asks
+
+    return _asks(query)
+
+
 def _asked_clause(query: str) -> str:
     """保留问句里真正在问的那一段。问句尾巴不能剩一个叫、是、的、于。"""
     text = (query or "").strip().rstrip("？?。！!")
@@ -422,9 +446,9 @@ def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
         return f"我记得{subject}，但这件事我不确定。"
     if book and clause:
         return f"我不确定{clause}。"
-    if clause:
+    if clause and not _awkward_clause(clause):
         return f"我没记过{clause}。"
-    return "我没记过这件事。"
+    return "这件事不在记忆里。"
 
 
 def uncertain_reply(query: str, found: list[dict]) -> str:

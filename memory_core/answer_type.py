@@ -133,11 +133,11 @@ def question_kind(query: str) -> str:
         return "colour"
     if re.search(r"什么材料|啥材料|哪种材料|什么做的|用什么做|材料", text):
         return "material"
-    if re.search(r"哪国|国籍", text):
+    if re.search(r"哪国|国籍|哪个国家|什么国家|哪一国|在哪个国家", text):
         return "nation"
     if re.search(r"什么鸟|什么动物|哪种鸟|哪种动物", text):
         return "animal"
-    if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔|塔叫什么|塔叫啥|塔是什么", text):
+    if re.search(r"哪座塔|什么塔|哪座灯塔|哪一座塔|塔叫什么|塔叫啥|塔是什么|哪座建筑|什么建筑|哪个建筑|哪栋建筑", text):
         return "tower"
     if "十六面" in text and "谁" not in text and re.search(r"哪座|灯塔|什么塔", text):
         return "tower"
@@ -315,9 +315,9 @@ def _tower_duty(query: str) -> bool:
         return False
     if re.search(r"谁的女儿|谁的闺女|女儿叫", clause):
         return False
-    if re.search(r"第一次|点亮|点灯|建成|发明|设计", clause):
+    if re.search(r"第一次|点亮|点灯|建成|发明|设计|建造|修建|施工|兴建|承建|建筑师|建造者|设计师", clause):
         return False
-    if re.search(r"妻子|爱人|老婆|丈夫|老公|太太|配偶", clause):
+    if re.search(r"妻子|爱人|老婆|丈夫|老公|太太|配偶|兄弟|哥哥|弟弟|姐姐|妹妹|叔叔|伯伯|舅舅|姑姑|爷爷|奶奶|外婆|外公", clause):
         return False
     if _charged_with(clause) == "keeper":
         return True
@@ -504,6 +504,93 @@ def _person_shape(span: str) -> bool:
     return True
 
 
+def _nation_subject(query: str) -> str:
+    text = re.sub(r"[？?。\s]", "", query or "")
+    matched = re.search(r"(.+?)(?:是哪国|是哪个国家|是什么国家|是哪一国|在哪个国家|的国籍|哪国人)", text)
+    if not matched:
+        return ""
+    chunk = re.split(r"的", matched.group(1))[-1]
+    return re.sub(r"^(?:请问|那个|这位|那位)", "", chunk)[-6:]
+
+
+def nation_supported(query: str, statement: str) -> bool:
+    """国籍只属于被它修饰的那个人。同一句里的塔、港口不能借走这个国家。"""
+    text = statement or ""
+    bearers: list[tuple[str, str]] = []
+    for country in _COUNTRIES:
+        for match in re.finditer(re.escape(country) + r"(?:人|国人)?(?:工匠|师傅|人氏)?([\u4e00-\u9fff]{0,4})", text):
+            tail = match.group(1) or ""
+            name = ""
+            named = re.match(r"([\u4e00-\u9fff]{2,3})", tail)
+            if named and named.group(1) not in {"打磨", "建造", "修建", "工匠", "师傅"}:
+                name = named.group(1)
+            role = "工匠" if ("工匠" in match.group(0) or "师傅" in match.group(0)) else ""
+            bearers.append((name, role))
+    if not bearers:
+        return False
+    subject = _nation_subject(query)
+    if not subject:
+        return True
+    if any(subject == name or (name and subject in name) for name, _role in bearers):
+        return True
+    if subject.endswith(("工匠", "师傅")) or subject in {"工匠", "师傅", "磨镜人"}:
+        return any(name or role for name, role in bearers)
+    return False
+
+
+def tower_identity_mismatch(query: str, tower: str) -> bool:
+    """「瑞典是哪座塔」不是在问瑞典有哪座塔。主语本身得就是这座塔。"""
+    if not re.search(r"是哪座(?:塔|灯塔|建筑)|是什么建筑|是哪座建筑|是哪个建筑", query or ""):
+        return False
+    text = re.sub(r"[？?。\s]", "", query or "")
+    matched = re.match(r"(.+?)是(?:哪座|什么|哪个)", text)
+    if not matched:
+        return False
+    who = re.split(r"的", matched.group(1))[-1]
+    return bool(who) and who != tower and not who.endswith("塔")
+
+
+_UNSTORED_ROLES = (
+    ("建造", ("建造", "修建", "兴建", "承建", "施工")),
+    ("修建", ("修建", "建造", "兴建")),
+    ("设计", ("设计",)),
+    ("建筑师", ("建筑师", "设计师")),
+    ("施工", ("施工", "承建")),
+    ("兄弟", ("兄弟", "哥哥", "弟弟")),
+    ("哥哥", ("哥哥", "兄弟")),
+    ("弟弟", ("弟弟", "兄弟")),
+    ("姐姐", ("姐姐", "妹妹")),
+    ("妹妹", ("妹妹", "姐姐")),
+    ("叔叔", ("叔叔", "伯伯", "叔父")),
+    ("伯伯", ("伯伯", "叔叔")),
+    ("爷爷", ("爷爷", "祖父")),
+    ("奶奶", ("奶奶", "祖母")),
+    ("姑姑", ("姑姑", "姑妈")),
+    ("舅舅", ("舅舅", "舅父")),
+)
+
+
+def role_supported(query: str, statement: str) -> bool:
+    """问的角色必须写在这一句里。守护不是建造，宠物也不是兄弟姐妹。"""
+    asked = query or ""
+    text = statement or ""
+    for word, aliases in _UNSTORED_ROLES:
+        if word in asked and not any(alias in text for alias in aliases):
+            return False
+    return True
+
+
+def asks_memory_chain(query: str) -> bool:
+    """名字嵌在前半句、后半句再问另一个角色。没有记忆时不能交给基座接这句话。"""
+    text = query or ""
+    if not re.search(r"谁|哪|什么|啥", text):
+        return False
+    return bool(re.search(
+        r"[\u4e00-\u9fff]{2,4}.{0,10}(?:打磨|守护|看守|养|磨).{0,18}的.{0,16}(?:谁|哪|什么|啥)",
+        text,
+    ))
+
+
 def extract_span(query: str, statement: str) -> str:
     """从这一句里抄问句要的那一种取值。抄不到就返回空。"""
     text = statement or ""
@@ -522,7 +609,9 @@ def extract_span(query: str, statement: str) -> str:
                 return item
         return ""
     if kind == "nation":
-        for country in _COUNTRIES:
+        if not nation_supported(query, text):
+            return ""
+        for country in sorted(_COUNTRIES, key=len, reverse=True):
             if country in text:
                 return country
         return ""
@@ -535,6 +624,8 @@ def extract_span(query: str, statement: str) -> str:
         if _lens_required(query, text):
             return ""
         named = re.search(r"名叫([\u4e00-\u9fff]{1,6}塔)", text)
+        if named and tower_identity_mismatch(query, named.group(1)):
+            return ""
         if named and not _lens_required(query, text):
             return named.group(1)
         found = []
@@ -550,9 +641,10 @@ def extract_span(query: str, statement: str) -> str:
                     found.append(chunk)
                     break
         proper = [name for name in found if name not in {"灯塔", "这座塔", "那座塔"}]
-        if proper:
-            return proper[-1]
-        return found[-1] if found else ""
+        tower = proper[-1] if proper else (found[-1] if found else "")
+        if tower and tower_identity_mismatch(query, tower):
+            return ""
+        return tower
     if kind == "place":
         if "村" in (query or ""):
             match = re.search(r"([\u4e00-\u9fff]{1,8}村)", text)
@@ -803,6 +895,8 @@ def accept_span(
 ) -> bool:
     """取值必须是问句要的种类，而且不能就是问句里的主语。"""
     text = (span or "").strip().rstrip("。")
+    if not role_supported(query, statement):
+        return False
     if not text or text not in (statement or ""):
         return False
     if re.search(r"啥|什么|吗|呢|多少|是谁", text) or text in {"谁", "哪", "几", "啥名", "哪里", "哪儿", "哪个", "哪所"}:
@@ -1095,7 +1189,7 @@ def _tower_name_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
             if "名叫" not in text:
                 continue
             tower = _named_tower(text)
-            if tower:
+            if tower and not tower_identity_mismatch(asked, tower):
                 return tower, fact
     return None
 

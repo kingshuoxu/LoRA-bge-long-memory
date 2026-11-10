@@ -313,8 +313,11 @@ class TeachAndRecallTests(unittest.TestCase):
         self.assertIn("杭州", values)
         self.assertIn("骑自行车", values)
         self.assertIn("龙井茶", values)
-        self.assertIn("沈星河", values)
+        self.assertIn("周晚宁", values)
         self.assertIn("青藤中学", values)
+        colleague = next(fact for fact in facts if fact.get("attr") == "同事")
+        self.assertEqual(colleague["entity"], "沈星河")
+        self.assertEqual(colleague["value"], "周晚宁")
         self.assertTrue(all("什么" not in fact["statement"] for fact in facts))
         for question in (
             "磨这座灯塔透镜的工匠是诺丁。夜里值守的那位是谁？",
@@ -376,6 +379,47 @@ class TeachAndRecallTests(unittest.TestCase):
         named = (read_memory("她养的那只猫叫什么名字？", [cat], None) or {}).get("text") or ""
         self.assertIn("云朵", named)
         self.assertNotIn("没记过", named)
+
+    def test_chat_keeps_facts_before_tag_question_and_drops_bare_requests(self):
+        from memory_core.extract import is_imperative_request, is_question_fragment, pattern_extract
+        from memory_core.span_guard import asks_memory_chain, fixed_refusal
+
+        taught = [
+            "我家养了一只狗，叫胡椒。你知道吗？",
+            "我会修钟表。你知道吗",
+            "周晚宁是沈星河的妹妹。你知道吗？",
+            "沈星河的猫叫云朵，你知道吗？",
+        ]
+        for text in taught:
+            values = {fact["value"] for fact in pattern_extract(text)}
+            self.assertTrue(values, text)
+        self.assertIn("胡椒", {fact["value"] for fact in pattern_extract(taught[0])})
+        self.assertIn("修钟表", {fact["value"] for fact in pattern_extract(taught[1])})
+        self.assertIn("周晚宁", {fact["value"] for fact in pattern_extract(taught[2])})
+        self.assertIn("云朵", {fact["value"] for fact in pattern_extract(taught[3])})
+        for kept in (
+            "我的职业是翻译",
+            "我是一名翻译",
+            "我是翻译，还是作家",
+            "她喜欢别人推荐的书",
+            "李四问过我为什么天是蓝的",
+        ):
+            self.assertFalse(is_question_fragment(kept), kept)
+            self.assertFalse(is_imperative_request(kept), kept)
+        for junk in (
+            "帮我写一张留给邻居的留言",
+            "写张留言条",
+            "白鹭塔有多高",
+            "告诉我谁守护白鹭塔",
+        ):
+            self.assertTrue(is_question_fragment(junk) or is_imperative_request(junk), junk)
+            self.assertEqual(pattern_extract(junk), [], junk)
+        piano = fixed_refusal("会弹钢琴你知道吗？", [])
+        self.assertNotIn("会弹钢琴不在记忆里", piano)
+        self.assertNotIn("你知道", piano)
+        reported = fixed_refusal("李四问过我为什么天是蓝的？", [])
+        self.assertNotIn("问过我为什么", reported)
+        self.assertTrue(asks_memory_chain("诺丁打磨透镜的那座塔是谁守护的？"))
 
 
 if __name__ == "__main__":
