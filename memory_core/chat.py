@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import torch
@@ -91,7 +92,14 @@ class ChatEngine:
             self._loaded.add(expert.name)
         self.model.eval()
 
-    def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 256, hint: str = "") -> str:
+    def reply(
+        self,
+        history: list[dict],
+        decision: RouteDecision,
+        max_new_tokens: int = 256,
+        hint: str = "",
+        max_seconds: float | None = None,
+    ) -> str:
         self.ensure()
         trimmed = history[-12:]
         last_user = ""
@@ -116,14 +124,25 @@ class ChatEngine:
         use_adapter = bool(decision.fired and decision.expert and decision.expert in self._loaded)
 
         def _generate():
+            kwargs = {
+                "max_new_tokens": max_new_tokens,
+                "do_sample": False,
+                "pad_token_id": self.tok.eos_token_id,
+                "eos_token_id": eos,
+            }
+            if max_seconds and max_seconds > 0:
+                from transformers import StoppingCriteria, StoppingCriteriaList
+
+                class _Wall(StoppingCriteria):
+                    def __init__(self, seconds: float):
+                        self.deadline = time.monotonic() + seconds
+
+                    def __call__(self, input_ids, scores, **kwargs):
+                        return bool(time.monotonic() >= self.deadline)
+
+                kwargs["stopping_criteria"] = StoppingCriteriaList([_Wall(max_seconds)])
             with torch.no_grad():
-                out = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=self.tok.eos_token_id,
-                    eos_token_id=eos,
-                )
+                out = self.model.generate(**inputs, **kwargs)
             return _finish_sentence(self.tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip())
 
         if use_adapter:

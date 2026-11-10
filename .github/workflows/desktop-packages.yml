@@ -236,11 +236,39 @@ jobs:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
         run: bash packaging/appimage-upgrade.sh
 
+      - name: PDF import stays within the thread cap
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          OMP_NUM_THREADS: "2"
+          PYTHONUNBUFFERED: "1"
+          HF_HUB_DISABLE_TELEMETRY: "1"
+        run: |
+          set -euo pipefail
+          script=""
+          for candidate in $(find desktop/dist -type f -name e2e-check.sh); do
+            script="$candidate"
+            break
+          done
+          if [ -z "$script" ]; then
+            echo "packaged runtime was not found" >&2
+            exit 1
+          fi
+          root="$(dirname "$script")"
+          export PYTHONPATH="$root/app${PYTHONPATH:+:$PYTHONPATH}"
+          export LD_LIBRARY_PATH="$root/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export LORA_MEMORY_HOME="${RUNNER_TEMP:-/tmp}/lora-pdf-bound"
+          export LORA_MEMORY_DOC_BOUND=240
+          rm -rf "$LORA_MEMORY_HOME"
+          "$root/runtime/bin/python3" packaging/pdf_bound_check.py
+
       - name: Full mode document check
         if: runner.os == 'Linux'
         shell: bash
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          OMP_NUM_THREADS: "4"
           PYTHONUNBUFFERED: "1"
           HF_HUB_DISABLE_TELEMETRY: "1"
         run: |
@@ -267,6 +295,7 @@ jobs:
         shell: bash
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          OMP_NUM_THREADS: "4"
           HF_HUB_DISABLE_TELEMETRY: "1"
           PYTHONUNBUFFERED: "1"
         run: |

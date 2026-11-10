@@ -1425,7 +1425,12 @@ class MemoryService:
                     from memory_core.routing import RouteDecision
 
                     decision = RouteDecision(False, None, 0.0, "基座", "no_experts", False, False)
-                    return self.chat.reply([{"role": "user", "content": prompt}], decision, max_new_tokens=180)
+                    return self.chat.reply(
+                        [{"role": "user", "content": prompt}],
+                        decision,
+                        max_new_tokens=64,
+                        max_seconds=20,
+                    )
             except Exception:
                 return ""
 
@@ -1457,6 +1462,14 @@ class MemoryService:
 
         self._preview_thread = threading.Thread(target=_run, name="doc-import", daemon=True)
         self._preview_thread.start()
+        return self.document_status()
+
+    def cancel_document_import(self) -> dict:
+        from memory_core.documents import docs_root
+
+        flag = docs_root(self.home) / "CANCEL"
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("1", encoding="utf-8")
         return self.document_status()
 
     def queue_document_points(self, doc_id: str, point_ids: list[str]) -> dict:

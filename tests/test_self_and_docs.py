@@ -316,5 +316,54 @@ class WugangTests(unittest.TestCase):
         self.assertEqual(short, [])
 
 
+class ThreadAndImportBoundTests(unittest.TestCase):
+    def test_thread_budget_honors_omp_and_defaults_to_two(self):
+        import os
+
+        from memory_core.runtime_threads import configure_process_threads, thread_budget
+
+        saved = {key: os.environ.get(key) for key in ("LORA_MEMORY_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")}
+        try:
+            for key in saved:
+                os.environ.pop(key, None)
+            self.assertEqual(thread_budget(), min(2, os.cpu_count() or 1))
+            os.environ["OMP_NUM_THREADS"] = "2"
+            self.assertEqual(thread_budget(), 2)
+            os.environ["MKL_NUM_THREADS"] = "8"
+            self.assertEqual(thread_budget(), 2)
+            configure_process_threads()
+            self.assertEqual(os.environ["OMP_NUM_THREADS"], "2")
+            self.assertEqual(os.environ["MKL_NUM_THREADS"], "8")
+            self.assertEqual(os.environ["OPENBLAS_NUM_THREADS"], "2")
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_point_extraction_stops_at_the_deadline_and_keeps_sentences(self):
+        import time
+
+        from memory_core.documents import DocumentTimeout, extract_key_points
+
+        called = {"n": 0}
+
+        def ask(_prompt: str) -> str:
+            called["n"] += 1
+            return ""
+
+        with self.assertRaises(DocumentTimeout) as caught:
+            extract_key_points(
+                [("第一章", "白鹭塔建于1873年。塔高四十二米。")],
+                ask=ask,
+                deadline=time.monotonic() - 1,
+            )
+        self.assertEqual(called["n"], 0)
+        blob = "\n".join(point["text"] for point in caught.exception.points)
+        self.assertIn("1873", blob)
+        self.assertEqual(caught.exception.completed, [])
+
+
 if __name__ == "__main__":
     unittest.main()

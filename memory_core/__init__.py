@@ -1,3 +1,7 @@
+from memory_core.runtime_threads import configure_process_threads
+
+configure_process_threads()
+
 """可复用的 LoRA 长期记忆库。
 
 桌面客户端、命令行验收和以后的移植都调用这里，不把路由、抽取、训练、

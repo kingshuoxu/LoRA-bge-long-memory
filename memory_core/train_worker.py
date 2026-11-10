@@ -298,6 +298,9 @@ def _run_groups(home: Path, job_id: str, request: dict, groups: list[dict]) -> i
 
 
 def run_job(home: Path, job_id: str, request_override: dict | None = None, work_dir: Path | None = None, finish: bool = True) -> int:
+    from memory_core.runtime_threads import apply_torch_threads
+
+    apply_torch_threads()
     home = Path(home)
     job_dir = home / "jobs" / job_id
     if request_override is None:

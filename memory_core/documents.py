@@ -6,6 +6,7 @@ import json
 import math
 import re
 import struct
+import time
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -620,9 +621,25 @@ def prompts_for_chapter(chapter: str, body: str) -> list[str]:
             cut = dot + 1 if dot > 400 else 1200
         prompts.append(chapter_prompt(chapter, rest[:cut]))
         rest = rest[cut:].strip()
-        if len(prompts) >= 8:
+        if len(prompts) >= 2:
             break
     return prompts
+
+
+class DocumentTimeout(TimeoutError):
+    """摘录超过时限。已经抽出的句子留在 points 里，可以再导入接着做。"""
+
+    def __init__(self, points: list[dict], completed: list[str] | None = None):
+        super().__init__("文档摘录超时")
+        self.points = points
+        self.completed = list(completed or [])
+
+
+class DocumentCancelled(RuntimeError):
+    def __init__(self, points: list[dict], completed: list[str] | None = None):
+        super().__init__("文档摘录已取消")
+        self.points = points
+        self.completed = list(completed or [])
 
 
 def extract_key_points(
@@ -630,21 +647,47 @@ def extract_key_points(
     per_chapter: int = 5,
     total_cap: int = 40,
     ask: Callable[[str], str] | None = None,
+    on_step: Callable[[int, int, str], None] | None = None,
+    deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    max_asks: int = 6,
 ) -> list[dict]:
     out: list[dict] = []
-    for chapter, body in chapters:
+    completed: list[str] = []
+    asks_done = 0
+    planned = 0
+    if ask is not None:
+        for _chapter, body in chapters:
+            if len(body.strip()) >= 12:
+                planned += min(2, max(1, len(prompts_for_chapter(_chapter, body))))
+        planned = min(planned, max_asks)
+    for index, (chapter, body) in enumerate(chapters):
         if len(out) >= total_cap:
             break
+        skip_model = bool(cancelled and cancelled()) or (
+            deadline is not None and time.monotonic() >= deadline
+        )
         from_llm: list[str] = []
-        if ask is not None and len(body.strip()) >= 12:
+        if ask is not None and not skip_model and len(body.strip()) >= 12 and asks_done < max_asks:
             try:
                 for prompt in prompts_for_chapter(chapter, body):
+                    if asks_done >= max_asks:
+                        break
+                    if cancelled and cancelled():
+                        raise DocumentCancelled(out, completed)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise DocumentTimeout(out, completed)
                     raw = ask(prompt) or ""
+                    asks_done += 1
+                    if on_step:
+                        on_step(asks_done, max(planned, asks_done), chapter)
                     for line in raw.splitlines():
                         cleaned = line.strip().lstrip("-• 0123456789.、").strip()
                         whole = _whole_sentence(cleaned, body)
                         if whole:
                             from_llm.append(whole)
+            except (DocumentTimeout, DocumentCancelled):
+                raise
             except Exception:
                 from_llm = []
         chosen: list[str] = []
@@ -668,6 +711,11 @@ def extract_key_points(
             if any(is_same_text(item["text"], line) for item in out):
                 continue
             out.append({"id": f"p{len(out)}", "text": line, "chapter": chapter, "selected": True})
+        if skip_model:
+            if cancelled and cancelled():
+                raise DocumentCancelled(out, completed)
+            raise DocumentTimeout(out, completed)
+        completed.append(chapter)
     return out
 
 
@@ -1145,6 +1193,29 @@ def list_documents(home: Path, stored_statements: list[str] | None = None) -> li
     return rows
 
 
+def _positive_env(name: str, default: int) -> int:
+    import os
+
+    raw = (os.environ.get(name) or "").strip()
+    if raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    return default
+
+
+def _merge_points(existing: list[dict], fresh: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for point in list(existing) + list(fresh):
+        if not isinstance(point, dict):
+            continue
+        text = str(point.get("text") or "")
+        if not text or any(is_same_text(str(item.get("text") or ""), text) for item in out):
+            continue
+        item = dict(point)
+        item["id"] = f"p{len(out)}"
+        out.append(item)
+    return out
+
+
 def import_document(
     home: Path,
     source: Path,
@@ -1155,6 +1226,9 @@ def import_document(
     source = Path(source)
     root = docs_root(home)
     root.mkdir(parents=True, exist_ok=True)
+    cancel_flag = root / "CANCEL"
+    if cancel_flag.is_file():
+        cancel_flag.unlink()
     data = source.read_bytes()
     if len(data) > 48 * 1024 * 1024:
         raise ValueError("这份文件太大。")
@@ -1208,9 +1282,7 @@ def import_document(
                 save_vectors(directory / "vectors.f32", rows)
         except Exception:
             dim = 0
-    report("points", 85)
-    points = extract_key_points(split_chapters(text), ask=ask)
-    _write_json(directory / "points.json", points)
+    report("points", 85, "正在摘重点")
     pages = text.count("\f") + 1
     meta = {
         "id": doc_id,
@@ -1221,7 +1293,51 @@ def import_document(
         "dim": dim,
         "source": str(source),
     }
-    _write_json(directory / "meta.json", meta)
+    chapters = split_chapters(text)
+    prior = _read_json(directory / "progress.json", {})
+    done_chapters = set(prior.get("done_chapters") or []) if isinstance(prior, dict) and prior.get("source") == str(source) else set()
+    resume_points = _read_json(directory / "points.json", []) if done_chapters else []
+    if not isinstance(resume_points, list):
+        resume_points = []
+    pending_chapters = [(name, body) for name, body in chapters if name not in done_chapters]
+    budget = _positive_env("LORA_MEMORY_DOC_SECONDS", 180)
+    deadline = time.monotonic() + budget
+
+    def _on_step(done: int, total: int, chapter: str) -> None:
+        span = 13
+        percent = 85 + int(span * done / max(total, 1))
+        report("points", min(percent, 98), f"正在读「{chapter}」{done}/{total}")
+
+    def _cancelled() -> bool:
+        return (root / "CANCEL").is_file()
+
+    def _save(points: list[dict], finished: set[str]) -> None:
+        _write_json(directory / "points.json", points)
+        _write_json(directory / "meta.json", meta)
+        _write_json(directory / "progress.json", {"source": str(source), "done_chapters": sorted(finished)})
+
+    carried = [point for point in resume_points if isinstance(point, dict)]
+    try:
+        fresh = extract_key_points(
+            pending_chapters,
+            ask=ask,
+            on_step=_on_step,
+            deadline=deadline,
+            cancelled=_cancelled,
+        )
+    except (DocumentTimeout, DocumentCancelled) as exc:
+        points = _merge_points(carried, exc.points)
+        finished = set(done_chapters)
+        finished.update(name for name in exc.completed if name)
+        _save(points, finished)
+        phase = "cancelled" if isinstance(exc, DocumentCancelled) else "error"
+        message = "摘录已取消，已留下的重点还在" if phase == "cancelled" else "摘录超时，已留下的重点还在，可以再导入"
+        report(phase, 85, message)
+        return {"id": doc_id, "title": title, "pages": pages, "chunks": len(chunks), "points": points, "stopped": phase}
+    points = _merge_points(carried, fresh)
+    finished = set(done_chapters)
+    finished.update(name for name, _body in chapters)
+    _save(points, finished)
     report("done", 100, title)
     return {"id": doc_id, "title": title, "pages": pages, "chunks": len(chunks), "points": points}
 
