@@ -615,7 +615,7 @@ def answer_fits(query: str, span: str, statement: str) -> bool:
     asked = query or ""
     text = statement or ""
     value = (span or "").strip().rstrip("。")
-    wh = max(asked.rfind(mark) for mark in ("谁", "什么", "哪", "啥"))
+    wh = max(asked.rfind(mark) for mark in ("谁", "什么", "哪", "啥", "名称"))
     if wh >= 0:
         cut = asked.rfind("的", 0, wh)
         focus = asked[cut + 1: wh + 6] if cut >= 0 else asked[max(0, wh - 4): wh + 6]
@@ -641,7 +641,7 @@ def answer_fits(query: str, span: str, statement: str) -> bool:
             return False
     if re.search(r"去世|死于|卒于|享年|逝世", asked) and not re.search(r"去世|死于|卒于|享年|逝世", text):
         return False
-    if any(word in asked for word, _aliases in _KIN_ALIASES) and value.endswith(("塔", "镇", "港", "市", "村", "城", "盐")):
+    if any(word in focus for word, _aliases in _KIN_ALIASES) and value.endswith(("塔", "镇", "港", "市", "村", "城", "盐")):
         return False
     if value and len(value) >= 2 and value in asked:
         wh = max(asked.rfind(mark) for mark in ("谁", "什么", "哪"))
