@@ -673,6 +673,12 @@ def propose_from_records(
             "source_text": text or surface,
         }
 
+    from memory_core.extract import without_tag_question
+
+    if utterance_is_question(text) and not _correction_mark(text):
+        return None
+    if without_tag_question(text) != text and not _correction_mark(text):
+        return None
     if _speaker_only(text) and not _correction_mark(text):
         return None
     if _about_someone_else(text, records):

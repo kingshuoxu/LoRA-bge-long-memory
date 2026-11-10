@@ -21,6 +21,7 @@ WINDOW_END = "2026-11-05T08:59:07+00:00"
 MARKER = "migrations/cleanup-0214.json"
 RESTORE_MARKER = "migrations/restore-0214-kept.json"
 RESTORE_VERSION = 3
+CLASSIFIER_VERSION = 4
 QUARANTINE = "cleaned/0214-junk.json"
 
 
@@ -91,11 +92,44 @@ def _quarantine(home: Path, items: list[dict]) -> None:
     atomic_write_json(path, {"items": rows})
 
 
+def _marker_version(marker: Path) -> int:
+    if not marker.is_file():
+        return 0
+    data = _read(marker)
+    if not isinstance(data, dict):
+        return 0
+    try:
+        return int(data.get("version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _version_tuple(version: str) -> tuple[int, int, int] | None:
+    parts = (version or "").split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
+def _should_quarantine(fact: dict, memory: dict, home_version: str, path: Path) -> bool:
+    """0.2.14 的要求句，以及 0.2.30 之后仍被放进记忆的问句和要求。"""
+    statement = str(fact.get("statement") or fact.get("value") or fact.get("text") or "")
+    if not statement or not is_0214_junk(statement):
+        return False
+    if from_buggy_release(fact, memory, home_version, path):
+        return True
+    parsed = _version_tuple(_version_of(fact, memory, home_version))
+    return parsed is not None and parsed >= (0, 2, 30)
+
+
 def migrate_0214_junk(home: Path) -> int:
-    """隔离 0.2.14 的要求句。已经跑过就什么都不写。"""
+    """隔离要求句和问句。分类器变了就再跑一遍，旧标记不再挡住。"""
     home = Path(home)
     marker = home / MARKER
-    if marker.is_file():
+    if _marker_version(marker) >= CLASSIFIER_VERSION:
         return 0
     experts = home / "experts"
     docs = home / "documents"
@@ -119,7 +153,7 @@ def migrate_0214_junk(home: Path) -> int:
                     kept.append(fact)
                     continue
                 statement = str(fact.get("statement") or fact.get("value") or "")
-                if from_buggy_release(fact, data, home_version, path) and is_0214_junk(statement):
+                if _should_quarantine(fact, data, home_version, path):
                     changed = True
                     removed.append({"file": str(path.relative_to(home)), "fact": fact})
                     log.info("quarantine fact %s from %s", statement, path.name)
@@ -141,7 +175,7 @@ def migrate_0214_junk(home: Path) -> int:
             for item in data:
                 text = item if isinstance(item, str) else str((item or {}).get("text") or "")
                 fact = item if isinstance(item, dict) else {"statement": text}
-                if from_buggy_release(fact, memory, home_version, path) and is_0214_junk(text):
+                if _should_quarantine(fact, memory, home_version, path):
                     changed = True
                     removed.append({"file": str(path.relative_to(home)), "text": text})
                     log.info("quarantine pending %s", text)
@@ -159,7 +193,13 @@ def migrate_0214_junk(home: Path) -> int:
         for path, payload in plan:
             _atomic_write_any(path, payload)
     marker.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(marker, {"done": True, "at": _now(), "removed": len(removed), "backup": backup_name})
+    atomic_write_json(marker, {
+        "done": True,
+        "version": CLASSIFIER_VERSION,
+        "at": _now(),
+        "removed": len(removed),
+        "backup": backup_name,
+    })
     return len(removed)
 
 

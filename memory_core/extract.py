@@ -52,6 +52,11 @@ def _visible_question_text(text: str) -> str:
     return _outside_titles(text).replace("为什么", "")
 
 
+_POLITE_REQUEST = re.compile(
+    r"^(?:请)?你?(?:能不能|可不可以|可以不可以|可以帮我|帮我|给我|写一|写首)"
+)
+
+
 def is_reported_statement(text: str) -> bool:
     """转述别人的话。句末没有？/吗时，嵌在里面的问话不是这句自己在问。
 
@@ -62,7 +67,7 @@ def is_reported_statement(text: str) -> bool:
         return False
     if re.match(r"^(?:请)?告诉我", raw):
         return False
-    if re.match(r"^(?:能不能|可不可以|可以不可以|可以帮|请你|麻烦|劳驾|帮我|给我|写一)", raw):
+    if _POLITE_REQUEST.match(raw):
         return False
     return bool(re.search(
         r"问过|说过|说道|说他|说她|说我|说你|问我|问他|问她|不知道|告诉过|告诉他|告诉她|他告诉|她告诉|我告诉|告诉我",
@@ -74,6 +79,8 @@ def is_declarative_fact(text: str) -> bool:
     """陈述句。里面出现「翻译」「推荐」或书名里的「为什么」也不能当成要求句删掉。"""
     raw = (text or "").strip().rstrip("。")
     if not raw:
+        return False
+    if _POLITE_REQUEST.match(raw) or is_choice_question(raw):
         return False
     if is_reported_statement(raw):
         return True
@@ -93,7 +100,11 @@ def is_declarative_fact(text: str) -> bool:
 def is_imperative_request(text: str) -> bool:
     """只看句首的要求。句中的「翻译」「推荐」不算。没有问号的要求也算。"""
     raw = (text or "").strip()
-    if not raw or is_declarative_fact(raw):
+    if not raw:
+        return False
+    if _POLITE_REQUEST.match(raw):
+        return True
+    if is_declarative_fact(raw):
         return False
     if re.match(r"^(?:能不能|可不可以|可以不可以|可以帮|请你|麻烦你|麻烦|劳驾)", raw):
         return True
@@ -119,12 +130,8 @@ def is_advice_question(text: str) -> bool:
 def is_choice_question(text: str) -> bool:
     """「是A还是B」才是问句。逗号并列的「我是翻译，还是作家」是陈述。"""
     raw = (text or "").strip()
-    if not re.search(r"是.+还是", raw):
+    if not re.search(r"(?<![还不])是.+还是", raw):
         return False
-    if is_declarative_fact(raw):
-        return False
-    if re.search(r"[？?吗呢]", raw) or re.match(r"^(?:什么|谁|哪|咋|啥|是不是)", raw):
-        return True
     if re.search(r"[，,、；;].{0,16}还是", raw):
         return False
     return True
@@ -149,6 +156,8 @@ def is_main_clause_question(text: str) -> bool:
         if re.search(r"(?:哪里|哪儿|什么|谁|哪个|哪所|多少|怎么|如何|啥)$", clause):
             return True
         if re.search(r"(?:叫|是|在|有|去|做)(?:什么|谁|哪|多少|几|啥)", clause):
+            return True
+        if "是不是" in clause or "还是" in clause and "是" in clause:
             return True
     if re.search(r"(?:吗|呢)$", visible):
         return True
@@ -184,13 +193,15 @@ def is_self_fact_question(text: str) -> bool:
 _TAG_PIECE = r"(?:你知道吗|你知道不|你知道|知道吗|知道不|对吧|是吗|对不对)"
 _TAG_TAIL = re.compile(rf"(?:[，,。\s]*){_TAG_PIECE}[？?。]*$")
 _TAG_HEAD = re.compile(rf"^{_TAG_PIECE}[？?。]*[，,。\s]*")
+_OPENER = re.compile(r"^(?:我)?(?:跟你说|告诉你|跟你讲|和你说)[，,：:\s]*")
 
 
 def without_tag_question(text: str) -> str:
-    """去掉句首或句尾的「你知道吗」。前后的事实还在。"""
+    """去掉句首或句尾的「你知道吗」，以及「跟你说」「告诉你」。前后的事实还在。"""
     raw = (text or "").strip()
     raw = _TAG_HEAD.sub("", raw)
     raw = _TAG_TAIL.sub("", raw)
+    raw = _OPENER.sub("", raw)
     return raw.strip("，,。 \n")
 
 
@@ -498,7 +509,7 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
         return found
     found = None
     matched = re.match(
-        r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)是(?P<value>[^，。]{1,32})$",
+        r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)(?<![还不])是(?P<value>[^，。]{1,32})$",
         sentence,
     )
     if matched:
@@ -665,6 +676,12 @@ def _match_life(sentence: str) -> dict[str, Any] | None:
         matched = re.match(pattern, sentence)
         if matched:
             return _make_fact(matched.group("entity"), "学校", matched.group("value"), how, sentence)
+    matched = re.match(
+        r"^(?P<entity>我|他|她|[\u4e00-\u9fff·]{2,8})在(?P<value>[\u4e00-\u9fff]{2,16})(?:上班|工作)$",
+        sentence,
+    )
+    if matched:
+        return _make_fact(matched.group("entity"), "工作地点", matched.group("value"), "workplace", sentence)
     matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})每天(?P<value>.{2,24})$", sentence)
     if matched:
         return _make_fact(matched.group("entity"), "日常", matched.group("value"), "daily", sentence)
@@ -738,7 +755,8 @@ def pattern_extract(text: str) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
     for block in re.split(r"\n+", text or ""):
-        if _block_contains_question(block):
+        block = without_tag_question(block)
+        if not block or _block_contains_question(block):
             continue
         _extract_block(block, facts, seen, current)
     return facts
@@ -749,7 +767,14 @@ def _extract_block(text: str, facts: list[dict[str, Any]], seen: set[tuple[str, 
         sentence = without_tag_question(sentence)
         if not sentence:
             continue
-        if is_imperative_request(sentence) or is_advice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
+        if (
+            is_imperative_request(sentence)
+            or is_advice_question(sentence)
+            or is_choice_question(sentence)
+            or "是不是" in sentence
+            or _looks_like_question(sentence)
+            or is_question_fragment(sentence)
+        ):
             continue
         found = _match_sentence(sentence, current)
         if found is None:

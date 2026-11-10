@@ -332,6 +332,10 @@ def _awkward_clause(clause: str) -> bool:
         return False
     if re.match(r"^(?:会|能|可以|要|想)", text):
         return True
+    if text in {"住", "在", "是", "叫", "的", "有", "不"}:
+        return True
+    if re.search(r"那位|哪位|这位|跟你说|告诉你", text):
+        return True
     if re.search(r"问过|说过|说道|不知道|告诉", text):
         return True
     return False
@@ -341,6 +345,26 @@ def asks_memory_chain(query: str) -> bool:
     from memory_core.answer_type import asks_memory_chain as _asks
 
     return _asks(query)
+
+
+def memory_attribute_question(text: str) -> bool:
+    """在问某个名字的属性或关系。记忆里没有时不能交给基座编一个现实答案。"""
+    from memory_core.extract import (
+        is_advice_question,
+        is_choice_question,
+        is_imperative_request,
+        without_tag_question,
+    )
+
+    raw = without_tag_question(text or "")
+    if not raw or is_open_task(raw) or is_imperative_request(raw) or is_advice_question(raw):
+        return False
+    if is_choice_question(raw):
+        return True
+    return bool(re.search(
+        r"什么颜色|啥颜色|什么牌子|什么品牌|有多高|多高|哪一年|哪年|在哪里|在哪儿|是谁|叫什么|叫啥|去世|逝世|拆除|建于|上班|哪里工作|哪儿工作",
+        raw,
+    ))
 
 
 def _asked_clause(query: str) -> str:

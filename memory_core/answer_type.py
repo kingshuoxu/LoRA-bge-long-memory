@@ -129,6 +129,8 @@ def question_kind(query: str) -> str:
     headed = head_type(text)
     if headed:
         return headed
+    if re.search(r"什么牌子|什么品牌|哪个牌子|哪个品牌|啥牌子", text):
+        return "brand"
     if re.search(r"什么颜色|啥颜色|哪种颜色|颜色|什么色", text):
         return "colour"
     if re.search(r"什么材料|啥材料|哪种材料|什么做的|用什么做|材料", text):
@@ -688,6 +690,9 @@ def extract_span(query: str, statement: str) -> str:
     """从这一句里抄问句要的那一种取值。抄不到就返回空。"""
     text = statement or ""
     kind = question_kind(query)
+    if kind == "brand":
+        named = re.search(r"(?:牌子|品牌)是([\u4e00-\u9fffA-Za-z0-9]{1,16})", text)
+        return named.group(1) if named else ""
     if kind == "colour":
         for colour in sorted(_COLOURS, key=len, reverse=True):
             if colour in text:
@@ -958,6 +963,8 @@ def _same_thing(query: str, statement: str) -> bool:
     if any(mark in asked for mark in ("颜色", "什么色", "啥颜色", "啥色")):
         if not _color_statement(text) or not _color_objects_align(asked, text):
             return False
+    if any(mark in asked for mark in ("牌子", "品牌")) and not any(mark in text for mark in ("牌子", "品牌")):
+        return False
     for asked_marks, statement_marks in (
         (("电话", "手机"), ("电话", "手机")),
         (("妻子", "老婆"), ("妻子", "老婆", "夫人")),

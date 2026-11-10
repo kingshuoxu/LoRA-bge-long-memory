@@ -758,10 +758,15 @@ class MemoryService:
                 decision.label = "基座"
                 decision.fired = False
                 return self._finish_turn(conv_id, user_msg, text, decision, recall)
-            from memory_core.span_guard import asks_memory_chain, fixed_refusal, is_open_task
+            from memory_core.span_guard import (
+                asks_memory_chain,
+                fixed_refusal,
+                is_open_task,
+                memory_attribute_question,
+            )
 
             open_task = is_open_task(content)
-            if asks_memory_chain(content) and not open_task and not any(
+            if (asks_memory_chain(content) or memory_attribute_question(content)) and not open_task and not any(
                 isinstance(fact, dict) and not fact.get("superseded")
                 for record in experts
                 for fact in ((record.fact_memory or {}).get("facts") or [])
@@ -1281,7 +1286,7 @@ class MemoryService:
             if not fact_answer and not open_task:
                 from memory_core.span_guard import fixed_refusal, personal_attribute_question
 
-                if personal_attribute_question(content):
+                if personal_attribute_question(content) or memory_attribute_question(content):
                     fact_answer = fixed_refusal(content)
                     decision.fired = False
                     decision.expert = None
