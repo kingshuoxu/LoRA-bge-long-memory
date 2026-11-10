@@ -288,6 +288,9 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
         return None
     hops = _parse_hops(body, start, terminal)
     if hops is None:
+        # 认不出的身份说法交给原来的摘录。「同事在哪里上班」这种属性不能退回去借用起点自己的取值。
+        if terminal == "identity":
+            return None
         return {"status": "abstain"}
     obj = _attribute_object(body, start) if terminal in {"color", "brand"} and not hops else ""
     if terminal in {"color", "brand"} and not hops and not obj:
