@@ -432,7 +432,7 @@ def _bound_makers(query: str) -> set[str]:
 
 
 def _keeper(statement: str) -> str:
-    match = re.search(r"([\u4e00-\u9fff]{2,3})在.{0,16}守护", statement or "")
+    match = re.search(r"([\u4e00-\u9fff]{2,3})在.{0,16}(?:守护|看守|值守)", statement or "")
     return match.group(1) if match else ""
 
 
@@ -526,6 +526,9 @@ def nation_supported(query: str, statement: str) -> bool:
                 name = named.group(1)
             role = "工匠" if ("工匠" in match.group(0) or "师傅" in match.group(0)) else ""
             bearers.append((name, role))
+        for match in re.finditer(r"([\u4e00-\u9fff]{2,4})是" + re.escape(country) + r"(?:人|国人|工匠|师傅)?", text):
+            role = "工匠" if "工匠" in match.group(0) or "师傅" in match.group(0) else ""
+            bearers.append((match.group(1), role))
     if not bearers:
         return False
     subject = _nation_subject(query)
@@ -580,11 +583,101 @@ def role_supported(query: str, statement: str) -> bool:
     return True
 
 
+_KIN_ALIASES = (
+    ("弟弟", ("弟弟", "兄弟")),
+    ("哥哥", ("哥哥", "兄弟")),
+    ("姐姐", ("姐姐",)),
+    ("妹妹", ("妹妹",)),
+    ("兄弟", ("兄弟", "哥哥", "弟弟")),
+    ("妻子", ("妻子", "老婆", "夫人")),
+    ("丈夫", ("丈夫", "老公")),
+    ("父亲", ("父亲", "爸爸", "老爸", "爹")),
+    ("母亲", ("母亲", "妈妈")),
+    ("女儿", ("女儿", "闺女", "丫头")),
+    ("儿子", ("儿子",)),
+    ("叔叔", ("叔叔", "伯伯", "叔父")),
+    ("爷爷", ("爷爷", "祖父")),
+    ("奶奶", ("奶奶", "祖母")),
+)
+_ROLE_ALIASES = (
+    ("设计", ("设计", "设计师")),
+    ("建造", ("建造", "修建", "兴建", "承建", "施工", "建筑师")),
+    ("修建", ("修建", "建造", "兴建", "施工")),
+    ("建筑师", ("建筑师", "设计师", "设计")),
+    ("守护", ("守护", "看守", "值守", "守塔", "看管")),
+    ("看守", ("看守", "守护", "值守", "守塔")),
+    ("打磨", ("打磨", "磨镜")),
+)
+
+
+def answer_fits(query: str, span: str, statement: str) -> bool:
+    """问句的关系和取值种类都要落在这一句上。对不上就弃权，不拿同句里的别的东西来答。"""
+    asked = query or ""
+    text = statement or ""
+    value = (span or "").strip().rstrip("。")
+    for word, aliases in _KIN_ALIASES:
+        if word in asked and not any(alias in text for alias in aliases):
+            return False
+    wh = max(asked.rfind(mark) for mark in ("谁", "什么", "哪", "啥"))
+    if wh >= 0:
+        cut = asked.rfind("的", 0, wh)
+        focus = asked[cut + 1: wh + 6] if cut >= 0 else asked[max(0, wh - 4): wh + 6]
+    else:
+        focus = asked
+    asked_roles = [name for name, aliases in _ROLE_ALIASES if any(alias in focus for alias in aliases)]
+    if asked_roles:
+        supported = False
+        for name in asked_roles:
+            aliases = next(items for label, items in _ROLE_ALIASES if label == name)
+            if any(alias in text for alias in aliases):
+                supported = True
+                break
+        if not supported:
+            return False
+    if re.search(r"哪国|国籍|哪个国家|什么国家|哪一国", asked):
+        if value and not any(country in value for country in _COUNTRIES):
+            return False
+        if not nation_supported(asked, text):
+            return False
+    if re.search(r"去世|死于|卒于|享年|逝世", asked) and not re.search(r"去世|死于|卒于|享年|逝世", text):
+        return False
+    if any(word in asked for word, _aliases in _KIN_ALIASES) and value.endswith(("塔", "镇", "港", "市", "村", "城", "盐")):
+        return False
+    if value and len(value) >= 2 and value in asked:
+        wh = max(asked.rfind(mark) for mark in ("谁", "什么", "哪"))
+        pos = asked.find(value)
+        if wh > pos >= 0 and pos + len(value) <= wh:
+            return False
+    return True
+
+
+def names_then_asks(text: str) -> bool:
+    """先报出一个名字，再问另一个角色。没有记忆时不能把后半句交给基座编。"""
+    raw = text or ""
+    if not re.search(r"谁|哪|什么|啥|叫什么", raw):
+        return False
+    parts = [part.strip() for part in re.split(r"[。！？?\n；;，,]+", raw) if part.strip()]
+    if len(parts) < 2:
+        return False
+    from memory_core.extract import is_main_clause_question, is_declarative_fact
+
+    named = False
+    asking = False
+    for part in parts:
+        if is_main_clause_question(part) or re.search(r"谁|叫什么|是哪|什么人", part):
+            asking = True
+        elif is_declarative_fact(part) or re.search(r"[\u4e00-\u9fff]{2,4}(?:是|叫|在|有|养|做)", part):
+            named = True
+    return named and asking
+
+
 def asks_memory_chain(query: str) -> bool:
     """名字嵌在前半句、后半句再问另一个角色。没有记忆时不能交给基座接这句话。"""
     text = query or ""
     if not re.search(r"谁|哪|什么|啥", text):
         return False
+    if names_then_asks(text):
+        return True
     return bool(re.search(
         r"[\u4e00-\u9fff]{2,4}.{0,10}(?:打磨|守护|看守|养|磨).{0,18}的.{0,16}(?:谁|哪|什么|啥)",
         text,
@@ -701,6 +794,9 @@ def extract_span(query: str, statement: str) -> str:
             match = re.search(r"([0-9一二三四五六七八九十两]{1,4}条腿)", text)
             return match.group(1) if match else ""
         if "出生" in asked or "生日" in asked:
+            if re.search(r"出生|生日|生于", text):
+                match = re.search(r"(\d{3,4}年)", text)
+                return match.group(1) if match else ""
             return ""
         if any(mark in asked for mark in ("多少年", "多久", "守了", "守护了")):
             return ""
@@ -895,7 +991,7 @@ def accept_span(
 ) -> bool:
     """取值必须是问句要的种类，而且不能就是问句里的主语。"""
     text = (span or "").strip().rstrip("。")
-    if not role_supported(query, statement):
+    if not role_supported(query, statement) or not answer_fits(query, text, statement):
         return False
     if not text or text not in (statement or ""):
         return False
@@ -1261,7 +1357,7 @@ def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
             return None
     for fact in rows:
         text = statement_of(fact)
-        if "守护" not in text and "看守" not in text:
+        if not any(mark in text for mark in ("守护", "看守", "值守")):
             continue
         keeper = _keeper(text)
         if keeper and _person_shape(keeper):

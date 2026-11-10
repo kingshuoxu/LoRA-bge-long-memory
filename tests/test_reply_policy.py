@@ -658,6 +658,7 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertIn("柯岚", answer("谁守护白鹭塔？"))
         self.assertIn("诺丁", answer("谁打磨了透镜？"))
         self.assertIn("柯小满", answer("柯岚的女儿叫什么？"))
+        self.assertIn("1873", answer("白鹭塔建于哪一年？"))
         self.assertIn("白鹭塔", answer("雾港有哪座灯塔？"))
         for question in (
             "白鹭塔是哪国的？",
@@ -667,17 +668,56 @@ class AnswerTypeTests(unittest.TestCase):
             "柯岚是哪座塔？",
             "雾港是哪座塔？",
         ):
-            text = answer(question)
-            self.assertTrue("没记过" in text or "不在记忆里" in text or "没提到" in text or "不确定" in text, (question, text))
-            self.assertFalse(text.startswith("瑞典") or text.startswith("白鹭塔"), (question, text))
+            got = answer(question)
+            self.assertTrue("没记过" in got or "不在记忆里" in got or "没提到" in got or "不确定" in got, (question, got))
+            self.assertFalse(got.startswith("瑞典") or got.startswith("白鹭塔"), (question, got))
         for question in ("谁建造了白鹭塔？", "白鹭塔的建筑师是谁？", "谁设计了白鹭塔？", "透镜的建造者是谁？"):
-            text = answer(question)
-            self.assertNotIn("柯岚", text, question)
-            self.assertNotIn("诺丁", text, question)
+            got = answer(question)
+            self.assertNotIn("柯岚", got, question)
+            self.assertNotIn("诺丁", got, question)
         for question in ("柯岚的兄弟是谁？", "柯小满的姐姐叫什么？", "柯小满的叔叔是谁？", "阿哨的爷爷是谁？"):
-            text = answer(question)
-            self.assertFalse(text.startswith("阿哨") or text.startswith("柯小满"), (question, text))
-            self.assertTrue("没提到" in text or "没记过" in text or "不在记忆里" in text or "不确定" in text, (question, text))
+            got = answer(question)
+            self.assertFalse(got.startswith("阿哨") or got.startswith("柯小满"), (question, got))
+            self.assertTrue("没提到" in got or "没记过" in got or "不在记忆里" in got or "不确定" in got, (question, got))
+
+    def test_new_relations_match_or_abstain(self):
+        from memory_core.fact_reader import read_memory
+        from memory_core.grounding import acknowledge_statement
+
+        facts = [
+            {"entity": "周乔", "statement": "周乔的猫叫米粒。", "value": "米粒"},
+            {"entity": "周乔", "statement": "周乔在青塔值守。", "value": "青塔"},
+            {"entity": "周乔", "statement": "周乔是法国工匠。", "value": "法国"},
+            {"entity": "周乔", "statement": "周乔死于1999年。", "value": "1999年"},
+            {"entity": "米粒", "statement": "米粒生于2010年。", "value": "2010年"},
+        ]
+
+        def text(question):
+            return (read_memory(question, facts, None) or {}).get("text") or ""
+
+        self.assertIn("法国", text("周乔是哪国人？"))
+        self.assertIn("周乔", text("谁在青塔值守？"))
+        self.assertIn("2010", text("米粒是哪年出生的？"))
+        self.assertIn("1999", text("周乔哪年去世？"))
+        self.assertIn("米粒", text("周乔的猫叫什么？"))
+        for question in ("周乔的弟弟是谁？", "谁设计了青塔？", "青塔是哪国的？", "法国是哪座塔？"):
+            got = text(question)
+            self.assertTrue("没记过" in got or "没提到" in got or "不在记忆里" in got, (question, got))
+        reported = acknowledge_statement({
+            "entity": "她说她不知",
+            "attr": "转述",
+            "value": "她说她不知道为什么",
+            "statement": "她说她不知道为什么",
+        })
+        self.assertNotIn("不知的转述", reported)
+        brother = acknowledge_statement({
+            "entity": "沈星河",
+            "attr": "个哥哥",
+            "value": "周乔",
+            "statement": "周乔是沈星河的一个哥哥。",
+        })
+        self.assertNotIn("的个", brother)
+        self.assertIn("一个哥哥", brother)
 
 
 class CrossEntityTests(unittest.TestCase):

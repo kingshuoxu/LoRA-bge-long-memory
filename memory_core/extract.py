@@ -62,6 +62,8 @@ def is_reported_statement(text: str) -> bool:
         return False
     if re.match(r"^(?:请)?告诉我", raw):
         return False
+    if re.match(r"^(?:能不能|可不可以|可以不可以|可以帮|请你|麻烦|劳驾|帮我|给我|写一)", raw):
+        return False
     return bool(re.search(
         r"问过|说过|说道|说他|说她|说我|说你|问我|问他|问她|不知道|告诉过|告诉他|告诉她|他告诉|她告诉|我告诉|告诉我",
         raw,
@@ -91,7 +93,11 @@ def is_declarative_fact(text: str) -> bool:
 def is_imperative_request(text: str) -> bool:
     """只看句首的要求。句中的「翻译」「推荐」不算。没有问号的要求也算。"""
     raw = (text or "").strip()
-    if not raw or is_declarative_fact(raw) or is_reported_statement(raw):
+    if not raw or is_declarative_fact(raw):
+        return False
+    if re.match(r"^(?:能不能|可不可以|可以不可以|可以帮|请你|麻烦你|麻烦|劳驾)", raw):
+        return True
+    if is_reported_statement(raw):
         return False
     if re.match(r"^(?:请(?!问)|帮我|给我|写一|写首)", raw):
         return True
@@ -130,21 +136,33 @@ def is_main_clause_question(text: str) -> bool:
     if not raw or is_reported_statement(raw) or is_declarative_fact(raw):
         return False
     visible = _visible_question_text(raw)
-    if re.search(r"[？?]", visible) or re.search(r"(?:吗|呢)$", visible):
+    if re.search(r"[？?]", visible):
+        return True
+    clauses = [piece.strip() for piece in re.split(r"[，,、；;]+", visible) if piece.strip()]
+    for clause in clauses or [visible]:
+        if re.search(r"(?:吗|呢)$", clause):
+            return True
+        if re.search(r"(?:有多高|多高|高多少|多少米|多久|多长时间|建了多久)$", clause) and not re.search(
+            r"[0-9一二三四五六七八九十百千两]+(?:米|年)", clause
+        ):
+            return True
+        if re.search(r"(?:哪里|哪儿|什么|谁|哪个|哪所|多少|怎么|如何|啥)$", clause):
+            return True
+        if re.search(r"(?:叫|是|在|有|去|做)(?:什么|谁|哪|多少|几|啥)", clause):
+            return True
+    if re.search(r"(?:吗|呢)$", visible):
         return True
     if re.match(r"^(?:什么|谁|哪|咋|啥|怎么|如何|多少)", visible):
         return True
-    if re.search(r"(?:有多高|多高|高多少|多少米)$", visible) and not re.search(r"[0-9一二三四五六七八九十百千两]+米", visible):
-        return True
-    if re.search(r"(?:哪里|哪儿|什么|谁|哪个|哪所|多少|怎么|如何|啥)$", visible):
-        return True
-    return bool(re.search(r"(?:叫|是|在|有|去|做)(?:什么|谁|哪|多少|几|啥)", visible))
+    return False
 
 
 def is_question_fragment(text: str) -> bool:
     """句首疑问词、句末语气词或问号。转述和书名里的「什么」留下。"""
     raw = (text or "").strip()
     if not raw:
+        return True
+    if re.search(r"[？?]", _visible_question_text(raw)):
         return True
     if is_declarative_fact(raw) or is_reported_statement(raw):
         return False
@@ -163,14 +181,17 @@ def is_self_fact_question(text: str) -> bool:
     return any(raw.startswith(prefix) for prefix in ("我叫什么", "我是谁", "我的名字", "我住", "我的生日"))
 
 
-_TAG_TAIL = re.compile(
-    r"(?:[，,。\s]*)(?:你知道吗|你知道不|你知道|知道吗|知道不|对吧|是吗|对不对)[？?。]*$"
-)
+_TAG_PIECE = r"(?:你知道吗|你知道不|你知道|知道吗|知道不|对吧|是吗|对不对)"
+_TAG_TAIL = re.compile(rf"(?:[，,。\s]*){_TAG_PIECE}[？?。]*$")
+_TAG_HEAD = re.compile(rf"^{_TAG_PIECE}[？?。]*[，,。\s]*")
 
 
 def without_tag_question(text: str) -> str:
-    """去掉句尾的「你知道吗」。前面的事实还在。"""
-    return _TAG_TAIL.sub("", (text or "").strip()).strip()
+    """去掉句首或句尾的「你知道吗」。前后的事实还在。"""
+    raw = (text or "").strip()
+    raw = _TAG_HEAD.sub("", raw)
+    raw = _TAG_TAIL.sub("", raw)
+    return raw.strip("，,。 \n")
 
 
 def _looks_like_question(sentence: str) -> bool:

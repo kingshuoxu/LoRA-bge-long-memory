@@ -348,6 +348,7 @@ def _asked_clause(query: str) -> str:
     text = (query or "").strip().rstrip("？?。！!")
     text = re.sub(r"^(?:请问|问一下|告诉我)", "", text).strip()
     text = re.sub(r"(?:你知道不|你知道吗|你知道|知道不|知道吗)$", "", text).strip()
+    text = text.strip("，,、；;。 ")
     asker = _school_asker(text) or _school_asker(query or "")
     if asker:
         return f"{asker}的学校"

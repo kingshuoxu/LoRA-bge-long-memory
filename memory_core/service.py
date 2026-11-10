@@ -735,9 +735,9 @@ class MemoryService:
                 return {"user": user_msg, "assistant": assistant, "route": route, "proposal": proposal, "recall": recall}
             from memory_core.extract import is_advice_question, is_imperative_request
 
-            if not utterance_is_question(content) and not is_imperative_request(content) and not is_advice_question(content):
+            stated = pattern_extract(content)
+            if stated and not is_imperative_request(content) and not is_advice_question(content):
                 remember_statement(self.home, content)
-                stated = pattern_extract(content)
                 if stated and all(self._remembered_match(fact) for fact in stated):
                     notes = [already_remembered(fact) for fact in stated]
                     note = "".join(dict.fromkeys(notes)) if all(has_cjk(item) for item in notes) else " ".join(dict.fromkeys(notes))

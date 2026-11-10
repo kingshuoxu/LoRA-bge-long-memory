@@ -20,7 +20,7 @@ WINDOW_START = "2026-11-05T04:53:48+00:00"
 WINDOW_END = "2026-11-05T08:59:07+00:00"
 MARKER = "migrations/cleanup-0214.json"
 RESTORE_MARKER = "migrations/restore-0214-kept.json"
-RESTORE_VERSION = 2
+RESTORE_VERSION = 3
 QUARANTINE = "cleaned/0214-junk.json"
 
 
@@ -248,10 +248,14 @@ def restore_legitimate_from_cleanup(home: Path) -> int:
         fact = item.get("fact") if isinstance(item.get("fact"), dict) else None
         text = _statement_of(fact) if fact else str(item.get("text") or "")
         relative = str(item.get("file") or "")
-        if fact and text and not is_0214_junk(text) and _append_missing_fact(home, relative, fact):
+        if text and is_0214_junk(text):
+            _drop_junk_copy(home, relative, text)
+            remaining.append(item)
+            continue
+        if fact and text and _append_missing_fact(home, relative, fact):
             restored += 1
             continue
-        if not fact and text and not is_0214_junk(text) and _append_pending(home, relative, text):
+        if not fact and text and _append_pending(home, relative, text):
             restored += 1
             continue
         remaining.append(item)
@@ -271,6 +275,34 @@ def restore_legitimate_from_cleanup(home: Path) -> int:
     marker.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(marker, {"done": True, "version": RESTORE_VERSION, "at": _now(), "restored": restored})
     return restored
+
+
+def _drop_junk_copy(home: Path, relative: str, text: str) -> None:
+    """隔离区里仍是问句或要求的句子，如果上一轮误放回去了，按原文拿掉。别的事实不动。"""
+    if relative.endswith("fact_memory.json"):
+        target = home / relative
+        if _inside(home, target) and target.is_file():
+            memory = _read(target)
+            if isinstance(memory, dict):
+                facts = [
+                    fact for fact in memory.get("facts") or []
+                    if not (isinstance(fact, dict) and _statement_of(fact) == text)
+                ]
+                if len(facts) != len(memory.get("facts") or []):
+                    memory["facts"] = facts
+                    atomic_write_json(target, memory)
+        return
+    if not relative.endswith("queued.json"):
+        return
+    target = home / relative
+    if not _inside(home, target) or not target.is_file():
+        return
+    rows = _read(target)
+    if not isinstance(rows, list):
+        return
+    kept = [item for item in rows if item != text]
+    if len(kept) != len(rows):
+        _atomic_write_any(target, kept)
 
 
 def _pending_has(rows: list, text: str) -> bool:

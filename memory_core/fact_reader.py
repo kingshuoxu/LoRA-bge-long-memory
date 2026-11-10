@@ -566,7 +566,10 @@ def read_memory(
     picked = choose_typed(query, facts)
     if picked:
         span, fact = picked
-        return {"text": _finish(span), "fact": fact, "miss": False}
+        from memory_core.answer_type import answer_fits
+
+        if answer_fits(query, span, _statement(fact)):
+            return {"text": _finish(span), "fact": fact, "miss": False}
     if "我的" in query or query.startswith("我"):
         return None
     if not memory_question(query, facts, best, pool):

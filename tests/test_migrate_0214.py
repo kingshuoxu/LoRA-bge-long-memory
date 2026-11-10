@@ -174,6 +174,34 @@ class Migrate0214Tests(unittest.TestCase):
         self.assertEqual(_facts(home).count(sentence), 1)
         self.assertEqual(queued.count(pending), 1)
 
+    def test_version_two_restore_does_not_keep_questions(self):
+        question = "柯岚是守护者还是工匠？"
+        polite = "能不能帮我写一张留言"
+        legit = "李四问过我为什么天是蓝的"
+        rows = self._rows([question, legit], "0.2.14")
+        home = _home("0.2.14", [rows[0]])
+        quarantine = home / "cleaned"
+        quarantine.mkdir(parents=True)
+        doc = home / "documents" / "doc1"
+        if not doc.is_dir():
+            doc.mkdir(parents=True)
+        (quarantine / "0214-junk.json").write_text(json.dumps({
+            "items": [
+                {"file": "experts/expert_9/fact_memory.json", "fact": rows[0]},
+                {"file": "experts/expert_9/fact_memory.json", "fact": rows[1]},
+                {"file": "documents/doc1/queued.json", "text": polite},
+            ]
+        }, ensure_ascii=False), encoding="utf-8")
+        (home / "documents" / "doc1" / "queued.json").write_text(json.dumps([polite]), encoding="utf-8")
+        marker = home / "migrations"
+        marker.mkdir(parents=True)
+        (marker / "restore-0214-kept.json").write_text(json.dumps({"done": True, "version": 2, "restored": 15}), encoding="utf-8")
+        restore_legitimate_from_cleanup(home)
+        self.assertNotIn(question, _facts(home))
+        self.assertIn(legit, _facts(home))
+        queued = json.loads((home / "documents" / "doc1" / "queued.json").read_text(encoding="utf-8"))
+        self.assertNotIn(polite, queued)
+
     def test_0215_without_backup_cannot_be_restored(self):
         """0.2.15 直接删掉含「翻译」的句子，没有备份也没有隔离。模拟数据，不是用户的真记忆。"""
         home = _home("0.2.15", self._rows(["我喜欢写诗"], "0.2.15"))

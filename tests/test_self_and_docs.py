@@ -364,6 +364,37 @@ class ThreadAndImportBoundTests(unittest.TestCase):
         self.assertIn("1873", blob)
         self.assertEqual(caught.exception.completed, [])
 
+    def test_docx_uses_the_same_bounded_import(self):
+        import io
+        import tempfile
+        import time
+        import zipfile
+
+        from memory_core.documents import DocumentTimeout, extract_docx, extract_key_points, import_document
+
+        xml = (
+            "<?xml version=\"1.0\"?>"
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+            "<w:body><w:p><w:r><w:t>白鹭塔建于1873年。</w:t></w:r></w:p></w:body></w:document>"
+        )
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr("word/document.xml", xml)
+        text = extract_docx(buf.getvalue())
+        self.assertIn("1873", text)
+
+        def ask(_prompt: str) -> str:
+            raise AssertionError("过了时限不该再问模型")
+
+        with self.assertRaises(DocumentTimeout):
+            extract_key_points(split_chapters(text), ask=ask, deadline=time.monotonic() - 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            src = home / "tower.docx"
+            src.write_bytes(buf.getvalue())
+            result = import_document(home / "data", src, embed=None, ask=None)
+            self.assertIn("1873", " ".join(point["text"] for point in result["points"]))
+
 
 if __name__ == "__main__":
     unittest.main()

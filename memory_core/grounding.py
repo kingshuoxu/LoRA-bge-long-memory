@@ -359,6 +359,10 @@ def acknowledge_statement(fact: dict[str, Any]) -> str:
         if statement.startswith("我的狗"):
             return f"好，你的狗叫{value}。"
         who = "你" if entity == "我" else entity
+        if attr == "转述" or not who or not attr:
+            return "好，记住了。"
+        if attr.startswith("个") and not attr.startswith("个性"):
+            attr = "一" + attr
         if attr.endswith("的名字"):
             head = attr[: -len("的名字")]
             return f"好，{who}的{head}叫{value}。"
@@ -661,7 +665,9 @@ def resolve_stored_reply(
         short = bool(value) and value.rstrip("。") != statement.rstrip("。") and len(value) <= 24
         if answer_span(content, statement) or short:
             spoken = spoken_fact(content, fact)
-            if spoken:
+            from memory_core.answer_type import answer_fits
+
+            if spoken and answer_fits(content, spoken, statement):
                 return spoken, expert, [fact], "entity_first"
     pool = list(facts)
     for expert_item in experts:
@@ -676,7 +682,9 @@ def resolve_stored_reply(
         hit = covered_fact(content, facts)
     if hit is not None:
         spoken = spoken_fact(content, hit)
-        if spoken:
+        from memory_core.answer_type import answer_fits
+
+        if spoken and answer_fits(content, spoken, str(hit.get("statement") or "")):
             return spoken, expert, [hit], "entity_first"
     return _unmatched(name, content, expert)
 
