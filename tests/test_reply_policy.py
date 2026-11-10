@@ -659,6 +659,7 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertIn("诺丁", answer("谁打磨了透镜？"))
         self.assertIn("柯小满", answer("柯岚的女儿叫什么？"))
         self.assertIn("柯岚", answer("柯小满养的那只鸟，它主人的父亲叫什么？"))
+        self.assertIn("诺丁", answer("柯小满养的鸟的主人的父亲守护的塔上的透镜是谁磨的？"))
         self.assertIn("1873", answer("白鹭塔建于哪一年？"))
         self.assertIn("白鹭塔", answer("雾港有哪座灯塔？"))
         for question in (

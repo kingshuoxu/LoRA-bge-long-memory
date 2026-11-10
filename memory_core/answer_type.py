@@ -615,15 +615,15 @@ def answer_fits(query: str, span: str, statement: str) -> bool:
     asked = query or ""
     text = statement or ""
     value = (span or "").strip().rstrip("。")
-    for word, aliases in _KIN_ALIASES:
-        if word in asked and not any(alias in text for alias in aliases):
-            return False
     wh = max(asked.rfind(mark) for mark in ("谁", "什么", "哪", "啥"))
     if wh >= 0:
         cut = asked.rfind("的", 0, wh)
         focus = asked[cut + 1: wh + 6] if cut >= 0 else asked[max(0, wh - 4): wh + 6]
     else:
         focus = asked
+    for word, aliases in _KIN_ALIASES:
+        if word in focus and not any(alias in text for alias in aliases):
+            return False
     asked_roles = [name for name, aliases in _ROLE_ALIASES if any(alias in focus for alias in aliases)]
     if asked_roles:
         supported = False
