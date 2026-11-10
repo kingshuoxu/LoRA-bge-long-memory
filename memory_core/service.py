@@ -766,7 +766,7 @@ class MemoryService:
             )
 
             open_task = is_open_task(content)
-            if (asks_memory_chain(content) or memory_attribute_question(content)) and not open_task and not any(
+            if asks_memory_chain(content) and not open_task and not any(
                 isinstance(fact, dict) and not fact.get("superseded")
                 for record in experts
                 for fact in ((record.fact_memory or {}).get("facts") or [])
