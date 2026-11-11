@@ -41,6 +41,7 @@ _KIN = (
 _HOP_WORDS = _KIN + (
     ("养的那只猫", "pet:猫"),
     ("养的那只狗", "pet:狗"),
+    ("养的那只鸟", "pet:鸟"),
     ("养的猫", "pet:猫"),
     ("养的狗", "pet:狗"),
     ("养的鸟", "pet:鸟"),
@@ -48,12 +49,12 @@ _HOP_WORDS = _KIN + (
     ("家的猫咪", "pet:猫"),
     ("猫咪", "pet:猫"),
     ("养的", "pet"),
-    ("的猫", "pet"),
-    ("的狗", "pet"),
-    ("的鸟", "pet"),
-    ("猫", "pet"),
-    ("狗", "pet"),
-    ("鸟", "pet"),
+    ("的猫", "pet:猫"),
+    ("的狗", "pet:狗"),
+    ("的鸟", "pet:鸟"),
+    ("猫", "pet:猫"),
+    ("狗", "pet:狗"),
+    ("鸟", "pet:鸟"),
     ("小主人", "owner"),
     ("主人", "owner"),
     ("雇主", "employer"),
@@ -78,9 +79,6 @@ _HOP_WORDS = _KIN + (
     ("看的", "keeps"),
     ("的海鸥", "pet:海鸥"),
     ("海鸥", "pet:海鸥"),
-    ("的猫", "pet:猫"),
-    ("的狗", "pet:狗"),
-    ("的鸟", "pet:鸟"),
     ("值守", "keeper_of"),
     ("的学校", "school"),
     ("学校", "school"),
@@ -93,6 +91,8 @@ _OBJECT_ALIAS = (
 )
 _TERMINALS = (
     (r"是什么颜色|啥颜色|什么颜色|什么色", "color"),
+    (r"住哪儿|住哪里|住在哪|居住在|住址在|住址是", "home"),
+    (r"什么茶|哪种茶|茶是什么|爱喝的茶", "tea"),
     (r"是什么牌子|是什么品牌|什么牌子|什么品牌|哪个牌子|哪个品牌", "brand"),
     (r"在哪(?:里|儿)?上班|在哪(?:里|儿)?工作|哪里上班|哪儿工作|哪里工作", "workplace"),
     (r"哪一年拆除|哪年拆除|何时拆除|什么时候拆除|哪年拆的|哪一年拆|哪年拆掉|什么时候拆", "demolished"),
@@ -181,6 +181,18 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         work = re.search(r"([\u4e00-\u9fff]{2,4})在([\u4e00-\u9fff]{2,16})(?:上班|工作)", text)
         if work:
             add(work.group(1), "workplace", work.group(2), fact)
+        home = re.search(r"([\u4e00-\u9fff]{2,4})的住址是([\u4e00-\u9fff]{2,16})", text)
+        if home:
+            add(home.group(1), "home", home.group(2), fact)
+        lives = re.search(r"([\u4e00-\u9fff]{2,4})住在([\u4e00-\u9fff]{2,16})", text)
+        if lives:
+            add(lives.group(1), "home", lives.group(2), fact)
+        tea = re.search(
+            r"([\u4e00-\u9fff]{2,3})(?:最喜欢的|最爱的|喜欢的|爱喝的)?茶是([\u4e00-\u9fff]{2,12})",
+            text,
+        )
+        if tea:
+            add(tea.group(1), "tea", tea.group(2), fact)
         kept = re.search(
             r"([\u4e00-\u9fff]{2,3})(?:在[\u4e00-\u9fff]{0,8})?(?:看守|守护|值守)的[\u4e00-\u9fff]{0,8}名叫([\u4e00-\u9fff]{2,8})",
             text,
@@ -495,6 +507,7 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
         "负", "只", "把", "是", "在", "不", "照", "值", "站", "执", "看", "管",
         "哪", "还", "什", "谁", "吗", "呢", "多", "几", "世", "年", "叫", "啥", "色", "去",
         "现", "开", "最", "也", "都", "很", "曾", "已", "正", "刚", "才", "这", "那", "又",
+        "住", "居", "喜", "爱", "自", "骑", "喝", "吃", "会", "想", "要", "能", "可",
     )
     text = query or ""
     for name in _nodes(edges):
