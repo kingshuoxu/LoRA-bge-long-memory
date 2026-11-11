@@ -106,6 +106,33 @@ class FactGraphTests(unittest.TestCase):
         self.assertIn("这件事不在记忆里", refusal)
         self.assertEqual(fixed_refusal("江晚住在哪里？", FACTS).count("住不在"), 0)
 
+    def test_lighthouse_chain_answers_the_asked_role(self):
+        rows = [
+            _fact("白鹭塔", "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "白鹭塔"),
+            _fact("星砂盐", "雾港的特产是一种蓝色海盐，名叫星砂盐，每年霜降那天开始晾晒。", "星砂盐"),
+            _fact("阿哨", "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。", "阿哨"),
+            _fact("诺丁", "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "诺丁"),
+        ]
+        daughter = _answer("诺丁打磨透镜的那座塔，守护它的人的闺女叫什么？", rows)
+        self.assertIn("柯小满", daughter)
+        self.assertNotIn("柯岚", daughter)
+        tower = _answer("晒星砂盐的那个地方，最早的灯塔叫什么？", rows)
+        self.assertIn("白鹭塔", tower)
+        self.assertNotIn("星砂盐", tower)
+        duty = _answer("诺丁负责磨。照应的那位是谁？", rows)
+        self.assertIn("柯岚", duty)
+        self.assertNotIn("诺丁", duty)
+        maker = _answer("海鸥主人她父亲负责看守的灯塔上，磨那套镜片的师傅叫什么？", rows)
+        self.assertIn("诺丁", maker)
+        self.assertNotIn("白鹭塔", maker)
+        named = _answer("小满她父亲看着的灯塔，名字叫什么？", rows)
+        self.assertIn("白鹭塔", named)
+        self.assertNotIn("柯岚", named)
+        self.assertEqual(pattern_extract("磨这座灯塔透镜的工匠是诺丁。夜里值守的那位是谁？"), [])
+        self.assertEqual(pattern_extract("诺丁是磨镜的那位。值班的那位是谁？"), [])
+        refused = _answer("白鹭塔的闺女叫什么？", rows) + _answer("白鹭塔哪年拆除？", rows)
+        self.assertTrue("没记过" in refused or "不在记忆里" in refused)
+
     def test_cleanup_reruns_when_the_classifier_changes(self):
         root = Path(tempfile.mkdtemp())
         home = root / "data"

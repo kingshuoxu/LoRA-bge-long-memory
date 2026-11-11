@@ -308,6 +308,12 @@ def _asking_is_make(query: str) -> bool:
     return bool(re.search(r"磨|打磨", window))
 
 
+_DUTY_MARK = (
+    r"守护|看守|值守|看管|守塔|守着|站岗|执勤|守望|在守|谁守|管着|"
+    r"照料|看护|照管|照看|打理|照应|照拂|巡夜|值夜|当值|接班|看顾|留守|巡查|守夜|轮值|张罗|操持"
+)
+
+
 def _tower_duty(query: str) -> bool:
     """只有问句本身在问谁对塔负责时，才是看守。塔叫什么、谁磨的，都不是。"""
     if _asked_kind(query) != "person" or _asking_is_make(query):
@@ -325,9 +331,7 @@ def _tower_duty(query: str) -> bool:
         return True
     if re.search(r"日常", clause) and re.search(r"谁|哪位|守护|看守|值守", clause):
         return True
-    if re.search(r"守护|看守|值守|看管|守塔|守着|站岗|执勤|守望|在守|谁守|管着", clause) and re.search(
-        r"谁|哪位|哪个人|那位|人", clause
-    ):
+    if re.search(_DUTY_MARK, clause) and re.search(r"谁|哪位|哪个人|那位|人", clause):
         return True
     if "塔" in clause:
         return True
@@ -1361,7 +1365,7 @@ def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
         return None
     duty = _tower_duty(asked)
     clause = _asked_clause(asked)
-    if not duty and not re.search(r"守护|看守|守塔|谁守|在守|守着|看着|看管|管着|负责守|谁管|值守|站岗", clause):
+    if not duty and not re.search(_DUTY_MARK, clause) and not re.search(r"看着|看管|管着|负责守|谁管", clause):
         return None
     if not re.search(r"谁|哪个人|哪一位|哪位|什么人|叫什么|叫啥|啥名|什么名字", asked):
         return None
@@ -1492,20 +1496,24 @@ _ROLE_FACT = {
 def _role_family(query: str) -> str:
     """问句真正要的那种关系。定语里的父亲、守护不算。"""
     text = query or ""
-    tail = re.split(r"[，,。；;]", text)[-1]
-    if re.search(r"看着|看管|看守|守护|值守|守塔|在守", tail) and re.search(r"谁|哪一位|哪位|叫什么|叫啥", tail):
-        return "keeper"
-    if re.search(r"(?:闺女|丫头|女儿).{0,8}(?:叫什么|叫啥|是谁|什么名字)", text):
+    clause = _asked_clause(text)
+    if re.search(r"(?:闺女|丫头|女儿).{0,8}(?:叫什么|叫啥|是谁|什么名字)", clause):
         return "daughter"
-    if re.search(r"谁.{0,4}(?:守护|看守|守塔|在守)|谁守", text):
+    if _asked_kind(text) == "tower":
+        return ""
+    if _asking_is_make(text):
+        return "maker"
+    if _tower_duty(text):
         return "keeper"
-    if re.search(r"谁.{0,3}磨|谁打磨", text):
+    if re.search(r"谁.{0,4}(?:守护|看守|守塔|在守)|谁守", clause):
+        return "keeper"
+    if re.search(r"谁.{0,3}磨|谁打磨", clause):
         return "maker"
     found = ""
     at = -1
     for role, words in _ROLE_ASK:
         for word in words:
-            index = text.rfind(word)
+            index = clause.rfind(word)
             if index > at:
                 at = index
                 found = role
@@ -1549,17 +1557,34 @@ def supports_asked_entity(query: str, span: str, statement: str, rows: list[dict
             for tower in re.findall(r"[\u4e00-\u9fff]{1,6}塔", text + (statement or "")):
                 if tower in text and tower in (statement or ""):
                     return True
-    if role in {"keeper", "maker"} and re.search(r"塔|透镜|灯", query or ""):
-        tower = ""
-        named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", statement or "")
-        if named:
-            tower = named.group(1)
-        elif "塔" in (statement or ""):
-            tower = "塔"
+    if role in {"keeper", "maker"}:
+        clause = _asked_clause(query)
+        scene = re.search(r"塔|透镜|灯|镜", query or "") or not any(name in clause for name in asked)
+        if scene:
+            tower = ""
+            named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", statement or "")
+            if named:
+                tower = named.group(1)
+            elif "塔" in (statement or ""):
+                tower = "塔"
+            for fact in rows:
+                text = statement_of(fact)
+                if tower and tower in text and any(name in text for name in asked):
+                    return True
+    if re.search(r"塔", query or "") and re.search(r"叫什么|叫啥|啥名|名称|名字|哪一座|哪座|最早|第一|头一", query or ""):
+        keeper = _keeper(statement or "")
+        if keeper and str(span or "").endswith("塔"):
+            for fact in rows:
+                text = statement_of(fact)
+                if keeper in text and any(name in text for name in asked):
+                    return True
         for fact in rows:
             text = statement_of(fact)
-            if tower and tower in text and any(name in text for name in asked):
-                return True
+            if not any(name in text for name in asked):
+                continue
+            for token in re.findall(r"[\u4e00-\u9fff]{1,4}(?:港|镇|村|市|县)", text):
+                if token in (statement or ""):
+                    return True
     return False
 
 

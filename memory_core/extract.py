@@ -346,6 +346,10 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
+    if attr in {"那位", "这个", "那个", "哪位", "谁"}:
+        return None
+    if re.match(r"^(?:磨|打磨|守护|看守|值守|看管)(?:这|那)", entity):
+        return None
     if re.fullmatch(r"(?:什么|哪里|哪儿|哪个|哪所|哪|谁|多少|几|啥|怎么|如何)", value.strip()):
         return None
     if _looks_like_question(raw) or is_question_fragment(raw) or is_choice_question(raw):

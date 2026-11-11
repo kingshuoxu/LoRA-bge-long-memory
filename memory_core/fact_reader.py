@@ -569,7 +569,10 @@ def read_memory(
             # 前面是动词（守护白鹭塔）仍是这个名字。后面只多一两个字才是另一个名字。
             if missed.endswith(entity) and not missed.startswith(entity):
                 continue
-            if missed.startswith(entity) and missed[len(entity):].startswith(("离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家", "念", "读")):
+            if missed.startswith(entity) and missed[len(entity):].startswith((
+                "离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家", "念", "读",
+                "负", "只", "把", "是", "在", "不", "照", "值", "站", "执", "看", "管",
+            )):
                 continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)

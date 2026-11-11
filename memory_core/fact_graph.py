@@ -63,6 +63,9 @@ _HOP_WORDS = _KIN + (
     ("值守的", "keeps"),
     ("看管的", "keeps"),
     ("守着的", "keeps"),
+    ("看着的", "keeps"),
+    ("站岗的", "keeps"),
+    ("执勤的", "keeps"),
     ("守的", "keeps"),
     ("看的", "keeps"),
 )
@@ -311,6 +314,19 @@ def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
     return {"status": "abstain"}
 
 
+def _maker_asked(text: str) -> bool:
+    """问的是磨镜的人。塔名叫什么不是。"""
+    parts = [part.strip() for part in re.split(r"[，,。；;]", text or "") if part.strip()]
+    asked = parts[-1] if parts else text
+    if re.search(r"塔叫|名称是什么|的名称", asked) and not re.search(r"师傅|工匠|谁|哪位", asked):
+        return False
+    if re.search(r"闺女|女儿|丫头", asked):
+        return False
+    if re.search(r"师傅|工匠", asked) and re.search(r"磨|镜", text or ""):
+        return True
+    return bool(re.search(r"谁.{0,4}磨|哪位.{0,8}磨|磨成|打磨", asked))
+
+
 def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     text = without_tag_question(query or "").strip().rstrip("？?。")
     if not text:
@@ -326,6 +342,13 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
             terminal = kind
             body = text[: matched.start()]
             break
+    if _maker_asked(text):
+        terminal = "maker"
+        parts = [part.strip() for part in re.split(r"[，,。；;]", text) if part.strip()]
+        if len(parts) > 1:
+            body = "，".join(parts[:-1])
+        else:
+            body = re.split(r"谁|哪位|师傅|工匠", text)[0]
     if not terminal:
         return None
     if terminal != "maker" and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
@@ -392,7 +415,10 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
     """问句里的名字比已存实体多一个字时，不要把那个人当成同一个。"""
     from memory_core.fact_span import near_miss_span
 
-    verbs = ("离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家", "念", "读")
+    verbs = (
+        "离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家", "念", "读",
+        "负", "只", "把", "是", "在", "不", "照", "值", "站", "执", "看", "管",
+    )
     for name in _nodes(edges):
         missed = near_miss_span(name, query or "")
         if not missed or missed == name:
