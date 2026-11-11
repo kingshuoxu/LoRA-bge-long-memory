@@ -500,6 +500,12 @@ def _finish(span: str) -> str:
     return text
 
 
+def _entity_supported(query: str, span: str, fact: dict, facts: list[dict]) -> bool:
+    from memory_core.answer_type import supports_asked_entity
+
+    return supports_asked_entity(query, span, _statement(fact), facts)
+
+
 def _slot_ok(query: str, span: str, fact: dict, names: list[str]) -> bool:
     from memory_core.answer_type import accept_span
 
@@ -599,12 +605,12 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if _slot_ok(query, checked, fact, names):
+            if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if _slot_ok(query, checked, fact, names):
+        if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts):
             return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}
 

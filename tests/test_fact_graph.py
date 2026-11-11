@@ -7,7 +7,7 @@ from pathlib import Path
 from memory_core.extract import is_imperative_request, is_question_fragment, pattern_extract
 from memory_core.fact_reader import read_memory
 from memory_core.migrate_0214 import migrate_0214_junk
-from memory_core.span_guard import fixed_refusal
+from memory_core.span_guard import fixed_refusal, memory_attribute_question
 
 
 def _fact(entity: str, statement: str, value: str = "") -> dict:
@@ -46,10 +46,17 @@ class FactGraphTests(unittest.TestCase):
         self.assertNotIn("南埠印社", _answer("江衡的父亲在哪里上班？"))
         self.assertIn("听雨阁", _answer("江小满的父亲看守的阁楼叫什么？"))
         self.assertNotIn("听雨阁", _answer("江衡的父亲看守的阁楼叫什么？"))
+        self.assertIn("江晚", _answer("听雨阁的看守人叫什么？"))
+        self.assertNotIn("江晚", _answer("江衡的灯夫叫什么？"))
+        employer = _answer("江晚的雇主是谁？")
+        self.assertNotIn("南埠印社", employer)
+        self.assertNotIn("听雨阁", employer)
+        self.assertTrue("没记过" in employer or "不在记忆里" in employer or "没提到" in employer)
+        self.assertNotIn("南埠印社", _answer("江小满的父亲是谁？"))
 
     def test_year_and_object_attribute_stay_on_their_own_edge(self):
         self.assertIn("1912", _answer("南埠印社建于哪一年？"))
-        demolished = _answer("南埠印社哪年拆除？")
+        demolished = _answer("南埠印社哪年拆掉？")
         self.assertNotIn("1912", demolished)
         self.assertNotIn("1988", demolished)
         self.assertIn("1988", _answer("江晚哪年去世？"))
@@ -83,6 +90,11 @@ class FactGraphTests(unittest.TestCase):
         self.assertNotIn("跟你说", taught[0]["entity"])
         workplace = pattern_extract("告诉你，江晚在南埠印社上班。你知道吗？")
         self.assertEqual(workplace[0]["value"], "南埠印社")
+        mixed = pattern_extract("江小满的猫叫团团。团团的主人是谁？")
+        self.assertEqual([item["value"] for item in mixed], ["团团"])
+        self.assertEqual(fixed_refusal("江晚在南埠印社上班。江衡的雇主是谁？", FACTS), "这件事不在记忆里。")
+        self.assertTrue(memory_attribute_question("青岚草是哪里出产的植物？"))
+        self.assertFalse(memory_attribute_question("帮我写一首短诗"))
         for text in ("你能不能帮我写一张便条给江晚，说我晚点到", "能不能帮我写一首短诗"):
             self.assertTrue(is_imperative_request(text), text)
             self.assertEqual(pattern_extract(text), [], text)

@@ -362,7 +362,7 @@ def memory_attribute_question(text: str) -> bool:
     if is_choice_question(raw):
         return True
     return bool(re.search(
-        r"什么颜色|啥颜色|什么牌子|什么品牌|有多高|多高|哪一年|哪年|在哪里|在哪儿|是谁|叫什么|叫啥|去世|逝世|拆除|建于|上班|哪里工作|哪儿工作",
+        r"什么颜色|啥颜色|什么牌子|什么品牌|有多高|多高|哪一年|哪年|在哪里|在哪儿|是哪里|是哪儿|是谁|叫什么|叫啥|去世|逝世|拆除|建于|上班|哪里工作|哪儿工作|老家|产地|原产|植物|产自|出产",
         raw,
     ))
 
@@ -443,6 +443,9 @@ def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
     facts = list(facts or [])
     if not has_cjk(query):
         return "That is not in memory."
+    pieces = [part.strip() for part in re.split(r"[。！？?\n；;]+", query or "") if part.strip()]
+    if len(pieces) >= 2:
+        return "这件事不在记忆里。"
     from memory_core.extract import is_self_fact_question
 
     clause = _asked_clause(query)

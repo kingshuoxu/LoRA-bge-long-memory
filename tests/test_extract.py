@@ -324,7 +324,9 @@ class TeachAndRecallTests(unittest.TestCase):
             "诺丁是磨镜的那位。值班的那位是谁？",
             "沈星河的猫叫云朵。沈星河的学校叫什么？",
         ):
-            self.assertEqual(pattern_extract(question), [], question)
+            kept = pattern_extract(question)
+            self.assertTrue(kept, question)
+            self.assertFalse(any("谁" in str(fact.get("value") or "") or "什么" in str(fact.get("statement") or "") for fact in kept), question)
         taught = pattern_extract("沈星河在青藤中学上学。你知道吗？")
         self.assertEqual([fact["value"] for fact in taught], ["青藤中学"])
         from memory_core.extract import is_question_fragment

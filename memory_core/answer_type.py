@@ -1460,8 +1460,111 @@ def _taught_paraphrase(query: str, rows: list[dict]) -> tuple[str, dict] | None:
     return None
 
 
+_ROLE_ASK = (
+    ("keeper", ("守护人", "看守人", "值守人", "守灯", "司灯", "灯夫", "守夜", "值夜", "看塔", "守护", "看守", "值守", "守塔")),
+    ("maker", ("打磨", "磨镜", "制镜", "镜匠", "磨工", "磨透镜", "工匠")),
+    ("employer", ("雇主", "东家", "老板")),
+    ("father", ("父亲", "爸爸", "老爸")),
+    ("mother", ("母亲", "妈妈")),
+    ("daughter", ("女儿", "闺女")),
+    ("son", ("儿子",)),
+    ("spouse", ("妻子", "丈夫", "老婆", "老公", "太太")),
+)
+_ROLE_FACT = {
+    "keeper": ("守护", "看守", "值守"),
+    "maker": ("打磨", "磨"),
+    "employer": ("雇主", "东家", "老板", "雇用"),
+    "father": ("女儿", "儿子", "父亲", "爸爸"),
+    "mother": ("母亲", "妈妈"),
+    "daughter": ("女儿", "闺女"),
+    "son": ("儿子",),
+    "spouse": ("妻子", "丈夫", "老婆", "老公", "太太"),
+}
+
+
+def _role_family(query: str) -> str:
+    """问句最后点到的那一种关系。前面的定语不算。"""
+    text = query or ""
+    found = ""
+    at = -1
+    for role, words in _ROLE_ASK:
+        for word in words:
+            index = text.rfind(word)
+            if index > at:
+                at = index
+                found = role
+    return found
+
+
+def supports_asked_entity(query: str, span: str, statement: str, rows: list[dict]) -> bool:
+    """兜底摘录必须落在被问的那个人或事物上，关系也要和原句相容。"""
+    from memory_core.span_guard import statement_of
+
+    timed = bool(re.search(r"哪年|哪一年|什么时候|何时", query or ""))
+    role = "" if timed else _role_family(query)
+    if role and not any(mark in (statement or "") for mark in _ROLE_FACT[role]):
+        return False
+    names: list[str] = []
+    for fact in rows:
+        if not isinstance(fact, dict):
+            continue
+        entity = str(fact.get("entity") or "").strip()
+        if len(entity) >= 2 and entity not in names:
+            names.append(entity)
+        for match in re.finditer(r"[\u4e00-\u9fff]{2,4}", statement_of(fact)):
+            token = match.group(0)
+            if token not in names and token not in {"女儿", "父亲", "母亲", "灯塔", "海鸥", "透镜"}:
+                names.append(token)
+    names.sort(key=len, reverse=True)
+    asked = [name for name in names if name and name in (query or "") and name != (span or "").strip("。")]
+    if not asked:
+        return True
+    if any(name in (statement or "") for name in asked):
+        return True
+    if timed:
+        for fact in rows:
+            text = statement_of(fact)
+            if not any(name in text for name in asked):
+                continue
+            for tower in re.findall(r"[\u4e00-\u9fff]{1,6}塔", text + (statement or "")):
+                if tower in text and tower in (statement or ""):
+                    return True
+    if role in {"keeper", "maker"} and re.search(r"塔|透镜|灯", query or ""):
+        tower = ""
+        named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", statement or "")
+        if named:
+            tower = named.group(1)
+        elif "塔" in (statement or ""):
+            tower = "塔"
+        for fact in rows:
+            text = statement_of(fact)
+            if tower and tower in text and any(name in text for name in asked):
+                return True
+    return False
+
+
 def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     """关系链和单句摘录都要过同一种类检查。对不上就当没答出来。"""
+    from memory_core.fact_graph import resolve_graph
+    from memory_core.span_guard import statement_of
+
+    rows = [fact for fact in facts if isinstance(fact, dict)]
+    graphed = resolve_graph(query, rows)
+    if graphed is not None:
+        if graphed.get("status") != "answer":
+            return None
+        fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
+        return str(graphed.get("span") or ""), fact
+    picked = _choose_typed_inner(query, facts)
+    if not picked:
+        return None
+    span, fact = picked
+    if not supports_asked_entity(query, span, statement_of(fact), rows):
+        return None
+    return picked
+
+
+def _choose_typed_inner(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     from memory_core.span_guard import relation_decision, statement_of
 
     from memory_core.extract import is_question_fragment

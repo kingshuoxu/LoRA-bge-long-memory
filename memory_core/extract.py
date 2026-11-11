@@ -129,7 +129,7 @@ def is_advice_question(text: str) -> bool:
 
 def is_choice_question(text: str) -> bool:
     """「是A还是B」才是问句。逗号并列的「我是翻译，还是作家」是陈述。"""
-    raw = (text or "").strip()
+    raw = without_tag_question(text or "").strip()
     if not re.search(r"(?<![还不])是.+还是", raw):
         return False
     if re.search(r"[，,、；;].{0,16}还是", raw):
@@ -349,6 +349,8 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     if re.fullmatch(r"(?:什么|哪里|哪儿|哪个|哪所|哪|谁|多少|几|啥|怎么|如何)", value.strip()):
         return None
     if _looks_like_question(raw) or is_question_fragment(raw) or is_choice_question(raw):
+        return None
+    if "还是" in value and not re.search(r"[，,、；;].{0,12}还是", raw):
         return None
     if not is_declarative_fact(raw) and (
         re.search(r"啥|什么|谁|吗|呢|多少|还是", value) or is_choice_question(raw) or is_choice_question(entity)
@@ -756,8 +758,9 @@ def pattern_extract(text: str) -> list[dict[str, Any]]:
     current: str | None = None
     for block in re.split(r"\n+", text or ""):
         block = without_tag_question(block)
-        if not block or _block_contains_question(block):
+        if not block:
             continue
+        # 同一段里的陈述句留下。只丢掉真正在问的那一句，不把前面刚说的事实一起扔掉。
         _extract_block(block, facts, seen, current)
     return facts
 

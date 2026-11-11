@@ -41,11 +41,21 @@ _HOP_WORDS = _KIN + (
     ("猫", "pet"),
     ("狗", "pet"),
     ("鸟", "pet"),
+    ("小主人", "owner"),
+    ("主人", "owner"),
+    ("雇主", "employer"),
+    ("东家", "employer"),
+    ("老板", "employer"),
+    ("守护人", "keeper_of"),
+    ("看守人", "keeper_of"),
+    ("值守人", "keeper_of"),
+    ("守灯人", "keeper_of"),
+    ("灯夫", "keeper_of"),
+    ("司灯", "keeper_of"),
     ("看守的", "keeps"),
     ("守护的", "keeps"),
     ("值守的", "keeps"),
 )
-_DEFER = ("透镜", "灯塔", "海鸥", "主人", "师傅", "工匠", "设计", "建造", "打磨", "霜降", "特产", "国籍", "哪国", "电灯")
 _OBJECT_ALIAS = (
     frozenset({"汽车", "车"}),
     frozenset({"自行车", "单车"}),
@@ -56,10 +66,11 @@ _TERMINALS = (
     (r"是什么颜色|啥颜色|什么颜色|什么色", "color"),
     (r"是什么牌子|是什么品牌|什么牌子|什么品牌|哪个牌子|哪个品牌", "brand"),
     (r"在哪(?:里|儿)?上班|在哪(?:里|儿)?工作|哪里上班|哪儿工作|哪里工作", "workplace"),
-    (r"哪一年拆除|哪年拆除|何时拆除|什么时候拆除|哪年拆的|哪一年拆", "demolished"),
+    (r"哪一年拆除|哪年拆除|何时拆除|什么时候拆除|哪年拆的|哪一年拆|哪年拆掉|什么时候拆", "demolished"),
     (r"建于哪一年|哪一年建的|哪年建成|哪年建的|是哪一年建的", "built"),
     (r"哪年去世|哪一年去世|何时去世|哪年逝世|死于哪一年|哪年死的", "died"),
     (r"哪年出生|哪一年出生|是哪年出生|生于哪一年", "born"),
+    (r"是谁磨|谁磨的|谁打磨|谁磨了|哪位.{0,4}磨", "maker"),
     (r"叫什么名字|叫什么|叫啥|是谁|什么名字", "identity"),
 )
 
@@ -98,7 +109,7 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
             continue
         text = _statement(fact)
         for match in re.finditer(
-            r"([\u4e00-\u9fff]{2,4})的(女儿|儿子|父亲|母亲|爸爸|妈妈|哥哥|弟弟|姐姐|妹妹|妻子|丈夫)(?:是|叫)?([\u4e00-\u9fff]{2,4})",
+            r"([\u4e00-\u9fff]{2,3})的(女儿|儿子|父亲|母亲|爸爸|妈妈|哥哥|弟弟|姐姐|妹妹|妻子|丈夫)(?:是|叫)?([\u4e00-\u9fff]{2,3})(?=养|的|，|。|$|是|在|和)",
             text,
         ):
             rel = dict(_KIN).get(match.group(2), "")
@@ -111,7 +122,7 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
                 add(match.group(3), "father", match.group(1), fact)
             elif rel == "father":
                 add(match.group(3), "child", match.group(1), fact)
-        pet = re.search(r"([\u4e00-\u9fff]{2,4})养了.{0,12}名叫([\u4e00-\u9fff]{1,8})", text)
+        pet = re.search(r"([\u4e00-\u9fff]{2,3})养了.{0,16}名叫([\u4e00-\u9fff]{1,6})", text)
         if pet:
             add(pet.group(1), "pet", pet.group(2), fact)
             add(pet.group(2), "owner", pet.group(1), fact)
@@ -122,7 +133,7 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         if work:
             add(work.group(1), "workplace", work.group(2), fact)
         kept = re.search(
-            r"([\u4e00-\u9fff]{2,4})(?:看守|守护|值守)的[\u4e00-\u9fff]{0,6}名叫([\u4e00-\u9fff]{2,8})",
+            r"([\u4e00-\u9fff]{2,3})(?:在[\u4e00-\u9fff]{0,8})?(?:看守|守护|值守)的[\u4e00-\u9fff]{0,8}名叫([\u4e00-\u9fff]{2,8})",
             text,
         )
         if kept:
@@ -142,6 +153,16 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         born = re.search(r"([\u4e00-\u9fff]{2,4})生于(\d{3,4}年)", text)
         if born:
             add(born.group(1), "born", born.group(2), fact)
+        made = re.search(r"(?:工匠|师傅)([\u4e00-\u9fff]{2,3})打磨", text)
+        tower_name = ""
+        for match in re.finditer(r"([\u4e00-\u9fff]{2,4})塔", text):
+            name = match.group(1) + "塔"
+            while name and name[0] in "年月日的座第这那":
+                name = name[1:]
+            if len(name) >= 3 and name.endswith("塔"):
+                tower_name = name
+        if made and tower_name:
+            add(tower_name, "maker", made.group(1), fact)
         brand = re.search(
             r"([\u4e00-\u9fff]{2,8})的([\u4e00-\u9fff]{1,8})(?:品牌|牌子)是([\u4e00-\u9fffA-Za-z0-9]{1,16})",
             text,
@@ -265,7 +286,7 @@ def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
 
 def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     text = without_tag_question(query or "").strip().rstrip("？?。")
-    if not text or any(mark in text for mark in _DEFER):
+    if not text:
         return None
     choice = _choice(text, edges)
     if choice is not None:
@@ -302,8 +323,15 @@ def _walk(start: str, hops: list[str], edges: list[tuple[str, str, str, str, dic
     node = start
     fact: dict = {}
     for hop in hops:
-        nxt = [(dst, host) for src, rel, dst, _obj, host in edges if src == node and rel == hop]
-        if len(nxt) != 1:
+        if hop == "keeper_of":
+            nxt = [(src, host) for src, rel, dst, _obj, host in edges if rel == "keeps" and dst == node]
+        elif hop == "owner":
+            nxt = [(dst, host) for src, rel, dst, _obj, host in edges if src == node and rel == "owner"]
+            if not nxt:
+                nxt = [(src, host) for src, rel, dst, _obj, host in edges if rel == "pet" and dst == node]
+        else:
+            nxt = [(dst, host) for src, rel, dst, _obj, host in edges if src == node and rel == hop]
+        if hop == "employer" or len(nxt) != 1:
             return None
         node, fact = nxt[0]
     return node, fact
