@@ -1105,21 +1105,22 @@ class MemoryService:
                     from memory_core.span_guard import fixed_refusal
 
                     graph_locked = True
-                    fact_answer = fixed_refusal(content, remembered)
-                    decision.fired = False
-                    decision.expert = None
-                    decision.label = "基座"
-                    decision.reason = "memory_miss"
-                    recall["fired"] = False
-                    recall["mounted"] = False
-                    recall["abstain"] = True
-                    recall["reason"] = "memory_miss"
-                    recall["matched_facts"] = []
-                    recall["doc_chips"] = []
-                    recall["reason_text"] = "这条关系没有走通，所以不拿别的已存取值来答"
-                    recall["expert"] = None
-                    recall["mounted_expert"] = None
-                    recall["mounted_label"] = "基座"
+                    if recall.get("reason") not in {"entity_clarify", "entity_grounded"}:
+                        fact_answer = fixed_refusal(content, remembered)
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["doc_chips"] = []
+                        recall["reason_text"] = "这条关系没有走通，所以不拿别的已存取值来答"
+                        recall["expert"] = None
+                        recall["mounted_expert"] = None
+                        recall["mounted_label"] = "基座"
                 elif graphed is not None and graphed.get("status") == "answer":
                     graph_locked = True
                     span = str(graphed.get("span") or "").strip()
@@ -1276,7 +1277,16 @@ class MemoryService:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
                 polar_answer = bool(re.match(r"^(?:是|不是|有|Yes|No)\b", (fact_answer or "").strip(), re.IGNORECASE))
-                if re.search(r"是.+还是", content or "") or (re.search(r"是不是", content or "") and not polar_answer):
+                choice_about_memory = False
+                if re.search(r"是.+还是", content or ""):
+                    choice_about_memory = any(
+                        len(str(fact.get("entity") or "")) >= 2 and str(fact.get("entity")) in content
+                        for fact in remembered
+                    ) or any(
+                        len(str(fact.get("value") or "")) >= 2 and str(fact.get("value")) in content
+                        for fact in remembered
+                    )
+                if choice_about_memory or (re.search(r"是不是", content or "") and not polar_answer):
                     fact_answer = fixed_refusal(content, remembered)
                     decision.fired = False
                     decision.expert = None
@@ -1349,9 +1359,22 @@ class MemoryService:
                         recall["mounted_expert"] = None
                         recall["mounted_label"] = "基座"
             if not fact_answer and not open_task:
+                from memory_core.answer_type import memory_topic
                 from memory_core.span_guard import fixed_refusal, personal_attribute_question
 
-                if personal_attribute_question(content) or memory_attribute_question(content):
+                remembered = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                mentions_stored_name = any(
+                    len(str(fact.get("entity") or "")) >= 2 and str(fact.get("entity")) in (content or "")
+                    for fact in remembered
+                )
+                if (personal_attribute_question(content) or memory_attribute_question(content)) and (
+                    mentions_stored_name or memory_topic(content, remembered)
+                ):
                     fact_answer = fixed_refusal(content)
                     decision.fired = False
                     decision.expert = None

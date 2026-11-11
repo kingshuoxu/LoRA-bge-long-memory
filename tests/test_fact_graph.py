@@ -185,6 +185,25 @@ class FactGraphTests(unittest.TestCase):
         self.assertIsNone(world_reply("水的化学式是什么？", []))
         self.assertIsNone(world_reply("1加1等于几？", []))
 
+    def test_stored_person_and_org_attributes_answer_without_borrowing(self):
+        from memory_core.fact_graph import resolve_graph
+        from memory_core.unseen_personas import build
+
+        spec = build()
+        facts = [
+            _fact(convo["title"], sentence, sentence)
+            for convo in spec["zh"]
+            for sentence in convo["sentences"]
+        ]
+        for question, gold in spec["zh_recall"]:
+            self.assertIn(gold, _answer(question, facts), question)
+        for question, forbidden in spec["zh_near"]:
+            self.assertNotIn(forbidden, _answer(question, facts), question)
+        person = spec["zh"][0]["title"]
+        flower = next(gold for _question, gold in spec["zh_recall"] if "花" in _question)
+        self.assertIsNone(resolve_graph("月亮是行星还是卫星？", facts))
+        self.assertNotIn(flower, _answer(f"{person}最讨厌的花是什么？", facts))
+
     def test_restore_junk_is_cleaned_on_next_startup(self):
         from memory_core.migrate_0214 import restore_0214_junk
 

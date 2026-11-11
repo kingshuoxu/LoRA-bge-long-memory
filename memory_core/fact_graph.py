@@ -91,7 +91,15 @@ _OBJECT_ALIAS = (
 )
 _TERMINALS = (
     (r"是什么颜色|啥颜色|什么颜色|什么色", "color"),
-    (r"住哪儿|住哪里|住在哪|居住在|住址在|住址是", "home"),
+    (r"住哪儿|住哪里|住在哪|居住在|住址在|住址是|现居哪|哪座城市", "home"),
+    (r"做什么工作|什么手艺|靠什么|职业是什么|谋生", "job"),
+    (r"老家|哪里长大|在哪里长大|家乡是", "hometown"),
+    (r"哪种花|偏爱哪|喜欢的花", "flower"),
+    (r"哪一年创立|创立于哪|成立于哪|什么时候成立|何时成立|哪一年成立", "founded"),
+    (r"总部设在|总部在哪", "headquarters"),
+    (r"谁创办|谁创立|创始人是谁", "founder"),
+    (r"主打什么产品|主要卖什么产品|卖什么产品|主打什么", "product"),
+    (r"有多少员工|多少员工|员工人数", "staff"),
     (r"什么茶|哪种茶|茶是什么|爱喝的茶", "tea"),
     (r"是什么牌子|是什么品牌|什么牌子|什么品牌|哪个牌子|哪个品牌", "brand"),
     (r"在哪(?:里|儿)?上班|在哪(?:里|儿)?工作|哪里上班|哪儿工作|哪里工作", "workplace"),
@@ -159,15 +167,20 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
                 add(match.group(3), "father", match.group(1), fact)
             elif rel == "father":
                 add(match.group(3), "child", match.group(1), fact)
-        pet = re.search(r"([\u4e00-\u9fff]{2,3})养了.{0,16}名叫([\u4e00-\u9fff]{1,6})", text)
-        if pet:
-            add(pet.group(1), "pet", pet.group(2), fact)
-            add(pet.group(2), "owner", pet.group(1), fact)
-            if "海鸥" in text:
-                add("海鸥", "owner", pet.group(1), fact)
-                add("海鸥", "named", pet.group(2), fact)
-            if "鸟" in text:
-                add("鸟", "owner", pet.group(1), fact)
+        raised = text.find("养了")
+        called_name = re.search(r"养了.{0,24}(?:名叫|名字叫)([\u4e00-\u9fff]{1,6})", text)
+        if raised > 0 and called_name:
+            owner = text[:raised].split("的")[-1]
+            owner = re.sub(r"^(?:女儿|儿子|父亲|母亲|爸爸|妈妈|女孩|男孩)", "", owner)
+            owner = owner[-4:] if len(owner) > 4 else owner
+            if re.fullmatch(r"[\u4e00-\u9fff]{2,4}", owner):
+                add(owner, "pet", called_name.group(1), fact)
+                add(called_name.group(1), "owner", owner, fact)
+                if "海鸥" in text:
+                    add("海鸥", "owner", owner, fact)
+                    add("海鸥", "named", called_name.group(1), fact)
+                if "鸟" in text and "海鸥" not in text:
+                    add("鸟", "owner", owner, fact)
         called = re.search(r"(猫|狗|鸟|海鸥).{0,8}名字是([\u4e00-\u9fff]{1,8})", text)
         if called:
             kind = called.group(1)
@@ -193,6 +206,33 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         )
         if tea:
             add(tea.group(1), "tea", tea.group(2), fact)
+        job = re.search(r"([\u4e00-\u9fff]{2,3})的职业是([\u4e00-\u9fff]{2,8})", text)
+        if job:
+            add(job.group(1), "job", job.group(2), fact)
+        hometown = re.search(r"([\u4e00-\u9fff]{2,3})的家乡是([\u4e00-\u9fff]{2,8})", text)
+        if hometown:
+            add(hometown.group(1), "hometown", hometown.group(2), fact)
+        flower = re.search(
+            r"([\u4e00-\u9fff]{2,3})(?:最喜欢的|最爱的|喜欢的|偏爱的)?花是([\u4e00-\u9fff]{2,8})",
+            text,
+        )
+        if flower and "讨厌" not in text:
+            add(flower.group(1), "flower", flower.group(2), fact)
+        founded = re.search(r"([\u4e00-\u9fff]{2,8})成立于(\d{3,4})年", text)
+        if founded:
+            add(founded.group(1), "founded", founded.group(2), fact)
+        headquarters = re.search(r"([\u4e00-\u9fff]{2,8})的总部在([\u4e00-\u9fff]{2,8})", text)
+        if headquarters:
+            add(headquarters.group(1), "headquarters", headquarters.group(2), fact)
+        founder = re.search(r"([\u4e00-\u9fff]{2,8})的创始人是([\u4e00-\u9fff]{2,4})", text)
+        if founder:
+            add(founder.group(1), "founder", founder.group(2), fact)
+        product = re.search(r"([\u4e00-\u9fff]{2,8})的主打产品是([\u4e00-\u9fff]{2,12})", text)
+        if product:
+            add(product.group(1), "product", product.group(2), fact)
+        staff = re.search(r"([\u4e00-\u9fff]{2,8})的员工人数是([0-9一二三四五六七八九十百零]+人)", text)
+        if staff:
+            add(staff.group(1), "staff", staff.group(2), fact)
         kept = re.search(
             r"([\u4e00-\u9fff]{2,3})(?:在[\u4e00-\u9fff]{0,8})?(?:看守|守护|值守)的[\u4e00-\u9fff]{0,8}名叫([\u4e00-\u9fff]{2,8})",
             text,
@@ -258,7 +298,7 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         if student:
             add(student.group(1), "school", student.group(2), fact)
         nation = re.search(r"([\u4e00-\u9fff]{2,4})是([\u4e00-\u9fff]{1,8})(?:人|工匠|师傅)", text)
-        if nation and nation.group(2) not in {"学生", "本地", "外地"}:
+        if nation and nation.group(2) not in {"学生", "本地", "外地"} and not re.search(r"[0-9一二三四五六七八九十百]", nation.group(2)):
             add(nation.group(1), "nationality", nation.group(2).removesuffix("工").removesuffix("师"), fact)
         origin = re.search(
             r"(瑞典|挪威|中国|日本|英国|法国|德国|美国|荷兰|丹麦|芬兰)(?:工匠|师傅)([\u4e00-\u9fff]{2,4})",
@@ -387,7 +427,9 @@ def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
             unique.append((dst, fact))
     if len(unique) == 1:
         return {"status": "answer", "span": unique[0][0], "fact": unique[0][1]}
-    return {"status": "abstain"}
+    if start or unique:
+        return {"status": "abstain"}
+    return None
 
 
 def _maker_asked(text: str) -> bool:
@@ -427,7 +469,7 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
             body = re.split(r"谁|哪位|师傅|工匠", text)[0]
     if not terminal:
         return None
-    if terminal != "maker" and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
+    if terminal not in {"maker", "founder"} and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
         return None
     nodes = _nodes(edges)
     start = _start_name(body or text, nodes)
@@ -508,6 +550,7 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
         "哪", "还", "什", "谁", "吗", "呢", "多", "几", "世", "年", "叫", "啥", "色", "去",
         "现", "开", "最", "也", "都", "很", "曾", "已", "正", "刚", "才", "这", "那", "又",
         "住", "居", "喜", "爱", "自", "骑", "喝", "吃", "会", "想", "要", "能", "可",
+        "靠", "老", "偏", "做", "从", "以", "成", "总", "主", "有", "养",
     )
     text = query or ""
     for name in _nodes(edges):
