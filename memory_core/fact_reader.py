@@ -503,7 +503,7 @@ def _finish(span: str) -> str:
 def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
     """前半句是陈述、后半句在问。近似名字让整句摘录弃权时，仍用整句能确定的关系。"""
     found = read_memory(query, facts, None)
-    if found is not None:
+    if found and not found.get("miss"):
         return found
     from memory_core.answer_type import choose_typed
 

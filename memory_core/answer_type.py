@@ -1545,6 +1545,44 @@ def supports_asked_entity(query: str, span: str, statement: str, rows: list[dict
                 names.append(token)
     names.sort(key=len, reverse=True)
     asked = [name for name in names if name and name in (query or "") and name != (span or "").strip("。")]
+    if role == "keeper" and _keeper(statement or "") == (span or "").strip("。"):
+        people = set()
+        for fact in rows:
+            if not isinstance(fact, dict):
+                continue
+            entity = str(fact.get("entity") or "").strip()
+            if _person_shape(entity):
+                people.add(entity)
+            text = statement_of(fact)
+            for person in (_keeper(text), _maker(text), _owner(text), _father(text), _daughter(text)):
+                if person and _person_shape(person):
+                    people.add(person)
+        keeper_name = (span or "").strip("。")
+        mentioned = [
+            person for person in people
+            if person in (query or "")
+            and person != keeper_name
+            and person not in (statement or "")
+            and not re.search(r"磨|打|透镜|镜片|灯塔|值守|接班", person)
+        ]
+        clause = _asked_clause(query)
+        if any(re.search(rf"(?:照应|照料|看护|照管|照看|照拂|守护|看守|值守|看管).{{0,3}}{re.escape(person)}", clause) for person in mentioned):
+            return False
+        elif not mentioned:
+            return True
+        else:
+            tower = ""
+            named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", statement or "")
+            if named:
+                tower = named.group(1)
+            elif "塔" in (statement or ""):
+                tower = "塔"
+            linked = True
+            for person in mentioned:
+                if not any(person in statement_of(fact) and tower and tower in statement_of(fact) for fact in rows if isinstance(fact, dict)):
+                    linked = False
+            if linked:
+                return True
     if not asked:
         return True
     if any(name in (statement or "") for name in asked):
