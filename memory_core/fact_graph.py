@@ -16,6 +16,9 @@ _KIN = (
     ("老爸", "father"),
     ("她爸", "father"),
     ("他爸", "father"),
+    ("她爹", "father"),
+    ("他爹", "father"),
+    ("爹", "father"),
     ("母亲", "mother"),
     ("妈妈", "mother"),
     ("女儿", "daughter"),
@@ -227,8 +230,8 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
             hops.append(rel)
             rest = rest[len(matched):]
             continue
-        noun = re.match(r"[\u4e00-\u9fff]{1,8}", rest)
-        if not noun:
+        noun = re.match(r"[^的]{1,6}", rest)
+        if not noun or not re.fullmatch(r"[\u4e00-\u9fff那这只座个]{1,6}", noun.group(0)):
             return None
         if not hops and terminal in {"color", "brand"}:
             rest = rest[noun.end():]
@@ -372,7 +375,14 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
         return parsed
     walked = _walk(parsed["start"], parsed["hops"], edges)
     if walked is None:
-        return {"status": "abstain"}
+        structural = {"father", "mother", "son", "daughter", "brother", "sister", "spouse", "employer", "keeper_of"}
+        if any(hop in structural for hop in parsed["hops"]):
+            return {"status": "abstain"}
+        if not parsed["hops"] and parsed["terminal"] in {
+            "demolished", "died", "born", "built", "workplace", "brand", "color", "maker",
+        }:
+            return {"status": "abstain"}
+        return None
     node, fact = walked
     terminal = parsed["terminal"]
     if terminal == "identity":

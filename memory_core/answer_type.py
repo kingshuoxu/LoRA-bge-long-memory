@@ -1583,6 +1583,12 @@ def _choose_typed_inner(query: str, facts: list[dict]) -> tuple[str, dict] | Non
             return None
     if re.search(r"是.+还是|是不是", query or ""):
         return None
+    if "茶" in (query or "") and re.search(r"喝|喜欢|最爱|哪种", query or ""):
+        for fact in rows:
+            text = statement_of(fact)
+            named = re.search(r"([\u4e00-\u9fff]{2,4}).{0,8}茶是([\u4e00-\u9fff]{2,8})", text)
+            if named and named.group(1) in (query or ""):
+                return named.group(2), fact
     if _asks_school(query):
         for fact in rows:
             text = statement_of(fact)
