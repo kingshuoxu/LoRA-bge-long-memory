@@ -21,7 +21,7 @@ WINDOW_END = "2026-11-05T08:59:07+00:00"
 MARKER = "migrations/cleanup-0214.json"
 RESTORE_MARKER = "migrations/restore-0214-kept.json"
 RESTORE_VERSION = 3
-CLASSIFIER_VERSION = 4
+CLASSIFIER_VERSION = 5
 QUARANTINE = "cleaned/0214-junk.json"
 
 
@@ -388,4 +388,7 @@ def restore_0214_junk(home: Path) -> int:
         text = str(item.get("text") or "")
         if text and _append_pending(home, relative, text):
             restored += 1
+    marker = home / MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(marker, {"done": False, "version": 0, "at": _now(), "restored_junk": restored})
     return restored

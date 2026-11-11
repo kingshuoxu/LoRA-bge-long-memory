@@ -359,9 +359,9 @@ class TeachAndRecallTests(unittest.TestCase):
         from memory_core.span_guard import fixed_refusal
 
         assert_school_is_recalled()
-        self.assertEqual(fixed_refusal("沈星河的学校你知道吗？", []), "我没记过沈星河的学校。")
-        self.assertEqual(fixed_refusal("沈星河上的什么学校？", []), "我没记过沈星河的学校。")
-        self.assertEqual(fixed_refusal("沈星河是在哪个学校读书的？", []), "我没记过沈星河的学校。")
+        self.assertEqual(fixed_refusal("沈星河的学校你知道吗？", []), "这件事不在记忆里。")
+        self.assertEqual(fixed_refusal("沈星河上的什么学校？", []), "这件事不在记忆里。")
+        self.assertEqual(fixed_refusal("沈星河是在哪个学校读书的？", []), "这件事不在记忆里。")
         self.assertNotIn("你知道", fixed_refusal("会弹钢琴你知道吗？", []))
         cat_fact = {"entity": "周乔", "statement": "周乔的猫叫米粒。", "value": "米粒"}
         phone_fact = {"entity": "周乔", "statement": "周乔的电话是13800001111。", "value": "13800001111"}

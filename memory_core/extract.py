@@ -30,10 +30,25 @@ def _split_sentences(text: str) -> list[str]:
     parts = re.split(r"[。！？\n；;]+|(?<=[.!?])\s+", text)
     out = []
     for part in parts:
-        piece = _clean_piece(part)
-        if len(piece) >= 4:
-            out.append(piece)
+        for piece in _split_question_tail(_clean_piece(part)):
+            if len(piece) >= 4:
+                out.append(piece)
     return out
+
+
+def _split_question_tail(text: str) -> list[str]:
+    """「事实，后面在问？」逗号后面的问句单独成句，前面的事实还能留下。"""
+    if not text or "，" not in text and "," not in text:
+        return [text] if text else []
+    bits = [bit.strip() for bit in re.split(r"[，,]", text) if bit.strip()]
+    if len(bits) < 2:
+        return [text]
+    for index, bit in enumerate(bits[1:], start=1):
+        if re.search(r"什么|谁|哪|吗|呢|多少|几|啥", bit) or bit.endswith(("?", "？")):
+            head = "，".join(bits[:index]).strip()
+            tail = "，".join(bits[index:]).strip()
+            return [piece for piece in (head, tail) if piece]
+    return [text]
 
 
 _ADVICE = (

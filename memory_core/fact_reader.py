@@ -547,17 +547,31 @@ def read_memory(
         return None
     if is_open_task(query):
         return None
+    from memory_core.span_guard import general_knowledge_question
+
+    if general_knowledge_question(query):
+        return None
     from memory_core.fact_graph import resolve_graph
 
-    graphed = resolve_graph(query, facts)
+    asked = query
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;]+", query or "") if part.strip()]
+    if len(pieces) >= 2 and re.search(r"什么|谁|哪|吗|呢|啥", pieces[-1]):
+        asked = pieces[-1]
+    graphed = resolve_graph(asked, facts)
     if graphed is not None and graphed.get("status") == "answer":
         span = str(graphed.get("span") or "").strip()
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
         if span:
             return {"text": _finish(span), "fact": fact, "miss": False}
-    if re.search(r"是.+还是", query or ""):
+    if graphed is not None and graphed.get("status") == "abstain":
         from memory_core.span_guard import fixed_refusal
 
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    from memory_core.span_guard import fixed_refusal, memory_entity_question
+
+    if memory_entity_question(query):
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.grounding import open_entity_question

@@ -1636,6 +1636,12 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
         return str(graphed.get("span") or ""), fact
+    from memory_core.span_guard import general_knowledge_question, memory_entity_question
+
+    if graphed is not None and graphed.get("status") == "abstain":
+        return None
+    if memory_entity_question(query) and not general_knowledge_question(query):
+        return None
     picked = _choose_typed_inner(query, facts)
     if not picked:
         return None

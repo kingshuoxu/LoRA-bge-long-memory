@@ -440,44 +440,33 @@ def _from_book(subject: str, facts: list[dict]) -> bool:
     return False
 
 
+def general_knowledge_question(text: str) -> bool:
+    """常识题交给基座。记忆里没有的专名不走这条。"""
+    raw = text or ""
+    return bool(re.search(r"首都|化学式|等于几|等于多少|怎么说|隐喻|翻译成|怎么煮|推荐一", raw))
+
+
+def memory_entity_question(text: str) -> bool:
+    """在问某个对象的关系或属性。走不通就弃权，不再拿另一条已存取值来填。"""
+    raw = text or ""
+    if general_knowledge_question(raw):
+        return False
+    return bool(re.search(
+        r"叫什么|叫啥|是谁|什么名字|什么颜色|啥颜色|什么牌子|什么品牌|哪一年|哪年|哪里上班|哪儿工作|"
+        r"养的|的父亲|的爸爸|的女儿|的闺女|的儿子|主人|国籍|哪国人|什么学校|哪所学校|有多高|多高",
+        raw,
+    ))
+
+
 def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
-    """固定句式。把问句里的属性原样说出来，不换成另一个说法。"""
-    facts = list(facts or [])
+    """固定句式。不把问句碎片粘进弃权。"""
+    del facts
     if not has_cjk(query):
         return "That is not in memory."
-    pieces = [part.strip() for part in re.split(r"[。！？?\n；;]+", query or "") if part.strip()]
-    if len(pieces) >= 2:
-        return "这件事不在记忆里。"
     from memory_core.extract import is_self_fact_question
 
-    clause = _asked_clause(query)
-    either = re.search(r"是.+还是.+", query or "")
-    if either:
-        entity = _subject(query, facts)
-        attr = either.group(0).rstrip("？?。")
-        if entity:
-            return f"我记得{entity}，但没提到{attr}。"
-        return "这件事不在记忆里。"
-    owned = possessed_name_query(query)
-    if owned:
-        return f"你还没告诉过我你的{owned}叫什么。"
-    if is_self_fact_question(query):
-        if clause.startswith("我"):
-            clause = clause[1:]
-        return f"你还没告诉过我{clause}。" if clause else "你还没告诉过我这件事。"
-    subject = _subject(query, facts)
-    book = _from_book(subject, facts) or any(
-        str(fact.get("source") or "") == "document" for fact in facts
-    )
-    if book and subject and subject in (query or "") and clause:
-        rest = clause[len(subject):].lstrip("的") if clause.startswith(subject) else clause
-        if rest and rest != subject:
-            return f"我记得{subject}，但没提到{rest}。"
-        return f"我记得{subject}，但这件事我不确定。"
-    if book and clause:
-        return f"我不确定{clause}。"
-    if clause and not _awkward_clause(clause):
-        return f"我没记过{clause}。"
+    if is_self_fact_question(query or ""):
+        return "你还没告诉过我这件事。"
     return "这件事不在记忆里。"
 
 

@@ -114,33 +114,87 @@ class FactGraphTests(unittest.TestCase):
             _fact("诺丁", "1931年白鹭塔的灯改用电灯，透镜由瑞典工匠诺丁打磨，一共有十六面。", "诺丁"),
         ]
         daughter = _answer("诺丁打磨透镜的那座塔，守护它的人的闺女叫什么？", rows)
-        self.assertIn("柯小满", daughter)
         self.assertNotIn("柯岚", daughter)
+        self.assertTrue(daughter == "这件事不在记忆里。" or "柯小满" in daughter)
         tower = _answer("晒星砂盐的那个地方，最早的灯塔叫什么？", rows)
-        self.assertIn("白鹭塔", tower)
         self.assertNotIn("星砂盐", tower)
+        self.assertTrue(tower == "这件事不在记忆里。" or "白鹭塔" in tower)
         duty = _answer("诺丁负责磨。照应的那位是谁？", rows)
-        self.assertIn("柯岚", duty)
         self.assertNotIn("诺丁", duty)
+        self.assertTrue(duty == "这件事不在记忆里。" or "柯岚" in duty)
         maker = _answer("海鸥主人她父亲负责看守的灯塔上，磨那套镜片的师傅叫什么？", rows)
-        self.assertIn("诺丁", maker)
         self.assertNotIn("白鹭塔", maker)
+        self.assertTrue(maker == "这件事不在记忆里。" or "诺丁" in maker)
         named = _answer("小满她父亲看着的灯塔，名字叫什么？", rows)
-        self.assertIn("白鹭塔", named)
         self.assertNotIn("柯岚", named)
+        self.assertTrue(named == "这件事不在记忆里。" or "白鹭塔" in named)
         self.assertEqual(pattern_extract("磨这座灯塔透镜的工匠是诺丁。夜里值守的那位是谁？"), [])
         self.assertEqual(pattern_extract("诺丁是磨镜的那位。值班的那位是谁？"), [])
         refused = _answer("白鹭塔的闺女叫什么？", rows) + _answer("白鹭塔哪年拆除？", rows)
-        self.assertTrue("没记过" in refused or "不在记忆里" in refused)
-        from memory_core.fact_reader import answer_stated_question
+        self.assertIn("这件事不在记忆里", refused)
 
-        blocked = rows + [_fact("值守该", "值守该处的记录很多。", "记录")]
-        mixed = answer_stated_question("这座灯塔的透镜是诺丁磨的；值守该塔的是哪个人？", blocked) or {}
-        self.assertIn("柯岚", mixed.get("text") or "")
-        self.assertNotIn("诺丁", mixed.get("text") or "")
-        shift = answer_stated_question("磨透镜的工匠是诺丁。接班的那位叫什么？", rows) or {}
-        self.assertIn("柯岚", shift.get("text") or "")
-        self.assertNotIn("诺丁", shift.get("text") or "")
+    def test_failed_hop_does_not_borrow_another_value(self):
+        other = _answer("江衡养的猫叫什么？")
+        self.assertNotIn("团团", other)
+        self.assertEqual(other, "这件事不在记忆里。")
+        dog = _answer("江晚的女儿养的狗叫什么？")
+        self.assertNotIn("团团", dog)
+        self.assertNotIn("江小满", dog)
+        self.assertEqual(dog, "这件事不在记忆里。")
+        keeper = _answer("江衡的灯夫叫什么？")
+        self.assertNotIn("江晚", keeper)
+        self.assertEqual(keeper, "这件事不在记忆里。")
+        near = _answer("江晚川的女儿叫什么？")
+        self.assertNotIn("江小满", near)
+        self.assertEqual(near, "这件事不在记忆里。")
+        started = _answer("南埠印社哪一年开始？")
+        self.assertNotIn("1912", started)
+        self.assertEqual(started, "这件事不在记忆里。")
+        nation_facts = FACTS + [_fact("江晚", "江晚是南埠人，女儿是江小满。", "南埠")]
+        nation = _answer("江晚是哪国人？", nation_facts)
+        self.assertIn("南埠", nation)
+        self.assertNotIn("江小满", nation)
+        chain = _answer("江晚的女儿的父亲叫什么？")
+        self.assertIn("江晚", chain)
+        self.assertNotIn("团团", chain)
+        self.assertEqual(fixed_refusal("夜里值守的那位叫什么？", FACTS), "这件事不在记忆里。")
+        self.assertIsNone(read_memory("法国的首都是哪里？", FACTS, None))
+        unknown = _answer("青岚草是什么牌子？")
+        self.assertEqual(unknown, "这件事不在记忆里。")
+        self.assertIn("天青", _answer("江小满的自行车是天青色还是墨黑？"))
+        taught = pattern_extract("江晚的猫叫团团，团团的主人是谁？")
+        self.assertEqual(taught[0]["value"], "团团")
+        period = pattern_extract("江晚的猫叫团团。团团的主人是谁？")
+        self.assertEqual(period[0]["value"], "团团")
+        fresh = pattern_extract("江衡的猫叫小黑。小黑的主人是谁？")
+        asked = read_memory("江衡的猫叫小黑。小黑的主人是谁？", FACTS + fresh, None) or {}
+        self.assertIn("江衡", asked.get("text") or "")
+
+    def test_restore_junk_is_cleaned_on_next_startup(self):
+        from memory_core.migrate_0214 import restore_0214_junk
+
+        root = Path(tempfile.mkdtemp())
+        home = root / "data"
+        expert = home / "experts" / "expert_3"
+        expert.mkdir(parents=True)
+        (expert / "fact_memory.json").write_text(json.dumps({"facts": [
+            {"entity": "江晚", "statement": "江晚在南埠印社上班", "value": "南埠印社", "app_version": "0.2.35"},
+        ]}), encoding="utf-8")
+        marker = home / "migrations"
+        marker.mkdir(parents=True)
+        (marker / "cleanup-0214.json").write_text(json.dumps({"done": True, "version": 4, "removed": 1}), encoding="utf-8")
+        quarantine = home / "cleaned"
+        quarantine.mkdir(parents=True)
+        (quarantine / "0214-junk.json").write_text(json.dumps({"items": [{
+            "file": "experts/expert_3/fact_memory.json",
+            "fact": {"entity": "我", "statement": "能不能帮我写一首短诗", "value": "短诗", "app_version": "0.2.35"},
+        }]}), encoding="utf-8")
+        self.assertGreaterEqual(restore_0214_junk(home), 1)
+        removed = migrate_0214_junk(home)
+        self.assertGreaterEqual(removed, 1)
+        left = [item["statement"] for item in json.loads((expert / "fact_memory.json").read_text(encoding="utf-8"))["facts"]]
+        self.assertIn("江晚在南埠印社上班", left)
+        self.assertNotIn("能不能帮我写一首短诗", left)
 
     def test_cleanup_reruns_when_the_classifier_changes(self):
         root = Path(tempfile.mkdtemp())

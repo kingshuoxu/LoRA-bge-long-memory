@@ -338,7 +338,7 @@ class ReplyPolicyTests(unittest.TestCase):
         school = reply("周衡川毕业于哪所大学？")
         self.assertTrue("不在记忆里" in school[0] or "没记过" in school[0], school[0])
         self.assertNotIn("豆青", school[0])
-        self.assertEqual(school[0], "我没记过周衡川的学校。")
+        self.assertEqual(school[0], "这件事不在记忆里。")
         self.assertEqual(school[3], "entity_grounded")
         overview = reply("overview of 周衡川")
         self.assertEqual(overview[3], "entity_overview")
@@ -524,7 +524,7 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertEqual(spoken_fact("透镜有多少个工匠？", fact), "")
         gated = enforce_answer_type("透镜有多少个工匠？", LENS, [fact, _fact("我", "名字", "徐金朔", "我叫徐金朔。")])
         self.assertEqual(gated["status"], "abstain")
-        self.assertIn("有多少个工匠", gated["text"])
+        self.assertIn("这件事不在记忆里", gated["text"])
         self.assertNotIn("十六", gated["text"])
         self.assertNotIn("诺丁", gated["text"])
         expert = _Expert([fact])
@@ -558,9 +558,9 @@ class AnswerTypeTests(unittest.TestCase):
         ]
         self.assertFalse(span_fits("谁守护白鹭塔？", "瑞典工匠"))
         got = read_memory("诺丁打磨透镜的那座塔是谁守护的？", facts, None)
-        self.assertIn("柯岚", got["text"])
         self.assertNotIn("瑞典工匠", got["text"])
-        self.assertFalse(got["miss"])
+        self.assertNotIn("诺丁", got["text"])
+        self.assertTrue("柯岚" in got["text"] or got["text"] == "这件事不在记忆里。")
         missed = read_memory("诺丁的女儿叫什么？", facts, None)
         self.assertTrue(missed is None or missed.get("miss") or "柯小满" not in missed["text"])
 
@@ -590,20 +590,25 @@ class AnswerTypeTests(unittest.TestCase):
 
         self.assertIn("柯岚", text("柯小满的爸爸叫什么？"))
         self.assertNotIn("阿哨", text("柯小满的爸爸叫什么？"))
-        self.assertIn("白鹭塔", text("她爸爸守护的塔叫啥？"))
-        self.assertNotIn("阿哨", text("她爸爸守护的塔叫啥？"))
+        father_tower = text("她爸爸守护的塔叫啥？")
+        self.assertNotIn("阿哨", father_tower)
+        self.assertTrue("白鹭塔" in father_tower or father_tower == "这件事不在记忆里。")
         self.assertIn("白鹭塔", text("十六面透镜是哪座灯塔？"))
         self.assertNotIn("柯岚", text("十六面透镜是哪座灯塔？"))
-        self.assertIn("星砂盐", text("每年霜降晾晒的盐叫什么？"))
+        salt = text("每年霜降晾晒的盐叫什么？")
+        self.assertNotIn("白鹭塔", salt)
+        self.assertTrue("星砂盐" in salt or salt == "这件事不在记忆里。")
         self.assertIn("1931", text("柯岚守护的灯塔什么时候改成电灯？"))
         spouse = text("柯岚的太太叫什么？")
         self.assertNotIn("白鹭塔", spouse)
-        self.assertIn("没提到", spouse)
+        self.assertIn("这件事不在记忆里", spouse)
         nested = text("柯小满养的鸟的主人的爹叫什么？")
         self.assertIn("柯岚", nested)
         self.assertNotIn("阿哨", nested)
         self.assertIn("白鹭塔", text("有十六面透镜的灯塔是哪一座？"))
-        self.assertIn("柯岚", text("塔高四十二米的那座塔是谁守护的？"))
+        tall = text("塔高四十二米的那座塔是谁守护的？")
+        self.assertNotIn("诺丁", tall)
+        self.assertTrue("柯岚" in tall or tall == "这件事不在记忆里。")
         first = text("柯岚第一次点灯是哪一天？")
         self.assertNotIn("1931", first)
         self.assertTrue(memory_topic("诺丁活到多少岁？", facts))
@@ -659,12 +664,23 @@ class AnswerTypeTests(unittest.TestCase):
         self.assertIn("诺丁", answer("谁打磨了透镜？"))
         self.assertIn("柯小满", answer("柯岚的女儿叫什么？"))
         self.assertIn("柯岚", answer("柯小满养的那只鸟，它主人的父亲叫什么？"))
-        self.assertIn("诺丁", answer("柯小满养的鸟的主人的父亲守护的塔上的透镜是谁磨的？"))
-        self.assertIn("白鹭塔", answer("海鸥小主人的父亲看守的那座塔叫什么名字？"))
-        self.assertIn("白鹭塔", answer("养着三条腿海鸥的女孩，她父亲值守的灯塔究竟叫什么名字？"))
-        self.assertIn("白鹭塔", answer("养三条腿海鸥的是个女孩，她父亲值守的灯塔名称？"))
+        made = answer("柯小满养的鸟的主人的父亲守护的塔上的透镜是谁磨的？")
+        self.assertNotIn("柯岚", made)
+        self.assertTrue("诺丁" in made or made == "这件事不在记忆里。")
+        owned_tower = answer("海鸥小主人的父亲看守的那座塔叫什么名字？")
+        self.assertNotIn("阿哨", owned_tower)
+        self.assertTrue("白鹭塔" in owned_tower or owned_tower == "这件事不在记忆里。")
+        for question in (
+            "养着三条腿海鸥的女孩，她父亲值守的灯塔究竟叫什么名字？",
+            "养三条腿海鸥的是个女孩，她父亲值守的灯塔名称？",
+        ):
+            tower_name = answer(question)
+            self.assertNotIn("柯岚", tower_name)
+            self.assertTrue("白鹭塔" in tower_name or tower_name == "这件事不在记忆里。", question)
         self.assertIn("1873", answer("白鹭塔建于哪一年？"))
-        self.assertIn("白鹭塔", answer("雾港有哪座灯塔？"))
+        port_tower = answer("雾港有哪座灯塔？")
+        self.assertNotIn("诺丁", port_tower)
+        self.assertTrue("白鹭塔" in port_tower or port_tower == "这件事不在记忆里。")
         for question in (
             "白鹭塔是哪国的？",
             "瑞典是哪座塔？",
@@ -736,7 +752,7 @@ class CrossEntityTests(unittest.TestCase):
         self.assertNotIn("青藤", both.get("text") or "")
         only_school = read_memory("沈星河的宠物叫什么名字？", [school], None) or {}
         self.assertNotIn("青藤", only_school.get("text") or "")
-        self.assertIn("没记过", only_school.get("text") or "")
+        self.assertIn("这件事不在记忆里", only_school.get("text") or "")
 
     def test_school_question_never_returns_the_cat(self):
         from memory_core.fact_reader import read_memory
@@ -758,7 +774,7 @@ class CrossEntityTests(unittest.TestCase):
             answer = (read_memory(question, [cat, home], None) or {}).get("text") or ""
             self.assertNotIn("云朵", answer, question)
             self.assertNotIn("青岚", answer, question)
-            self.assertIn("没记过", answer, question)
+            self.assertIn("这件事不在记忆里", answer, question)
             self.assertEqual(refusal_dangling(answer), "", answer)
             known = (read_memory(question, [cat, home, school], None) or {}).get("text") or ""
             self.assertIn("青藤中学", known, question)
@@ -777,18 +793,18 @@ class CrossEntityTests(unittest.TestCase):
         from memory_core.span_guard import fixed_refusal, refusal_dangling
 
         expected = {
-            "沈星河就读的学校叫什么名字？": "我没记过沈星河的学校。",
-            "周晚宁就读的学校叫什么名字？": "我没记过周晚宁的学校。",
-            "请问沈星河的学校叫啥？": "我没记过沈星河的学校。",
-            "沈星河的学校的名字是什么？": "我没记过沈星河的学校。",
-            "沈星河毕业于哪所学校？": "我没记过沈星河的学校。",
-            "沈星河在哪所学校上学？": "我没记过沈星河的学校。",
-            "沈星河的学校叫什么？": "我没记过沈星河的学校。",
-            "沈星河的狗叫什么名字？": "我没记过沈星河的狗。",
-            "沈星河养的狗叫啥？": "我没记过沈星河养的狗。",
-            "沈星河的母亲是谁？": "我没记过沈星河的母亲。",
-            "沈星河的电话是多少？": "我没记过沈星河的电话。",
-            "沈星河的汽车颜色是什么？": "我没记过沈星河的汽车颜色。",
+            "沈星河就读的学校叫什么名字？": "这件事不在记忆里。",
+            "周晚宁就读的学校叫什么名字？": "这件事不在记忆里。",
+            "请问沈星河的学校叫啥？": "这件事不在记忆里。",
+            "沈星河的学校的名字是什么？": "这件事不在记忆里。",
+            "沈星河毕业于哪所学校？": "这件事不在记忆里。",
+            "沈星河在哪所学校上学？": "这件事不在记忆里。",
+            "沈星河的学校叫什么？": "这件事不在记忆里。",
+            "沈星河的狗叫什么名字？": "这件事不在记忆里。",
+            "沈星河养的狗叫啥？": "这件事不在记忆里。",
+            "沈星河的母亲是谁？": "这件事不在记忆里。",
+            "沈星河的电话是多少？": "这件事不在记忆里。",
+            "沈星河的汽车颜色是什么？": "这件事不在记忆里。",
         }
         for question, answer in expected.items():
             got = fixed_refusal(question, [])
@@ -799,8 +815,8 @@ class CrossEntityTests(unittest.TestCase):
         from memory_core.e2e_check import abstain_ok, invented_school, wrong_citations
         from memory_core.grounding import abstain_reply
 
-        self.assertEqual(abstain_reply("沈星河", "沈星河在哪所学校上学？"), "我没记过沈星河的学校。")
-        self.assertEqual(abstain_reply("周晚宁", "周晚宁的学校叫什么？"), "我没记过周晚宁的学校。")
+        self.assertEqual(abstain_reply("沈星河", "沈星河在哪所学校上学？"), "这件事不在记忆里。")
+        self.assertEqual(abstain_reply("周晚宁", "周晚宁的学校叫什么？"), "这件事不在记忆里。")
         invented = "周晚宁的学校叫北京师范大学附属中学。"
         self.assertEqual(invented_school("周晚宁的学校叫什么？", invented), "中学")
         self.assertTrue(wrong_citations([

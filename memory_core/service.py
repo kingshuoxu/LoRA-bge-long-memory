@@ -264,8 +264,8 @@ class MemoryService:
         from memory_core.migrate_0214 import migrate_0214_junk, restore_legitimate_from_cleanup
 
         migrate_user_identity(self.home)
-        migrate_0214_junk(self.home)
         restore_legitimate_from_cleanup(self.home)
+        migrate_0214_junk(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:
@@ -1101,7 +1101,26 @@ class MemoryService:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
                 graphed = resolve_graph(content, remembered) if remembered else None
-                if graphed is not None and graphed.get("status") == "answer":
+                if graphed is not None and graphed.get("status") == "abstain":
+                    from memory_core.span_guard import fixed_refusal
+
+                    graph_locked = True
+                    fact_answer = fixed_refusal(content, remembered)
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["doc_chips"] = []
+                    recall["reason_text"] = "这条关系没有走通，所以不拿别的已存取值来答"
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                elif graphed is not None and graphed.get("status") == "answer":
                     graph_locked = True
                     span = str(graphed.get("span") or "").strip()
                     fact_answer = span if span[-1:] in "。." else span + "。"
