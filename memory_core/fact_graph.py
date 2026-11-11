@@ -112,6 +112,7 @@ _TERMINALS = (
     (r"哪所学校|什么学校|哪里上学|哪儿上学|在哪上学|在哪读书|在哪儿念书|哪儿念书|学校叫什么|的学校叫", "school"),
     (r"哪国人|什么国籍|国籍是什么|是哪国人", "nationality"),
     (r"是谁磨|谁磨的|谁打磨|谁磨了|哪位.{0,4}磨", "maker"),
+    (r"谁养的|谁养了|是谁养", "owner"),
     (r"叫什么名字|叫什么|叫啥|是谁|什么名字", "identity"),
 )
 
@@ -477,7 +478,7 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
             body = re.split(r"谁|哪位|师傅|工匠", text)[0]
     if not terminal:
         return None
-    if terminal not in {"maker", "founder"} and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
+    if terminal not in {"maker", "founder", "owner"} and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
         return None
     nodes = _nodes(edges)
     start = _start_name(body or text, nodes)
