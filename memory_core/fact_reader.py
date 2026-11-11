@@ -536,15 +536,11 @@ def read_memory(
     from memory_core.fact_graph import resolve_graph
 
     graphed = resolve_graph(query, facts)
-    if graphed is not None:
-        if graphed.get("status") == "answer":
-            span = str(graphed.get("span") or "").strip()
-            fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
-            if span:
-                return {"text": _finish(span), "fact": fact, "miss": False}
-        from memory_core.span_guard import fixed_refusal
-
-        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    if graphed is not None and graphed.get("status") == "answer":
+        span = str(graphed.get("span") or "").strip()
+        fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
+        if span:
+            return {"text": _finish(span), "fact": fact, "miss": False}
     if re.search(r"是.+还是", query or ""):
         from memory_core.span_guard import fixed_refusal
 

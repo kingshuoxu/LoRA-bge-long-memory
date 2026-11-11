@@ -483,6 +483,13 @@ def _wrong_event(query: str, statement: str) -> bool:
     text = statement or ""
     if any(mark in asked for mark in ("第一次", "点灯", "点亮", "首次")):
         return not any(mark in text for mark in ("点灯", "点亮", "第一次"))
+    for asked_marks, fact_marks in (
+        (("拆掉", "拆除", "拆了"), ("拆",)),
+        (("去世", "逝世", "死于"), ("去世", "逝世", "死于")),
+        (("出生", "生于"), ("出生", "生于")),
+    ):
+        if any(mark in asked for mark in asked_marks) and not any(mark in text for mark in fact_marks):
+            return True
     return False
 
 
@@ -1483,8 +1490,12 @@ _ROLE_FACT = {
 
 
 def _role_family(query: str) -> str:
-    """问句最后点到的那一种关系。前面的定语不算。"""
+    """问句真正要的那种关系。定语里的父亲、守护不算。"""
     text = query or ""
+    if re.search(r"(?:闺女|丫头|女儿).{0,8}(?:叫什么|叫啥|是谁|什么名字)", text):
+        return "daughter"
+    if re.search(r"谁.{0,3}磨|谁打磨", text):
+        return "maker"
     found = ""
     at = -1
     for role, words in _ROLE_ASK:
@@ -1502,6 +1513,10 @@ def supports_asked_entity(query: str, span: str, statement: str, rows: list[dict
 
     timed = bool(re.search(r"哪年|哪一年|什么时候|何时", query or ""))
     role = "" if timed else _role_family(query)
+    if role == "daughter" and _daughter(statement) == (span or "").strip("。"):
+        return True
+    if role == "maker" and re.search(r"透镜|镜片", query or "") and any(mark in (statement or "") for mark in ("打磨", "透镜")):
+        return True
     if role and not any(mark in (statement or "") for mark in _ROLE_FACT[role]):
         return False
     names: list[str] = []
@@ -1550,9 +1565,7 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
     graphed = resolve_graph(query, rows)
-    if graphed is not None:
-        if graphed.get("status") != "answer":
-            return None
+    if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
         return str(graphed.get("span") or ""), fact
     picked = _choose_typed_inner(query, facts)

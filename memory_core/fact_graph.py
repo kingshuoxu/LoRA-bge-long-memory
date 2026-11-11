@@ -22,6 +22,8 @@ _KIN = (
     ("母亲", "mother"),
     ("妈妈", "mother"),
     ("女儿", "daughter"),
+    ("闺女", "daughter"),
+    ("丫头", "daughter"),
     ("儿子", "son"),
     ("哥哥", "brother"),
     ("弟弟", "brother"),
@@ -50,6 +52,7 @@ _HOP_WORDS = _KIN + (
     ("东家", "employer"),
     ("老板", "employer"),
     ("守护人", "keeper_of"),
+    ("守护者", "keeper_of"),
     ("看守人", "keeper_of"),
     ("值守人", "keeper_of"),
     ("守灯人", "keeper_of"),
@@ -257,6 +260,8 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
                 cut = at
         if cut <= 0:
             return None
+        if re.search(r"塔|守|透镜", rest[:cut]):
+            return None
         rest = rest[cut:]
         continue
     return hops
@@ -383,11 +388,29 @@ def _attribute(
     return found[0]
 
 
+def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) -> bool:
+    """问句里的名字比已存实体多一个字时，不要把那个人当成同一个。"""
+    from memory_core.fact_span import near_miss_span
+
+    verbs = ("离", "到", "往", "打", "磨", "守", "养", "建", "的", "就", "毕", "上", "家", "念", "读")
+    for name in _nodes(edges):
+        missed = near_miss_span(name, query or "")
+        if not missed or missed == name:
+            continue
+        if missed.endswith(name) and not missed.startswith(name):
+            continue
+        extra = missed[len(name):] if missed.startswith(name) else ""
+        if extra.startswith(verbs):
+            continue
+        return True
+    return False
+
+
 def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     """答得了就给取值。问句是一条链但某一跳没有边，就弃权。不像链就返回 None。"""
     rows = [fact for fact in facts if isinstance(fact, dict)]
     edges = build_edges(rows)
-    if not edges:
+    if not edges or _different_person(query, edges):
         return None
     parsed = _parse(query, edges)
     if not parsed:
@@ -397,6 +420,13 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     walked = _walk(parsed["start"], parsed["hops"], edges)
     if walked is None:
         structural = {"father", "mother", "son", "daughter", "brother", "sister", "spouse", "employer", "keeper_of"}
+        first = _walk(parsed["start"], parsed["hops"][:1], edges) if parsed["hops"] else None
+        if parsed["terminal"] == "identity" and parsed["hops"] and parsed["hops"][0] in structural and first is None:
+            if len(parsed["hops"]) > 1 and re.search(r"塔|透镜|守护|看守", query or ""):
+                return None
+            return {"status": "abstain"}
+        if parsed["terminal"] == "identity":
+            return None
         if any(hop in structural for hop in parsed["hops"]):
             return {"status": "abstain"}
         if not parsed["hops"] and parsed["terminal"] in {

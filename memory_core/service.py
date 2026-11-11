@@ -1093,7 +1093,6 @@ class MemoryService:
             graph_locked = False
             if utterance_is_question(content) and not open_task:
                 from memory_core.fact_graph import resolve_graph
-                from memory_core.span_guard import fixed_refusal
 
                 remembered = []
                 for record in experts:
@@ -1102,36 +1101,19 @@ class MemoryService:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             remembered.append(fact)
                 graphed = resolve_graph(content, remembered) if remembered else None
-                if graphed is not None:
+                if graphed is not None and graphed.get("status") == "answer":
                     graph_locked = True
-                    if graphed.get("status") == "answer":
-                        span = str(graphed.get("span") or "").strip()
-                        fact_answer = span if span[-1:] in "。." else span + "。"
-                        owner = next(
-                            (record for record in experts if graphed.get("fact") in ((record.fact_memory or {}).get("facts") or [])),
-                            None,
-                        )
-                        if owner is not None:
-                            mount_memory(decision, recall, owner, [graphed["fact"]], "entity_first")
-                            recall["doc_chips"] = []
-                            recall["abstain"] = False
-                            recall["reason_text"] = "回答是顺着已经记下的关系走出来的"
-                    else:
-                        fact_answer = fixed_refusal(content, remembered)
-                        decision.fired = False
-                        decision.expert = None
-                        decision.label = "基座"
-                        decision.reason = "memory_miss"
-                        recall["fired"] = False
-                        recall["mounted"] = False
-                        recall["abstain"] = True
-                        recall["reason"] = "memory_miss"
-                        recall["matched_facts"] = []
+                    span = str(graphed.get("span") or "").strip()
+                    fact_answer = span if span[-1:] in "。." else span + "。"
+                    owner = next(
+                        (record for record in experts if graphed.get("fact") in ((record.fact_memory or {}).get("facts") or [])),
+                        None,
+                    )
+                    if owner is not None:
+                        mount_memory(decision, recall, owner, [graphed["fact"]], "entity_first")
                         recall["doc_chips"] = []
-                        recall["reason_text"] = "关系没有逐跳对上，所以不借用另一个人或另一件事"
-                        recall["expert"] = None
-                        recall["mounted_expert"] = None
-                        recall["mounted_label"] = "基座"
+                        recall["abstain"] = False
+                        recall["reason_text"] = "回答是顺着已经记下的关系走出来的"
             if utterance_is_question(content) and not open_task and not graph_locked:
                 from memory_core.span_guard import relation_decision
 
