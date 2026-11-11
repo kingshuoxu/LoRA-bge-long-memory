@@ -94,6 +94,9 @@ class FactGraphTests(unittest.TestCase):
         self.assertEqual([item["value"] for item in mixed], ["团团"])
         self.assertEqual(fixed_refusal("江晚在南埠印社上班。江衡的雇主是谁？", FACTS), "这件事不在记忆里。")
         self.assertTrue(memory_attribute_question("青岚草是哪里出产的植物？"))
+        self.assertTrue(memory_attribute_question("青岚草产自哪里？"))
+        self.assertFalse(memory_attribute_question("法国的首都是哪里？"))
+        self.assertFalse(memory_attribute_question("水的化学式是什么？"))
         self.assertFalse(memory_attribute_question("帮我写一首短诗"))
         for text in ("你能不能帮我写一张便条给江晚，说我晚点到", "能不能帮我写一首短诗"):
             self.assertTrue(is_imperative_request(text), text)

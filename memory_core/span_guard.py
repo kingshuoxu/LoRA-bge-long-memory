@@ -361,8 +361,10 @@ def memory_attribute_question(text: str) -> bool:
         return False
     if is_choice_question(raw):
         return True
+    if re.search(r"首都|化学式|等于几|怎么说|隐喻", raw):
+        return False
     return bool(re.search(
-        r"什么颜色|啥颜色|什么牌子|什么品牌|有多高|多高|哪一年|哪年|在哪里|在哪儿|是哪里|是哪儿|是谁|叫什么|叫啥|去世|逝世|拆除|建于|上班|哪里工作|哪儿工作|老家|产地|原产|植物|产自|出产",
+        r"什么颜色|啥颜色|什么牌子|什么品牌|有多高|多高|哪一年|哪年|在哪里|在哪儿|哪里人|哪儿人|是谁|叫什么|叫啥|去世|逝世|拆除|建于|上班|哪里工作|哪儿工作|老家|产地|原产|植物|产自|出产",
         raw,
     ))
 
