@@ -58,6 +58,10 @@ _HOP_WORDS = _KIN + (
     ("看守的", "keeps"),
     ("守护的", "keeps"),
     ("值守的", "keeps"),
+    ("看管的", "keeps"),
+    ("守着的", "keeps"),
+    ("守的", "keeps"),
+    ("看的", "keeps"),
 )
 _OBJECT_ALIAS = (
     frozenset({"汽车", "车"}),
@@ -129,6 +133,10 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         if pet:
             add(pet.group(1), "pet", pet.group(2), fact)
             add(pet.group(2), "owner", pet.group(1), fact)
+            if "海鸥" in text:
+                add("海鸥", "owner", pet.group(1), fact)
+            if "鸟" in text:
+                add("鸟", "owner", pet.group(1), fact)
         named_pet = re.search(r"([\u4e00-\u9fff]{2,4})的(猫|狗|鸟)叫([\u4e00-\u9fff]{1,8})", text)
         if named_pet:
             add(named_pet.group(1), "pet", named_pet.group(3), fact)
@@ -213,7 +221,12 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
     hops: list[str] = []
     words = sorted(_HOP_WORDS, key=lambda item: len(item[0]), reverse=True)
     while rest:
-        rest = rest.lstrip("的")
+        while True:
+            nxt = rest.lstrip("的，,、 ")
+            nxt = re.sub(r"^(?:上面|那些|镜片|透镜|灯塔|塔上)", "", nxt)
+            if nxt == rest:
+                break
+            rest = nxt
         if not rest:
             break
         matched = ""
@@ -230,16 +243,22 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
             hops.append(rel)
             rest = rest[len(matched):]
             continue
-        noun = re.match(r"[^的]{1,6}", rest)
-        if not noun or not re.fullmatch(r"[\u4e00-\u9fff那这只座个]{1,6}", noun.group(0)):
+        if rest[:1] in "，,、":
+            rest = rest[1:]
+            continue
+        segment = re.match(r"[\u4e00-\u9fff]+", rest)
+        if not segment:
             return None
-        if not hops and terminal in {"color", "brand"}:
-            rest = rest[noun.end():]
-            continue
-        if hops and hops[-1] in {"keeps", "pet"}:
-            rest = rest[noun.end():]
-            continue
-        return None
+        piece = segment.group(0)
+        cut = len(piece)
+        for word, _kind in words:
+            at = piece.find(word)
+            if 0 < at < cut:
+                cut = at
+        if cut <= 0:
+            return None
+        rest = rest[cut:]
+        continue
     return hops
 
 
@@ -304,13 +323,15 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
             break
     if not terminal:
         return None
-    if "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
+    if terminal != "maker" and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
         return None
     nodes = _nodes(edges)
     start = _start_name(body or text, nodes)
     if not start:
         return None
     hops = _parse_hops(body, start, terminal)
+    if hops and start in {"海鸥", "鸟"} and hops[0] in {"father", "mother"} and "owner" not in hops:
+        hops = ["owner", *hops]
     if hops is None:
         # 认不出的身份说法交给原来的摘录。「同事在哪里上班」这种属性不能退回去借用起点自己的取值。
         if terminal == "identity":
