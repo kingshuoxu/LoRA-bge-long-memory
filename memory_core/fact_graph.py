@@ -339,6 +339,10 @@ def _attribute_object(body: str, start: str) -> str:
     return rest.strip("的 ")
 
 
+def _plain_choice(value: str) -> str:
+    return re.sub(r"(?:色|的)+$", "", value or "")
+
+
 def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     matched = re.match(r"^(?P<head>.+?)是(?P<a>[^，,。？?]{1,16})还是(?P<b>[^，,。？?]{1,16})$", text)
     if not matched:
@@ -346,46 +350,31 @@ def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
     head, left, right = matched.group("head"), matched.group("a"), matched.group("b")
     nodes = _nodes(edges)
     start = _start_name(head, nodes)
-    if not start:
-        return {"status": "abstain"}
+    sides = {_plain_choice(left), _plain_choice(right)}
     want = ""
     if any(mark in head for mark in ("颜色", "色")):
         want = "color"
     elif any(mark in head for mark in ("牌子", "品牌")):
         want = "brand"
-    obj = _attribute_object(head, start)
-    hits: list[tuple[str, dict]] = []
+    obj = _attribute_object(head, start) if start else ""
+    found: list[tuple[str, dict]] = []
     for src, rel, dst, edge_obj, fact in edges:
-        if src != start or rel not in {"color", "brand"}:
+        if start and src != start and start not in _statement(fact):
             continue
-        if want and rel != want:
+        if want and rel not in {want, "pet", "named", "daughter", "school", "nationality"}:
+            if rel != want:
+                continue
+        if start and obj and edge_obj and rel in {"color", "brand"} and not _objects_align(obj, edge_obj):
             continue
-        if obj and edge_obj and not _objects_align(obj, edge_obj):
-            continue
-        def _plain(value: str) -> str:
-            return re.sub(r"(?:色|的)+$", "", value)
-
-        if _plain(dst) and _plain(dst) in {_plain(left), _plain(right)}:
-            hits.append((dst, fact))
-    unique = []
-    for dst, fact in hits:
-        if all(dst != old for old, _fact in unique):
+        plain = _plain_choice(dst)
+        if plain and plain in sides:
+            found.append((dst, fact))
+    unique: list[tuple[str, dict]] = []
+    for dst, fact in found:
+        if all(_plain_choice(dst) != _plain_choice(old) for old, _fact in unique):
             unique.append((dst, fact))
     if len(unique) == 1:
         return {"status": "answer", "span": unique[0][0], "fact": unique[0][1]}
-    generic: list[tuple[str, dict]] = []
-    for src, _rel, dst, _edge_obj, fact in edges:
-        if src != start:
-            continue
-        plain = re.sub(r"(?:色|的)+$", "", dst)
-        if plain and plain in {re.sub(r"(?:色|的)+$", "", left), re.sub(r"(?:色|的)+$", "", right)}:
-            generic.append((dst, fact))
-    generic_unique = []
-    for dst, fact in generic:
-        if all(dst != old for old, _fact in generic_unique):
-            generic_unique.append((dst, fact))
-    if len(generic_unique) == 1:
-        return {"status": "answer", "span": generic_unique[0][0], "fact": generic_unique[0][1]}
     return {"status": "abstain"}
 
 

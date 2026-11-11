@@ -166,9 +166,24 @@ class FactGraphTests(unittest.TestCase):
         self.assertEqual(taught[0]["value"], "团团")
         period = pattern_extract("江晚的猫叫团团。团团的主人是谁？")
         self.assertEqual(period[0]["value"], "团团")
-        fresh = pattern_extract("江衡的猫叫小黑。小黑的主人是谁？")
-        asked = read_memory("江衡的猫叫小黑。小黑的主人是谁？", FACTS + fresh, None) or {}
-        self.assertIn("江衡", asked.get("text") or "")
+        from memory_core.fact_reader import answer_stated_question
+        from memory_core.world_facts import world_reply
+
+        for mixed in ("江衡的猫叫小黑。小黑的主人是谁？", "江衡的猫叫小黑，小黑的主人是谁？"):
+            stored = pattern_extract(mixed)
+            self.assertTrue(stored and stored[0]["value"] == "小黑", mixed)
+            reply = answer_stated_question(mixed, FACTS + stored) or {}
+            self.assertIn("江衡", reply.get("text") or "", mixed)
+            self.assertFalse(reply.get("miss"), mixed)
+        self.assertIn("天青", _answer("自行车是天青色还是墨黑？"))
+        self.assertIn("团团", _answer("江小满养的猫是团团还是小黑？"))
+        self.assertEqual(_answer("江小满养的猫是小黑还是大黑？"), "这件事不在记忆里。")
+        self.assertEqual(world_reply("法国的首都是哪里？", []), "巴黎。")
+        self.assertEqual(world_reply("中国的首都是哪里？", []), "北京。")
+        self.assertEqual(world_reply("青岚国的首都是哪里？", []), "我不知道。")
+        self.assertEqual(world_reply("泽川工坊的创始人是谁？", []), "我不知道。")
+        self.assertIsNone(world_reply("水的化学式是什么？", []))
+        self.assertIsNone(world_reply("1加1等于几？", []))
 
     def test_restore_junk_is_cleaned_on_next_startup(self):
         from memory_core.migrate_0214 import restore_0214_junk

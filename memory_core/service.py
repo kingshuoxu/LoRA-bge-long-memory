@@ -1384,6 +1384,29 @@ class MemoryService:
                     recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
+            if not fact_answer and not open_task:
+                from memory_core.world_facts import world_reply
+
+                remembered_names = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict):
+                            name = str(fact.get("entity") or "").strip()
+                            if name:
+                                remembered_names.append(name)
+                world = world_reply(content, remembered_names)
+                if world:
+                    fact_answer = world
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "world" if not world.startswith("我不知道") else "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = world.startswith("我不知道")
+                    recall["reason"] = decision.reason
+                    recall["reason_text"] = "常识只回答核对过的首都；没见过的专名不交给基座编"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
