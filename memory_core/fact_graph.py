@@ -19,6 +19,7 @@ _KIN = (
     ("她爹", "father"),
     ("他爹", "father"),
     ("爹", "father"),
+    ("爸", "father"),
     ("母亲", "mother"),
     ("妈妈", "mother"),
     ("女儿", "daughter"),
@@ -46,6 +47,7 @@ _HOP_WORDS = _KIN + (
     ("养的狗", "pet:狗"),
     ("养的鸟", "pet:鸟"),
     ("养的海鸥", "pet:海鸥"),
+    ("养的那只海鸥", "pet:海鸥"),
     ("家的猫咪", "pet:猫"),
     ("猫咪", "pet:猫"),
     ("养的", "pet"),
@@ -108,9 +110,14 @@ _TERMINALS = (
     (r"哪年去世|哪一年去世|何时去世|哪年逝世|死于哪一年|哪年死的", "died"),
     (r"哪年出生|哪一年出生|是哪年出生|生于哪一年", "born"),
     (r"哪一年开始|哪年开始|什么时候开始|何时开始", "started"),
+    (r"产自哪|产自哪儿|哪里的特产|哪儿的特产", "origin"),
     (r"有多高|多高|塔高多少|多少米", "height"),
     (r"哪所学校|什么学校|哪里上学|哪儿上学|在哪上学|在哪读书|在哪儿念书|哪儿念书|学校叫什么|的学校叫", "school"),
     (r"哪国人|什么国籍|国籍是什么|是哪国人", "nationality"),
+    (r"谁守护|谁看守|谁值守|是谁守护|是谁看守", "keeper"),
+    (r"哪座灯塔|哪座塔|哪一座塔|什么塔", "tower"),
+    (r"几条腿|多少条腿", "legs"),
+    (r"什么鸟|哪种鸟|是什么鸟", "species"),
     (r"是谁磨|谁磨的|谁打磨|谁磨了|哪位.{0,4}磨", "maker"),
     (r"谁养的|谁养了|是谁养", "owner"),
     (r"叫什么名字|叫什么|叫啥|是谁|什么名字", "identity"),
@@ -180,8 +187,15 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
                 if "海鸥" in text:
                     add("海鸥", "owner", owner, fact)
                     add("海鸥", "named", called_name.group(1), fact)
+                    add(called_name.group(1), "species", "海鸥", fact)
+                    add(owner, "species", "海鸥", fact)
                 if "鸟" in text and "海鸥" not in text:
                     add("鸟", "owner", owner, fact)
+                legs = re.search(r"([一二三四五六七八九十两])条腿", text)
+                if legs:
+                    add(called_name.group(1), "legs", legs.group(1), fact)
+                    if "海鸥" in text:
+                        add("海鸥", "legs", legs.group(1), fact)
         called = re.search(r"(猫|狗|鸟|海鸥).{0,8}名字是([\u4e00-\u9fff]{1,8})", text)
         if called:
             kind = called.group(1)
@@ -317,6 +331,17 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         started = re.search(r"([\u4e00-\u9fff]{2,8}).{0,8}(\d{3,4}年)(?:起|开始)", text)
         if started:
             add(started.group(1), "started", started.group(2), fact)
+        colored = re.search(r"([蓝红白绿青黑金银灰紫黄]色).{0,12}名叫([\u4e00-\u9fff]{2,8})", text)
+        if colored:
+            add(colored.group(2), "color", colored.group(1), fact)
+        if "霜降" in text and "晾" in text:
+            named_salt = re.search(r"名叫([\u4e00-\u9fff]{2,8})", text)
+            if named_salt:
+                add("霜降", "named", named_salt.group(1), fact)
+                add(named_salt.group(1), "started", "霜降", fact)
+        origin = re.search(r"([\u4e00-\u9fff]{2,8})的特产是.{0,20}名叫([\u4e00-\u9fff]{2,8})", text)
+        if origin:
+            add(origin.group(2), "origin", origin.group(1), fact)
     return edges
 
 
@@ -383,8 +408,12 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
                 cut = at
         if cut <= 0:
             return None
-        if re.search(r"塔|守|透镜", rest[:cut]):
-            if re.fullmatch(r"(?:这|那|第[一二三四五六七八九十两0-9]+座)?灯塔(?:是)?", piece):
+        if re.search(r"塔|守|透镜|镜片", rest[:cut]):
+            if re.fullmatch(
+                r"(?:这|那|第[一二三四五六七八九十两0-9]+座)?(?:灯塔|塔|透镜|镜片)(?:是)?"
+                r"|(?:这|那)座塔",
+                piece,
+            ):
                 rest = rest[cut:]
                 continue
             return None
@@ -449,6 +478,8 @@ def _maker_asked(text: str) -> bool:
         return False
     if re.search(r"闺女|女儿|丫头", asked):
         return False
+    if re.search(r"哪座|什么塔|哪一座", asked):
+        return False
     if re.search(r"师傅|工匠", asked) and re.search(r"磨|镜", text or ""):
         return True
     return bool(re.search(r"谁.{0,4}磨|哪位.{0,8}磨|磨成|打磨", asked))
@@ -487,12 +518,22 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
     hops = _parse_hops(body, start, terminal)
     if hops and start in {"海鸥", "鸟"} and hops[0] in {"father", "mother"} and "owner" not in hops:
         hops = ["owner", *hops]
+    guarded = re.search(rf"(?:守护|看守|值守){re.escape(start)}的(?:人|那位)", body or text)
+    if guarded:
+        later = _parse_hops((body or text)[guarded.end():], "", terminal)
+        if later is not None:
+            hops = ["keeper_of", *later]
     if hops is None:
         # 认不出的中间词不能退回去拿起点自己的取值，也不能换一条事实来答。
         return {"status": "abstain"}
+    if terminal == "keeper" and "keeper_of" not in hops:
+        hops = [*hops, "keeper_of"]
+        terminal = "identity"
+    elif terminal == "keeper":
+        terminal = "identity"
     obj = _attribute_object(body, start) if terminal in {"color", "brand"} and not hops else ""
-    if terminal in {"color", "brand"} and not hops and not obj:
-        return None
+    if obj in {"是", "为", "的"}:
+        obj = ""
     return {"status": "chain", "start": start, "hops": hops, "terminal": terminal, "object": obj}
 
 
@@ -560,6 +601,7 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
         "现", "开", "最", "也", "都", "很", "曾", "已", "正", "刚", "才", "这", "那", "又",
         "住", "居", "喜", "爱", "自", "骑", "喝", "吃", "会", "想", "要", "能", "可",
         "靠", "老", "偏", "做", "从", "以", "成", "总", "主", "有", "养",
+        "她", "他", "它", "女",
     )
     text = query or ""
     for name in _nodes(edges):
@@ -569,7 +611,7 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
             if index < 0:
                 break
             tail = text[index + len(name):]
-            if tail.startswith(("相关", "情况", "资料", "信息", "简介", "背景")):
+            if tail.startswith(("相关", "情况", "资料", "信息", "简介", "背景", "工匠", "师傅", "灯塔", "晾", "产")):
                 start = index + 1
                 continue
             after = tail[:1]
@@ -582,7 +624,7 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
         if missed.endswith(name) and not missed.startswith(name):
             continue
         extra = missed[len(name):] if missed.startswith(name) else ""
-        if extra.startswith(("相关", "情况", "资料", "信息", "简介", "背景", *verbs)):
+        if extra.startswith(("相关", "情况", "资料", "信息", "简介", "背景", "工匠", "师傅", "灯塔", "晾", "产", *verbs)):
             continue
         return True
     return False
@@ -607,6 +649,31 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
         return None
     if parsed.get("status") in {"answer", "abstain"}:
         return parsed
+    resolved_via = ""
+    owners = [
+        (src, rel, host)
+        for src, rel, dst, _obj, host in edges
+        if dst == parsed["start"] and rel in {"height", "built", "color", "nationality"}
+    ]
+    owner_names = list(dict.fromkeys(src for src, _rel, _host in owners))
+    if len(owner_names) == 1 and owner_names[0] != parsed["start"]:
+        parsed = {**parsed, "start": owner_names[0]}
+        resolved_via = owners[0][1]
+    if parsed["terminal"] == "tower" and not parsed["hops"]:
+        asked = query or ""
+        if re.search(r"打磨|磨了|磨的|磨成", asked):
+            made = [(src, host) for src, rel, dst, _obj, host in edges if rel == "maker" and dst == parsed["start"]]
+            if len(made) == 1:
+                return {"status": "answer", "span": made[0][0], "fact": made[0][1]}
+            return {"status": "abstain"}
+        if re.search(r"守护|看守|值守", asked):
+            kept = [(dst, host) for src, rel, dst, _obj, host in edges if rel == "keeps" and src == parsed["start"]]
+            if len(kept) == 1:
+                return {"status": "answer", "span": kept[0][0], "fact": kept[0][1]}
+            return {"status": "abstain"}
+        if re.search(r"是哪座", asked):
+            return {"status": "abstain"}
+        return None
     walked = _walk(parsed["start"], parsed["hops"], edges)
     if walked is None:
         # 任何一跳没有正好那条边，都弃权。不把中间的人、另一只宠物或另一句的取值交出去。
@@ -619,11 +686,15 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
         return {"status": "abstain"}
     node, fact = walked
     terminal = parsed["terminal"]
+    if terminal == "tower":
+        return {"status": "answer", "span": node, "fact": fact}
     if terminal == "identity":
         if not parsed["hops"]:
             named = [(dst, host) for src, rel, dst, _obj, host in edges if src == node and rel == "named"]
             if len(named) == 1:
                 return {"status": "answer", "span": named[0][0], "fact": named[0][1]}
+            if resolved_via == "nationality":
+                return {"status": "answer", "span": node, "fact": owners[0][2]}
             return {"status": "abstain"}
         return {"status": "answer", "span": node, "fact": fact}
     obj = parsed.get("object") or ""
