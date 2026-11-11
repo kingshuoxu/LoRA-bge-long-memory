@@ -785,7 +785,7 @@ class MemoryService:
                 return self._finish_turn(conv_id, user_msg, fixed_refusal(content), decision, recall)
             memory_block = ""
             if stated and utterance_is_question(content) and not asked and not open_task:
-                from memory_core.fact_reader import read_memory
+                from memory_core.fact_reader import answer_stated_question
 
                 rows = []
                 for record in experts:
@@ -794,7 +794,7 @@ class MemoryService:
                         if isinstance(fact, dict) and not fact.get("superseded"):
                             rows.append(fact)
                 rows.extend(stated)
-                found = read_memory(content, rows, None)
+                found = answer_stated_question(content, rows)
                 if found and not found.get("miss"):
                     decision = route_with_trace(content, [], None)[0]
                     decision.fired = False

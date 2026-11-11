@@ -500,6 +500,20 @@ def _finish(span: str) -> str:
     return text
 
 
+def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
+    """前半句是陈述、后半句在问。近似名字让整句摘录弃权时，仍用整句能确定的关系。"""
+    found = read_memory(query, facts, None)
+    if found is not None:
+        return found
+    from memory_core.answer_type import choose_typed
+
+    picked = choose_typed(query, facts)
+    if not picked:
+        return None
+    span, fact = picked
+    return {"text": _finish(str(span)), "fact": fact, "miss": False}
+
+
 def _entity_supported(query: str, span: str, fact: dict, facts: list[dict]) -> bool:
     from memory_core.answer_type import supports_asked_entity
 

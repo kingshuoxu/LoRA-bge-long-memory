@@ -132,6 +132,15 @@ class FactGraphTests(unittest.TestCase):
         self.assertEqual(pattern_extract("诺丁是磨镜的那位。值班的那位是谁？"), [])
         refused = _answer("白鹭塔的闺女叫什么？", rows) + _answer("白鹭塔哪年拆除？", rows)
         self.assertTrue("没记过" in refused or "不在记忆里" in refused)
+        from memory_core.fact_reader import answer_stated_question
+
+        blocked = rows + [_fact("值守该", "值守该处的记录很多。", "记录")]
+        mixed = answer_stated_question("这座灯塔的透镜是诺丁磨的；值守该塔的是哪个人？", blocked) or {}
+        self.assertIn("柯岚", mixed.get("text") or "")
+        self.assertNotIn("诺丁", mixed.get("text") or "")
+        shift = answer_stated_question("磨透镜的工匠是诺丁。接班的那位叫什么？", rows) or {}
+        self.assertIn("柯岚", shift.get("text") or "")
+        self.assertNotIn("诺丁", shift.get("text") or "")
 
     def test_cleanup_reruns_when_the_classifier_changes(self):
         root = Path(tempfile.mkdtemp())
