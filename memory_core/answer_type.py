@@ -1492,6 +1492,9 @@ _ROLE_FACT = {
 def _role_family(query: str) -> str:
     """问句真正要的那种关系。定语里的父亲、守护不算。"""
     text = query or ""
+    tail = re.split(r"[，,。；;]", text)[-1]
+    if re.search(r"看着|看管|看守|守护|值守|守塔|在守", tail) and re.search(r"谁|哪一位|哪位|叫什么|叫啥", tail):
+        return "keeper"
     if re.search(r"(?:闺女|丫头|女儿).{0,8}(?:叫什么|叫啥|是谁|什么名字)", text):
         return "daughter"
     if re.search(r"谁.{0,4}(?:守护|看守|守塔|在守)|谁守", text):
