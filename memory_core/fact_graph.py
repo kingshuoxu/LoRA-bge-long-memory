@@ -240,7 +240,7 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
         if kept:
             add(kept.group(1), "keeps", kept.group(2), fact)
         kept_at = re.search(r"([\u4e00-\u9fff]{2,4})在([\u4e00-\u9fff]{2,8})(?:值守|看守|守护)", text)
-        if kept_at:
+        if kept_at and not kept:
             add(kept_at.group(1), "keeps", kept_at.group(2), fact)
         built = re.search(r"([\u4e00-\u9fff]{2,8})建于(\d{3,4}年)", text)
         named_built = re.search(r"名叫([\u4e00-\u9fff]{2,8}).{0,8}建于(\d{3,4}年)", text)
@@ -281,9 +281,14 @@ def build_edges(facts: list[dict]) -> list[tuple[str, str, str, str, dict]]:
                 continue
             if _color_value(value):
                 add(match.group(1), "color", value, fact, match.group(2))
-        height = re.search(r"([\u4e00-\u9fff]{2,8}).{0,8}(?:高|塔高)([0-9一二三四五六七八九十百千两]{1,8}米)", text)
-        if height and "建于" not in text[max(0, height.start() - 2): height.end()]:
-            add(height.group(1), "height", height.group(2), fact)
+        meters = re.search(r"塔高([0-9一二三四五六七八九十百千两]{1,8}米)", text)
+        named_tower = re.search(r"名叫([\u4e00-\u9fff]{1,6}塔)", text)
+        if meters and named_tower:
+            add(named_tower.group(1), "height", meters.group(1), fact)
+        else:
+            height = re.search(r"([\u4e00-\u9fff]{2,8}).{0,8}(?:高|塔高)([0-9一二三四五六七八九十百千两]{1,8}米)", text)
+            if height and "建于" not in text[max(0, height.start() - 2): height.end()]:
+                add(height.group(1), "height", height.group(2), fact)
         school = re.search(
             r"([\u4e00-\u9fff]{2,4})(?:在([\u4e00-\u9fffA-Za-z0-9·]{2,16})(?:上学|读书|念书)|就读于([\u4e00-\u9fffA-Za-z0-9·]{2,16})|毕业于([\u4e00-\u9fffA-Za-z0-9·]{2,16}))",
             text,
@@ -378,6 +383,9 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
         if cut <= 0:
             return None
         if re.search(r"塔|守|透镜", rest[:cut]):
+            if re.fullmatch(r"(?:这|那|第[一二三四五六七八九十两0-9]+座)?灯塔(?:是)?", piece):
+                rest = rest[cut:]
+                continue
             return None
         rest = rest[cut:]
         continue
@@ -559,7 +567,11 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
             index = text.find(name, start)
             if index < 0:
                 break
-            after = text[index + len(name): index + len(name) + 1]
+            tail = text[index + len(name):]
+            if tail.startswith(("相关", "情况", "资料", "信息", "简介", "背景")):
+                start = index + 1
+                continue
+            after = tail[:1]
             if after and re.fullmatch(r"[\u4e00-\u9fff]", after) and not after.startswith(verbs):
                 return True
             start = index + 1
@@ -569,7 +581,7 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
         if missed.endswith(name) and not missed.startswith(name):
             continue
         extra = missed[len(name):] if missed.startswith(name) else ""
-        if extra.startswith(verbs):
+        if extra.startswith(("相关", "情况", "资料", "信息", "简介", "背景", *verbs)):
             continue
         return True
     return False

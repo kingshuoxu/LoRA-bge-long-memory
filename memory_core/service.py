@@ -1105,7 +1105,7 @@ class MemoryService:
                     from memory_core.span_guard import fixed_refusal
 
                     graph_locked = True
-                    if recall.get("reason") not in {"entity_clarify", "entity_grounded"}:
+                    if recall.get("reason") not in {"entity_clarify", "entity_grounded", "entity_overview"}:
                         fact_answer = fixed_refusal(content, remembered)
                         decision.fired = False
                         decision.expert = None

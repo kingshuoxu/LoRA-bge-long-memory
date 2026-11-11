@@ -203,6 +203,14 @@ class FactGraphTests(unittest.TestCase):
         flower = next(gold for _question, gold in spec["zh_recall"] if "花" in _question)
         self.assertIsNone(resolve_graph("月亮是行星还是卫星？", facts))
         self.assertNotIn(flower, _answer(f"{person}最讨厌的花是什么？", facts))
+        org = spec["zh"][1]["title"]
+        self.assertIsNone(resolve_graph(f"告诉我{org}相关信息", facts))
+        tower = [
+            _fact("白鹭塔", "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "白鹭塔"),
+        ]
+        self.assertIn("四十二", _answer("白鹭塔有多高？", tower))
+        self.assertIn("1873", _answer("柯岚守护的第一座灯塔是哪年建的？", tower))
+        self.assertIn("柯岚", _answer("谁守护白鹭塔？", tower))
 
     def test_restore_junk_is_cleaned_on_next_startup(self):
         from memory_core.migrate_0214 import restore_0214_junk
