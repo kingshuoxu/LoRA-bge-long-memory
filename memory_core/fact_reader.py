@@ -515,10 +515,14 @@ def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
             return {"text": _finish(value), "fact": fact, "miss": False}
     from memory_core.answer_type import choose_typed
 
+    from memory_core.answer_type import answer_fits
+
     picked = choose_typed(query, facts)
     if not picked:
         return None
     span, fact = picked
+    if not answer_fits(query, str(span), _statement(fact)):
+        return None
     return {"text": _finish(str(span)), "fact": fact, "miss": False}
 
 
@@ -527,6 +531,9 @@ def _stated_value_answers(tail: str, value: str, kind: str) -> bool:
     if re.search(r"什么颜色|啥颜色|什么色", tail):
         return bool(re.search(r"色", value)) or kind in {"颜色", "colour", "color"}
     if re.search(r"叫什么|叫啥|是谁|什么名字", tail):
+        # 后半句在问另一个角色时，不能把前半句的人名当成答案。
+        if re.search(r"塔|守|管|顾|班|父|母|女|匠|师傅|透镜|镜片|主人", tail):
+            return False
         return True
     if re.search(r"哪一年|哪年|什么时候", tail):
         return bool(re.search(r"\d|年|月|日", value))

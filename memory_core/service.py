@@ -795,17 +795,19 @@ class MemoryService:
                             rows.append(fact)
                 rows.extend(stated)
                 found = answer_stated_question(content, rows)
+                decision = route_with_trace(content, [], None)[0]
+                decision.fired = False
+                recall = statement_trace()
                 if found and not found.get("miss"):
-                    decision = route_with_trace(content, [], None)[0]
-                    decision.fired = False
                     decision.reason = "statement_ack"
-                    recall = statement_trace()
                     recall["reason"] = "statement_ack"
                     recall["reason_text"] = "这句话里的事实刚记下，问题用的是这句和已有的记忆"
                     return self._finish_turn(conv_id, user_msg, found["text"], decision, recall)
-                notes = [acknowledge_statement(fact) for fact in stated]
-                note = "".join(notes) if all(has_cjk(item) for item in notes) else " ".join(notes)
-                return self._ack_turn(conv_id, user_msg, note, "statement_ack")
+                decision.reason = "memory_miss"
+                recall["reason"] = "memory_miss"
+                recall["abstain"] = True
+                recall["reason_text"] = "事实已经记下，但这句问的取值不在记忆里"
+                return self._finish_turn(conv_id, user_msg, fixed_refusal(content), decision, recall)
             if utterance_is_question(content) and not asked and not open_task:
                 read = self._read_memory(content, experts)
                 if read is not None:
