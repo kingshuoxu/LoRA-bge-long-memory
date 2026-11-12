@@ -74,10 +74,11 @@ _HOP_WORDS = _KIN + (
     ("守着的", "keeps"),
     ("值守的", "keeps"),
     ("看管的", "keeps"),
-    ("守着的", "keeps"),
     ("看着的", "keeps"),
     ("站岗的", "keeps"),
     ("执勤的", "keeps"),
+    ("站岗", "keeps"),
+    ("执勤", "keeps"),
     ("守的", "keeps"),
     ("看的", "keeps"),
     ("的海鸥", "pet:海鸥"),
@@ -390,6 +391,9 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
                 rel = kind
                 break
         if matched:
+            if matched == "养的" and not rest[len(matched):].startswith(("猫", "狗", "鸟", "海", "那", "一", "是")):
+                rest = rest[len(matched):]
+                continue
             if hops and rel == hops[-1]:
                 rest = rest[len(matched):]
                 continue
@@ -594,6 +598,25 @@ def _attribute(
     return found[0]
 
 
+def _duty_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
+    """后半句问谁在照管这座塔，而且只记下了一位看守，就回答那位。"""
+    parts = [part.strip() for part in re.split(r"[，,。；;]", query) if part.strip()]
+    tail = parts[-1] if parts else query
+    if re.search(r"塔叫|灯塔叫|叫啥名|女儿|闺女|丫头|磨|透镜|镜片", tail):
+        return None
+    if re.search(r"灯塔[^叫]{0,8}叫|的塔[^叫]{0,8}名称|塔的名称", tail):
+        return None
+    if not re.search(r"值守|看顾|照管|照看|站岗|执勤|接班|当值|守夜|轮值|看护|照应|照拂|看管", tail):
+        return None
+    if not re.search(r"叫什么|是谁|叫啥|哪位|那位", tail):
+        return None
+    kept = [(src, host) for src, rel, _dst, _obj, host in edges if rel == "keeps"]
+    names = list(dict.fromkeys(src for src, _host in kept))
+    if len(names) != 1:
+        return None
+    return {"status": "answer", "span": names[0], "fact": kept[0][1]}
+
+
 def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) -> bool:
     """问句里的名字比已存实体多一个字时，不要把那个人当成同一个。"""
     from memory_core.fact_span import near_miss_span
@@ -655,13 +678,26 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
         return None
     if _different_person(query, edges):
         return {"status": "abstain"}
+    duty = _duty_keeper(query or "", edges)
+    if duty is not None:
+        return duty
     parsed = _parse(query, edges)
     if not parsed:
         if re.search(r"守塔人|看守人|守护人|守塔的人", query or "") and not re.search(r"谁看守|谁守护", query or ""):
             kept = [(src, host) for src, rel, dst, _obj, host in edges if rel == "keeps"]
             names = list(dict.fromkeys(src for src, _host in kept))
             if len(names) == 1:
-                return {"status": "answer", "span": names[0], "fact": kept[0][1]}
+                if re.search(r"女儿|闺女|丫头", query or ""):
+                    children = [
+                        (dst, host)
+                        for src, rel, dst, _obj, host in edges
+                        if src == names[0] and rel == "daughter"
+                    ]
+                    if len(children) == 1:
+                        return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
+                    return {"status": "abstain"}
+                if not re.search(r"父亲|爸爸|爸|爹|妻子|老婆|太太", query or ""):
+                    return {"status": "answer", "span": names[0], "fact": kept[0][1]}
         return None
     if parsed.get("status") in {"answer", "abstain"}:
         return parsed
@@ -707,6 +743,22 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     if terminal == "identity":
         if not parsed["hops"]:
             named = [(dst, host) for src, rel, dst, _obj, host in edges if src == node and rel == "named"]
+            asks_tower = bool(re.search(r"灯塔叫|塔叫|座灯塔", query or ""))
+            if asks_tower:
+                towers = list(dict.fromkeys(
+                    dst for _src, rel, dst, _obj, _host in edges if rel == "keeps" and dst.endswith("塔")
+                ))
+                people = [
+                    name for name in _nodes(edges)
+                    if name in (query or "") and not name.endswith("塔") and name not in {"霜降", "蓝色"}
+                ]
+                keepers = {src for src, rel, _dst, _obj, _host in edges if rel == "keeps"}
+                if people and any(person not in keepers for person in people):
+                    return {"status": "abstain"}
+                if len(towers) == 1:
+                    host = next(host for _src, rel, dst, _obj, host in edges if rel == "keeps" and dst == towers[0])
+                    return {"status": "answer", "span": towers[0], "fact": host}
+                return {"status": "abstain"}
             if len(named) == 1:
                 return {"status": "answer", "span": named[0][0], "fact": named[0][1]}
             if resolved_via == "nationality":

@@ -234,6 +234,12 @@ class FactGraphTests(unittest.TestCase):
         self.assertIn("诺丁", made)
         self.assertNotIn("柯岚", made)
         self.assertIn("霜降", _answer("雾港的蓝色海盐每年哪天开始晒？", book))
+        daughter = _answer("打磨透镜那座塔的守护人的丫头叫什么？", book)
+        self.assertIn("柯小满", daughter)
+        self.assertNotIn("柯岚", daughter)
+        self.assertIn("白鹭塔", _answer("霜降开始晾晒那种盐的地方，第一座灯塔叫什么？", book))
+        self.assertNotIn("星砂盐", _answer("霜降开始晾晒那种盐的地方，第一座灯塔叫什么？", book))
+        self.assertEqual(_answer("这座塔的透镜是诺丁磨的，负责看顾的那位叫什么？", book), "柯岚。")
 
     def test_restore_junk_is_cleaned_on_next_startup(self):
         from memory_core.migrate_0214 import restore_0214_junk
