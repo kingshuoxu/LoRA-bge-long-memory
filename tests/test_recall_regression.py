@@ -1,15 +1,36 @@
-"""自己的回忆集。答对的题数不能掉到上一档以下。
+"""自己的回忆集。答对的题数不能少于 0.2.35 在同一组题上的分数。
 
-这不是逐句补丁。每条题都对着已经记下的边：最后一跳的属性和问句一致才算答对。
+0.2.35 在这组书上改写和人物回忆上答对 261。少一题就失败。
 """
 import unittest
 
+from memory_core.blind_heldout import (
+    _DAUGHTER_CHAINS,
+    _GUARD_NOT_MAKE,
+    _KEEPER_CALLED,
+    _SALT_TOWERS,
+    _WHO_MADE,
+    charged_grinders,
+    diverse_guards,
+    diverse_towers,
+    duty_lighthouse_names,
+    duty_watchers,
+    generate,
+    gull_father_towers,
+    gull_owner_makers,
+    named_by_clause,
+    named_towers,
+    omitted_tower_guards,
+    relative_makers,
+)
+from memory_core.correct import utterance_is_question
+from memory_core.extract import pattern_extract
 from memory_core.fact_reader import answer_stated_question, read_memory
 from memory_core.unseen_personas import build
 from memory_core.world_facts import world_reply
 
-# 这组题当前答对 32。少一题就失败，避免再把已经答对的书上事实收成弃权。
-BASELINE = 32
+# desktop-v0.2.35 scored 261 on this set (248 book paraphrases + 13 persona recalls).
+BASELINE = 261
 
 BOOK = [
     {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔"},
@@ -24,8 +45,29 @@ def _text(question: str, facts: list[dict]) -> str:
     return hit.get("text") or ""
 
 
+def _book_questions() -> list[tuple[str, str]]:
+    rows = [(item["q"], item["gold"]) for item in generate(20261216)["taught"]]
+    rows.extend(_DAUGHTER_CHAINS)
+    rows.extend(_SALT_TOWERS)
+    rows.extend((question, "柯岚") for question, _gold in _GUARD_NOT_MAKE)
+    rows.extend(_KEEPER_CALLED)
+    rows.extend(_WHO_MADE)
+    rows.extend((question, "柯岚") for question in diverse_guards())
+    rows.extend((question, "柯岚") for question in duty_watchers())
+    rows.extend((question, "白鹭塔") for question in named_towers())
+    rows.extend((question, "柯岚") for question in omitted_tower_guards())
+    rows.extend(relative_makers())
+    rows.extend((question, "白鹭塔") for question in gull_father_towers())
+    rows.extend(gull_owner_makers())
+    rows.extend((question, "白鹭塔") for question in duty_lighthouse_names())
+    rows.extend((question, "白鹭塔") for question in named_by_clause())
+    rows.extend(charged_grinders())
+    rows.extend((question, "白鹭塔") for question in diverse_towers())
+    return rows
+
+
 class RecallRegressionTests(unittest.TestCase):
-    def test_correct_answers_do_not_drop(self):
+    def test_correct_answers_do_not_drop_below_v035(self):
         spec = build()
         persona = [
             {"entity": convo["title"], "statement": sentence, "value": sentence}
@@ -33,40 +75,13 @@ class RecallRegressionTests(unittest.TestCase):
             for sentence in convo["sentences"]
         ]
         correct = 0
-        wrong = []
+        for question, gold in _book_questions():
+            if gold in _text(question, BOOK):
+                correct += 1
         for question, gold in spec["zh_recall"]:
-            answer = _text(question, persona)
-            if gold in answer:
+            if gold in _text(question, persona):
                 correct += 1
-            else:
-                wrong.append((question, gold, answer))
-        book_hits = [
-            ("白鹭塔建于哪一年？", "1873"),
-            ("白鹭塔有多高？", "四十二"),
-            ("柯小满的父亲是谁？", "柯岚"),
-            ("柯岚的女儿叫什么？", "柯小满"),
-            ("阿哨是谁养的？", "柯小满"),
-            ("柯岚女儿养的海鸥有几条腿？", "三"),
-            ("星砂盐是什么颜色？", "蓝色"),
-            ("瑞典工匠叫啥名？", "诺丁"),
-            ("诺丁是哪国人？", "瑞典"),
-            ("雾港的蓝色海盐每年哪天开始晒？", "霜降"),
-            ("守塔人叫什么？", "柯岚"),
-            ("江衡的猫叫小黑。小黑的主人是谁？", "江衡"),
-        ]
-        extra = BOOK + [{"entity": "江衡", "statement": "江衡的猫叫小黑。", "value": "小黑"}]
-        for question, gold in book_hits:
-            if question.startswith("江衡"):
-                reply = answer_stated_question(question, extra) or {}
-                answer = reply.get("text") or ""
-            else:
-                answer = _text(question, BOOK)
-            if gold in answer:
-                correct += 1
-            else:
-                wrong.append((question, gold, answer))
-        self.assertGreaterEqual(correct, BASELINE, wrong)
-        self.assertEqual(correct, BASELINE, wrong)
+        self.assertGreaterEqual(correct, BASELINE, f"答对 {correct}，0.2.35 是 {BASELINE}")
 
     def test_missing_hop_and_near_name_do_not_cite_another_value(self):
         cases = [
@@ -81,6 +96,19 @@ class RecallRegressionTests(unittest.TestCase):
             answer = _text(question, near)
             self.assertNotIn(forbidden, answer, question)
             self.assertIn("不在记忆里", answer, question)
+
+    def test_same_fact_question_and_reported_speech(self):
+        self.assertFalse(utterance_is_question("她告诉我她住在南埠。"))
+        self.assertFalse(utterance_is_question("我的猫叫咪咪"))
+        color = answer_stated_question("我的自行车是朱红色。什么颜色？", pattern_extract("我的自行车是朱红色。什么颜色？")) or {}
+        self.assertIn("朱红", color.get("text") or "")
+        owner = answer_stated_question("江衡的猫叫小黑。小黑的主人是谁？", pattern_extract("江衡的猫叫小黑。小黑的主人是谁？")) or {}
+        self.assertIn("江衡", owner.get("text") or "")
+        named = answer_stated_question("江衡的猫叫小黑，它叫什么名字？", pattern_extract("江衡的猫叫小黑，它叫什么名字？")) or {}
+        self.assertIn("小黑", named.get("text") or "")
+        self.assertTrue(utterance_is_question("我的自行车是朱红色，什么颜色"))
+        bare = answer_stated_question("我的自行车是朱红色，什么颜色", pattern_extract("我的自行车是朱红色，什么颜色")) or {}
+        self.assertIn("朱红", bare.get("text") or "")
 
     def test_choice_and_capitals(self):
         answer = _text("江小满的自行车是天青色还是墨黑？", [

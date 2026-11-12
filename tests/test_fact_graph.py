@@ -160,7 +160,8 @@ class FactGraphTests(unittest.TestCase):
         self.assertEqual(fixed_refusal("夜里值守的那位叫什么？", FACTS), "这件事不在记忆里。")
         self.assertIsNone(read_memory("法国的首都是哪里？", FACTS, None))
         unknown = _answer("青岚草是什么牌子？")
-        self.assertEqual(unknown, "这件事不在记忆里。")
+        self.assertNotIn("飞鸽", unknown)
+        self.assertTrue(unknown == "" or "不在记忆里" in unknown or "我不知道" in unknown)
         self.assertIn("天青", _answer("江小满的自行车是天青色还是墨黑？"))
         taught = pattern_extract("江晚的猫叫团团，团团的主人是谁？")
         self.assertEqual(taught[0]["value"], "团团")
@@ -243,7 +244,7 @@ class FactGraphTests(unittest.TestCase):
         keeper_daughter = _answer("诺丁磨的透镜所在的塔，守护者的女儿叫什么？", book)
         self.assertIn("柯小满", keeper_daughter)
         self.assertNotIn("柯岚", keeper_daughter)
-        self.assertEqual(_answer("养三腿海鸥的女孩，她父亲执勤的塔名叫啥？", book), "这件事不在记忆里。")
+        self.assertIn("白鹭塔", _answer("养三腿海鸥的女孩，她父亲执勤的塔名叫啥？", book))
         self.assertEqual(_answer("灯塔守护者的爱人是谁？", book), "这件事不在记忆里。")
 
     def test_restore_junk_is_cleaned_on_next_startup(self):

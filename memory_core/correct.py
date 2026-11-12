@@ -258,7 +258,10 @@ def utterance_is_question(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
         return False
-    from memory_core.extract import _looks_like_question
+    from memory_core.extract import _looks_like_question, is_declarative_fact, is_reported_statement
+
+    if is_reported_statement(raw) or is_declarative_fact(raw):
+        return False
 
     if _looks_like_question(raw):
         return True

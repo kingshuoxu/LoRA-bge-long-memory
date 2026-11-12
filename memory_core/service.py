@@ -803,6 +803,12 @@ class MemoryService:
                     recall["reason"] = "statement_ack"
                     recall["reason_text"] = "这句话里的事实刚记下，问题用的是这句和已有的记忆"
                     return self._finish_turn(conv_id, user_msg, found["text"], decision, recall)
+                from memory_core.extract import is_declarative_fact, is_reported_statement
+
+                if is_reported_statement(content) or is_declarative_fact(content):
+                    notes = [acknowledge_statement(fact) for fact in stated]
+                    note = "".join(notes) if all(has_cjk(item) for item in notes) else " ".join(notes)
+                    return self._ack_turn(conv_id, user_msg, note, "statement_ack")
                 decision.reason = "memory_miss"
                 recall["reason"] = "memory_miss"
                 recall["abstain"] = True

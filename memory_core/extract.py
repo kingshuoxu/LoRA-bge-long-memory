@@ -101,6 +101,8 @@ def is_declarative_fact(text: str) -> bool:
         return True
     if re.search(r"[？?吗呢]", raw):
         return False
+    if re.search(r"[，,。；;].*(?:什么|谁|哪|多少|几|吗|呢|啥)", raw):
+        return False
     if re.match(r"^(?:我|他|她)(?:的[\u4e00-\u9fffA-Za-z0-9]{0,12})?是", raw):
         return True
     if re.match(r"^(?:我|他|她)喜欢", raw):
