@@ -469,8 +469,12 @@ def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
         if all(_plain_choice(dst) != _plain_choice(old) for old, _fact in unique):
             unique.append((dst, fact))
     if len(unique) == 1:
-        return {"status": "answer", "span": unique[0][0], "fact": unique[0][1]}
-    if start or unique:
+        fact_text = _statement(unique[0][1])
+        head_tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", head)
+        if start or any(token in fact_text for token in head_tokens):
+            return {"status": "answer", "span": unique[0][0], "fact": unique[0][1]}
+        return None
+    if start:
         return {"status": "abstain"}
     return None
 
@@ -532,8 +536,8 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
         if later is not None:
             hops = ["keeper_of", *later]
     if hops is None:
-        # 认不出的中间词不能退回去拿起点自己的取值，也不能换一条事实来答。
-        return {"status": "abstain"}
+        # 认不出的中间词不是一条走完的链。交给后面的类型核对，不在这里锁成弃权。
+        return None
     if terminal == "keeper" and "keeper_of" not in hops:
         hops = [*hops, "keeper_of"]
         terminal = "identity"
@@ -598,6 +602,35 @@ def _attribute(
     return found[0]
 
 
+def _keeper_role(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
+    """问的是看守这个角色。只有一条看守边时才能走到那个人；点了别的人就不借用。"""
+    if not re.search(r"(?:守|看).{0,2}(?:人|者)", query or ""):
+        return None
+    kept = [(src, host) for src, rel, _dst, _obj, host in edges if rel == "keeps"]
+    names = list(dict.fromkeys(src for src, _host in kept))
+    if len(names) != 1:
+        return None
+    keeper = names[0]
+    if re.search(r"女儿|闺女|丫头", query or ""):
+        children = [
+            (dst, host)
+            for src, rel, dst, _obj, host in edges
+            if src == keeper and rel == "daughter"
+        ]
+        if len(children) == 1:
+            return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
+        return {"status": "abstain"}
+    if re.search(r"爱人|妻子|老婆|太太|工匠|师傅", query or ""):
+        return {"status": "abstain"}
+    others = [
+        name for name in _nodes(edges)
+        if name in (query or "") and name != keeper and not name.endswith("塔")
+    ]
+    if others:
+        return {"status": "abstain"}
+    return {"status": "answer", "span": keeper, "fact": kept[0][1]}
+
+
 def _unnamed_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     """问句只说看守人、守护者，没有点名。一位看守时可以走到他，或走到他的女儿。"""
     if re.search(r"谁看守|谁守护", query or ""):
@@ -658,24 +691,11 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
     values = {
         dst
         for _src, rel, dst, _obj, _host in edges
-        if rel in {"color", "height", "built", "started", "legs", "nationality"}
+        if rel in {"color", "height", "built", "started", "founded", "legs", "nationality"}
     }
     for name in _nodes(edges):
         if name in values:
             continue
-        start = 0
-        while True:
-            index = text.find(name, start)
-            if index < 0:
-                break
-            tail = text[index + len(name):]
-            if tail.startswith(("相关", "情况", "资料", "信息", "简介", "背景", "工匠", "师傅", "灯塔", "晾", "产")):
-                start = index + 1
-                continue
-            after = tail[:1]
-            if after and re.fullmatch(r"[\u4e00-\u9fff]", after) and not after.startswith(verbs):
-                return True
-            start = index + 1
         missed = near_miss_span(name, text)
         if not missed or missed == name:
             continue
@@ -694,22 +714,60 @@ _FAILED_HOP_ABSTAINS = {
 }
 
 
+_ASKED_RELATION = (
+    (r"什么鸟|哪种鸟|什么动物|哪种动物", "species"),
+    (r"哪国人|什么国籍|是哪国", "nationality"),
+    (r"什么颜色|啥颜色|什么色|哪种颜色", "color"),
+    (r"几条腿|多少条腿", "legs"),
+    (r"有多高|多高|多少米", "height"),
+    (r"哪一年|哪年|什么时候建|何时建", "year"),
+)
+
+
+def _answer_rejected(query: str, span: str, edges: list[tuple[str, str, str, str, dict]]) -> bool:
+    """取值必须是问句要的那一种属性。从问句里抄出来的字不能当答案。"""
+    bare = re.sub(r"[。.!！？?\s]", "", span or "")
+    if not bare:
+        return True
+    choice = re.search(r"是.+还是", query or "")
+    if bare in (query or "") and not choice and re.search(r"\d|年|月|日|色|米|霜降", bare):
+        return True
+    for pattern, kind in _ASKED_RELATION:
+        if not re.search(pattern, query or ""):
+            continue
+        relations = {"built", "started", "founded", "demolished", "born", "died"} if kind == "year" else {kind}
+        values = {dst for _src, rel, dst, _obj, _host in edges if rel in relations}
+        if any(bare == value or bare in value or value in bare for value in values):
+            return False
+        return True
+    return False
+
+
 def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     """答得了就给取值。问句是一条链但某一跳没有边，就弃权。不像链就返回 None。"""
     rows = [fact for fact in facts if isinstance(fact, dict)]
     edges = build_edges(rows)
+    result = _resolve_graph(query, rows, edges)
+    if (
+        result
+        and result.get("status") == "answer"
+        and not result.get("walked")
+        and _answer_rejected(query or "", str(result.get("span") or ""), edges)
+    ):
+        return {"status": "abstain"}
+    return result
+
+
+def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     if not edges:
         return None
     if _different_person(query, edges):
         return {"status": "abstain"}
-    duty = _duty_keeper(query or "", edges)
-    if duty is not None:
-        return duty
     parsed = _parse(query, edges)
     if not parsed or parsed.get("status") == "abstain":
-        named = _unnamed_keeper(query or "", edges)
-        if named is not None:
-            return named
+        role = _keeper_role(query or "", edges)
+        if role is not None:
+            return role
     if not parsed:
         return None
     if parsed.get("status") in {"answer", "abstain"}:
@@ -752,7 +810,7 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     node, fact = walked
     terminal = parsed["terminal"]
     if terminal == "tower":
-        return {"status": "answer", "span": node, "fact": fact}
+        return {"status": "answer", "span": node, "fact": fact, "walked": bool(parsed["hops"])}
     if terminal == "identity":
         if not parsed["hops"]:
             named = [(dst, host) for src, rel, dst, _obj, host in edges if src == node and rel == "named"]
@@ -777,7 +835,7 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
             if resolved_via == "nationality":
                 return {"status": "answer", "span": node, "fact": owners[0][2]}
             return {"status": "abstain"}
-        return {"status": "answer", "span": node, "fact": fact}
+        return {"status": "answer", "span": node, "fact": fact, "walked": True}
     obj = parsed.get("object") or ""
     if terminal in {"color", "brand"} and obj:
         aligned = [

@@ -1278,15 +1278,27 @@ class MemoryService:
                             remembered.append(fact)
                 polar_answer = bool(re.match(r"^(?:是|不是|有|Yes|No)\b", (fact_answer or "").strip(), re.IGNORECASE))
                 choice_about_memory = False
-                if re.search(r"是.+还是", content or ""):
-                    choice_about_memory = any(
-                        len(str(fact.get("entity") or "")) >= 2 and str(fact.get("entity")) in content
-                        for fact in remembered
-                    ) or any(
-                        len(str(fact.get("value") or "")) >= 2 and str(fact.get("value")) in content
+                stored_side = ""
+                choice_match = re.search(r"是(.+?)还是(.+?)(?:[？?。]|$)", content or "")
+                if choice_match:
+                    from memory_core.span_guard import statement_of
+
+                    sides = [choice_match.group(1).strip(), choice_match.group(2).strip("？?。 ")]
+                    hits = []
+                    for side in sides:
+                        if any(side and (side in statement_of(fact) or side == str(fact.get("value") or "")) for fact in remembered):
+                            hits.append(side)
+                    if len(hits) == 1:
+                        stored_side = hits[0]
+                    choice_about_memory = bool(hits) or any(
+                        len(str(fact.get("entity") or "")) >= 2 and str(fact.get("entity")) in (content or "")
                         for fact in remembered
                     )
-                if choice_about_memory or (re.search(r"是不是", content or "") and not polar_answer):
+                if stored_side:
+                    fact_answer = stored_side if stored_side[-1:] in "。." else stored_side + "。"
+                    recall["abstain"] = False
+                    recall["reason_text"] = "是A还是B里只有一边写在记忆里"
+                elif choice_about_memory or (re.search(r"是不是", content or "") and not polar_answer):
                     fact_answer = fixed_refusal(content, remembered)
                     decision.fired = False
                     decision.expert = None

@@ -359,7 +359,7 @@ def acknowledge_statement(fact: dict[str, Any]) -> str:
         if statement.startswith("我的狗"):
             return f"好，你的狗叫{value}。"
         who = "你" if entity == "我" else entity
-        if attr == "转述" or not who or not attr:
+        if attr == "转述" or not who or not attr or value.startswith("的") or "所" in attr:
             return "好，记住了。"
         if attr.startswith("个") and not attr.startswith("个性"):
             attr = "一" + attr

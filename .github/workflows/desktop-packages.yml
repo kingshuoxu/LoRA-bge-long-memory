@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install pypdf
-          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs tests.test_migrate_0214
+          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs tests.test_migrate_0214 tests.test_recall_regression
 
       - name: Build embedded CPython and PyTorch
         shell: bash

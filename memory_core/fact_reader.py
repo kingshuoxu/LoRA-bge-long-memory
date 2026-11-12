@@ -501,10 +501,18 @@ def _finish(span: str) -> str:
 
 
 def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
-    """前半句是陈述、后半句在问。近似名字让整句摘录弃权时，仍用整句能确定的关系。"""
+    """前半句是陈述、后半句在问。刚记下的取值种类对得上，就用那个取值回答。"""
     found = read_memory(query, facts, None)
     if found and not found.get("miss"):
         return found
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    if len(pieces) >= 2 and facts:
+        tail = pieces[-1]
+        fact = facts[-1]
+        value = str(fact.get("value") or "").strip()
+        kind = str(fact.get("attr") or "")
+        if value and value not in tail and _stated_value_answers(tail, value, kind):
+            return {"text": _finish(value), "fact": fact, "miss": False}
     from memory_core.answer_type import choose_typed
 
     picked = choose_typed(query, facts)
@@ -512,6 +520,19 @@ def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
         return None
     span, fact = picked
     return {"text": _finish(str(span)), "fact": fact, "miss": False}
+
+
+def _stated_value_answers(tail: str, value: str, kind: str) -> bool:
+    """问句要的属性和刚写下的取值是同一种。"""
+    if re.search(r"什么颜色|啥颜色|什么色", tail):
+        return bool(re.search(r"色", value)) or kind in {"颜色", "colour", "color"}
+    if re.search(r"叫什么|叫啥|是谁|什么名字", tail):
+        return True
+    if re.search(r"哪一年|哪年|什么时候", tail):
+        return bool(re.search(r"\d|年|月|日", value))
+    if re.search(r"哪里|哪儿|什么地方", tail):
+        return kind in {"住", "家乡", "地点"} or "市" in value or "镇" in value
+    return False
 
 
 def _entity_supported(query: str, span: str, fact: dict, facts: list[dict]) -> bool:
@@ -554,10 +575,12 @@ def read_memory(
     from memory_core.fact_graph import resolve_graph
 
     asked = query
-    pieces = [part.strip() for part in re.split(r"[。！？\n；;]+", query or "") if part.strip()]
-    if len(pieces) >= 2 and re.search(r"什么|谁|哪|吗|呢|啥", pieces[-1]):
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    if len(pieces) >= 2 and re.search(r"什么|谁|哪|吗|呢|啥", pieces[-1]) and not re.search(r"什么|谁|哪|吗|呢|啥", pieces[0]):
         asked = pieces[-1]
-    graphed = resolve_graph(asked, facts)
+    graphed = resolve_graph(query, facts)
+    if (graphed is None or graphed.get("status") != "answer") and asked != query:
+        graphed = resolve_graph(asked, facts) or graphed
     if graphed is not None and graphed.get("status") == "answer":
         span = str(graphed.get("span") or "").strip()
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
@@ -567,8 +590,23 @@ def read_memory(
         from memory_core.span_guard import fixed_refusal
 
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    from memory_core.fact_span import near_miss_span
     from memory_core.span_guard import fixed_refusal, memory_entity_question
 
+    for fact in facts:
+        entity = str(fact.get("entity") or "").strip()
+        missed = near_miss_span(entity, asked) if entity else None
+        if missed and missed != entity and not (missed.endswith(entity) and not missed.startswith(entity)):
+            extra = missed[len(entity):] if missed.startswith(entity) else ""
+            if not extra.startswith(("的", "是", "在", "住", "养", "叫")):
+                return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    from memory_core.answer_type import answer_fits, choose_typed
+
+    picked = choose_typed(asked, facts)
+    if picked:
+        span, fact = picked
+        if answer_fits(asked, span, _statement(fact)):
+            return {"text": _finish(span), "fact": fact, "miss": False}
     if memory_entity_question(query):
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
