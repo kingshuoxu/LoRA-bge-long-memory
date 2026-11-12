@@ -617,8 +617,8 @@ def _unnamed_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) ->
         if len(children) == 1:
             return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
         return {"status": "abstain"}
-    if re.search(r"父亲|爸爸|爸|爹|妻子|老婆|太太", query or ""):
-        return None
+    if re.search(r"父亲|爸爸|爸|爹|妻子|老婆|太太|爱人|对象|媳妇|先生|夫人|老伴|另一半|内人|那口子|配偶", query or ""):
+        return {"status": "abstain"}
     return {"status": "answer", "span": names[0], "fact": kept[0][1]}
 
 
