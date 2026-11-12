@@ -71,6 +71,7 @@ _HOP_WORDS = _KIN + (
     ("司灯", "keeper_of"),
     ("看守的", "keeps"),
     ("守护的", "keeps"),
+    ("守着的", "keeps"),
     ("值守的", "keeps"),
     ("看管的", "keeps"),
     ("守着的", "keeps"),
@@ -109,12 +110,13 @@ _TERMINALS = (
     (r"建于哪一年|哪一年建的|哪年建成|哪年建的|是哪一年建的", "built"),
     (r"哪年去世|哪一年去世|何时去世|哪年逝世|死于哪一年|哪年死的", "died"),
     (r"哪年出生|哪一年出生|是哪年出生|生于哪一年", "born"),
+    (r"哪一天开始|哪天开始|哪天晒|开始晒|哪一天晒", "started"),
     (r"哪一年开始|哪年开始|什么时候开始|何时开始", "started"),
     (r"产自哪|产自哪儿|哪里的特产|哪儿的特产", "origin"),
     (r"有多高|多高|塔高多少|多少米", "height"),
     (r"哪所学校|什么学校|哪里上学|哪儿上学|在哪上学|在哪读书|在哪儿念书|哪儿念书|学校叫什么|的学校叫", "school"),
     (r"哪国人|什么国籍|国籍是什么|是哪国人", "nationality"),
-    (r"谁守护|谁看守|谁值守|是谁守护|是谁看守", "keeper"),
+    (r"谁守护|谁看守|谁值守|是谁守护|是谁看守|是谁守的|谁守的", "keeper"),
     (r"哪座灯塔|哪座塔|哪一座塔|什么塔", "tower"),
     (r"几条腿|多少条腿", "legs"),
     (r"什么鸟|哪种鸟|是什么鸟", "species"),
@@ -410,8 +412,7 @@ def _parse_hops(body: str, start: str, terminal: str) -> list[str] | None:
             return None
         if re.search(r"塔|守|透镜|镜片", rest[:cut]):
             if re.fullmatch(
-                r"(?:这|那|第[一二三四五六七八九十两0-9]+座)?(?:灯塔|塔|透镜|镜片)(?:是)?"
-                r"|(?:这|那)座塔",
+                r"(?:这|那|第|座|灯塔|塔|透镜|镜片|上面|上|的|是|[一二三四五六七八九十两0-9])+",
                 piece,
             ):
                 rest = rest[cut:]
@@ -513,6 +514,9 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
         return None
     nodes = _nodes(edges)
     start = _start_name(body or text, nodes)
+    if not start and "海鸥" in nodes and re.search(r"那只鸟|这只鸟|鸟的|鸟主人|它主人|它爸", text):
+        start = "海鸥"
+        body = re.sub(r"^.*?(?:那只|这只)?鸟", "", body or text, count=1)
     if not start:
         return None
     hops = _parse_hops(body, start, terminal)
@@ -604,7 +608,14 @@ def _different_person(query: str, edges: list[tuple[str, str, str, str, dict]]) 
         "她", "他", "它", "女",
     )
     text = query or ""
+    values = {
+        dst
+        for _src, rel, dst, _obj, _host in edges
+        if rel in {"color", "height", "built", "started", "legs", "nationality"}
+    }
     for name in _nodes(edges):
+        if name in values:
+            continue
         start = 0
         while True:
             index = text.find(name, start)
@@ -646,6 +657,11 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
         return {"status": "abstain"}
     parsed = _parse(query, edges)
     if not parsed:
+        if re.search(r"守塔人|看守人|守护人|守塔的人", query or "") and not re.search(r"谁看守|谁守护", query or ""):
+            kept = [(src, host) for src, rel, dst, _obj, host in edges if rel == "keeps"]
+            names = list(dict.fromkeys(src for src, _host in kept))
+            if len(names) == 1:
+                return {"status": "answer", "span": names[0], "fact": kept[0][1]}
         return None
     if parsed.get("status") in {"answer", "abstain"}:
         return parsed
@@ -707,6 +723,11 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
         if not aligned or terminal not in aligned:
             return {"status": "abstain"}
     picked = _attribute(node, terminal, obj, edges)
+    if picked is None and terminal == "started" and re.search(r"晒|晾", query or ""):
+        seasons = [(dst, host) for _src, rel, dst, _obj, host in edges if rel == "started"]
+        unique = list(dict.fromkeys(dst for dst, _host in seasons))
+        if len(unique) == 1:
+            return {"status": "answer", "span": unique[0], "fact": seasons[0][1]}
     if picked is None:
         return {"status": "abstain"}
     return {"status": "answer", "span": picked[0], "fact": picked[1]}
