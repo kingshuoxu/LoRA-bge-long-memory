@@ -622,9 +622,14 @@ def _keeper_role(query: str, edges: list[tuple[str, str, str, str, dict]]) -> di
         return {"status": "abstain"}
     if re.search(r"爱人|妻子|老婆|太太|工匠|师傅", query or ""):
         return {"status": "abstain"}
+    values = {
+        dst
+        for _src, rel, dst, _obj, _host in edges
+        if rel in {"color", "height", "built", "started", "founded", "legs", "nationality"}
+    }
     others = [
         name for name in _nodes(edges)
-        if name in (query or "") and name != keeper and not name.endswith("塔")
+        if name in (query or "") and name != keeper and not name.endswith("塔") and name not in values
     ]
     if others:
         return {"status": "abstain"}

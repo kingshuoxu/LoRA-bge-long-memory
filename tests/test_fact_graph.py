@@ -226,7 +226,7 @@ class FactGraphTests(unittest.TestCase):
         self.assertIn("蓝色", _answer("星砂盐是什么颜色？", book))
         self.assertEqual(_answer("柯岚是哪座塔？", book), "这件事不在记忆里。")
         self.assertEqual(_answer("瑞典是哪座塔？", book), "这件事不在记忆里。")
-        for question in ("守塔人叫什么？", "灯塔的看守人叫什么？", "守塔的人叫什么？", "这座四十二米的灯塔是谁守的？"):
+        for question in ("守塔人叫什么？", "灯塔的看守人叫什么？", "守塔的人叫什么？", "这座四十二米的灯塔是谁守的？", "谁是四十二米灯塔的看守人？"):
             keeper = _answer(question, book)
             self.assertIn("柯岚", keeper, question)
             self.assertNotIn("白鹭塔", keeper, question)
