@@ -598,11 +598,35 @@ def _attribute(
     return found[0]
 
 
+def _unnamed_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
+    """问句只说看守人、守护者，没有点名。一位看守时可以走到他，或走到他的女儿。"""
+    if re.search(r"谁看守|谁守护", query or ""):
+        return None
+    if not re.search(r"守塔人|看守人|守护人|看守者|守护者|守塔的人", query or ""):
+        return None
+    kept = [(src, host) for src, rel, _dst, _obj, host in edges if rel == "keeps"]
+    names = list(dict.fromkeys(src for src, _host in kept))
+    if len(names) != 1:
+        return None
+    if re.search(r"女儿|闺女|丫头", query or ""):
+        children = [
+            (dst, host)
+            for src, rel, dst, _obj, host in edges
+            if src == names[0] and rel == "daughter"
+        ]
+        if len(children) == 1:
+            return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
+        return {"status": "abstain"}
+    if re.search(r"父亲|爸爸|爸|爹|妻子|老婆|太太", query or ""):
+        return None
+    return {"status": "answer", "span": names[0], "fact": kept[0][1]}
+
+
 def _duty_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     """后半句问谁在照管这座塔，而且只记下了一位看守，就回答那位。"""
     parts = [part.strip() for part in re.split(r"[，,。；;]", query) if part.strip()]
     tail = parts[-1] if parts else query
-    if re.search(r"塔叫|灯塔叫|叫啥名|女儿|闺女|丫头|磨|透镜|镜片", tail):
+    if re.search(r"塔叫|灯塔叫|叫啥名|名叫|名称|叫啥来着|女儿|闺女|丫头|磨|透镜|镜片", tail):
         return None
     if re.search(r"灯塔[^叫]{0,8}叫|的塔[^叫]{0,8}名称|塔的名称", tail):
         return None
@@ -682,22 +706,11 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     if duty is not None:
         return duty
     parsed = _parse(query, edges)
+    if not parsed or parsed.get("status") == "abstain":
+        named = _unnamed_keeper(query or "", edges)
+        if named is not None:
+            return named
     if not parsed:
-        if re.search(r"守塔人|看守人|守护人|守塔的人", query or "") and not re.search(r"谁看守|谁守护", query or ""):
-            kept = [(src, host) for src, rel, dst, _obj, host in edges if rel == "keeps"]
-            names = list(dict.fromkeys(src for src, _host in kept))
-            if len(names) == 1:
-                if re.search(r"女儿|闺女|丫头", query or ""):
-                    children = [
-                        (dst, host)
-                        for src, rel, dst, _obj, host in edges
-                        if src == names[0] and rel == "daughter"
-                    ]
-                    if len(children) == 1:
-                        return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
-                    return {"status": "abstain"}
-                if not re.search(r"父亲|爸爸|爸|爹|妻子|老婆|太太", query or ""):
-                    return {"status": "answer", "span": names[0], "fact": kept[0][1]}
         return None
     if parsed.get("status") in {"answer", "abstain"}:
         return parsed
