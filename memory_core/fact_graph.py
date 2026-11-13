@@ -620,7 +620,9 @@ def _maker_nationality(query: str, edges: list[tuple[str, str, str, str, dict]])
 
 def _unique_maker(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     """问的是磨镜的人，而且只记下了一位，才回答那位。问看守或亲属时不借用。"""
-    if not re.search(r"打磨|谁磨|磨了|磨的", query or ""):
+    asked = [part.strip() for part in re.split(r"[，,。；;]", query or "") if part.strip()]
+    tail = asked[-1] if asked else (query or "")
+    if not re.search(r"打磨|谁磨|磨了|磨的", tail):
         return None
     if re.search(r"哪国|国籍|颜色|哪一年|哪年|多高|什么鸟|几条|多少面", query or ""):
         return None
