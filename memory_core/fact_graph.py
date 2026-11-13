@@ -602,9 +602,29 @@ def _attribute(
     return found[0]
 
 
+def _maker_nationality(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
+    """问磨镜的人是哪国人时，走他的国籍边。不把人本人当成国籍。"""
+    if not re.search(r"哪国|国籍", query or ""):
+        return None
+    if not re.search(r"工匠|师傅|打磨|磨", query or ""):
+        return None
+    makers = list(dict.fromkeys(dst for _src, rel, dst, _obj, _host in edges if rel == "maker"))
+    if len(makers) != 1:
+        return None
+    found = [(dst, host) for src, rel, dst, _obj, host in edges if rel == "nationality" and src == makers[0]]
+    names = list(dict.fromkeys(dst for dst, _host in found))
+    if len(names) != 1:
+        return None
+    return {"status": "answer", "span": names[0], "fact": found[0][1], "walked": True}
+
+
 def _unique_maker(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
     """问的是磨镜的人，而且只记下了一位，才回答那位。问看守或亲属时不借用。"""
     if not re.search(r"打磨|谁磨|磨了|磨的", query or ""):
+        return None
+    if re.search(r"哪国|国籍|颜色|哪一年|哪年|多高|什么鸟|几条|多少面", query or ""):
+        return None
+    if not re.search(r"谁|叫什么|叫啥|哪位|什么名字", query or ""):
         return None
     if re.search(r"女儿|闺女|父亲|爸爸|看守|守护|爱人|妻子|老婆", query or ""):
         return None
@@ -816,6 +836,9 @@ def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str
         if role is not None:
             return role
     if not parsed:
+        nation = _maker_nationality(query or "", edges)
+        if nation is not None:
+            return nation
         made = _unique_maker(query or "", edges)
         if made is not None:
             return made
