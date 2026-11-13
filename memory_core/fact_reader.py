@@ -521,6 +521,8 @@ def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
     if not picked:
         return None
     span, fact = picked
+    if _premise_echo(query, str(span)):
+        return None
     if not answer_fits(query, str(span), _statement(fact)):
         return None
     return {"text": _finish(str(span)), "fact": fact, "miss": False}
