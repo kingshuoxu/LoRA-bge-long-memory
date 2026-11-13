@@ -547,6 +547,17 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
     if found is None:
         found = _match_life(sentence)
     if found is None:
+        matched = re.match(
+            r"^(?P<entity>[\u4e00-\u9fffA-Za-z0-9]{1,12})是(?P<value>[^，。？?]{1,24})$",
+            sentence,
+        )
+        value = matched.group("value") if matched else ""
+        if matched and not re.search(r"什么|谁|哪|吗|呢|啥|那位|这位", value):
+            if "色" in value:
+                found = _make_fact(matched.group("entity"), "颜色", value, "是", sentence)
+            elif re.search(r"[0-9一二三四五六七八九零〇]+年", value):
+                found = _make_fact(matched.group("entity"), "年份", value, "是", sentence)
+    if found is None:
         matched = re.match(r"^(?P<entity>[^，。]{1,16})住在(?P<value>[^，。]{1,32})$", sentence)
         if matched:
             found = _make_fact(matched.group("entity"), "住址", matched.group("value"), "住在", sentence)

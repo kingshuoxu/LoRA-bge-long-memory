@@ -117,7 +117,7 @@ _TERMINALS = (
     (r"有多高|多高|塔高多少|多少米", "height"),
     (r"哪所学校|什么学校|哪里上学|哪儿上学|在哪上学|在哪读书|在哪儿念书|哪儿念书|学校叫什么|的学校叫", "school"),
     (r"哪国人|什么国籍|国籍是什么|是哪国人", "nationality"),
-    (r"谁守护|谁看守|谁值守|是谁守护|是谁看守|是谁守的|谁守的", "keeper"),
+    (r"谁守护|谁看守|谁值守|是谁守护|是谁看守|是谁守的|谁守的|谁在[\u4e00-\u9fff]{1,8}(?:值守|看守|守护)", "keeper"),
     (r"哪座灯塔|哪座塔|哪一座塔|什么塔", "tower"),
     (r"几条腿|多少条腿", "legs"),
     (r"什么鸟|哪种鸟|是什么鸟", "species"),
@@ -518,7 +518,7 @@ def _parse(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
             body = re.split(r"谁|哪位|师傅|工匠", text)[0]
     if not terminal:
         return None
-    if terminal not in {"maker", "founder", "owner"} and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
+    if terminal not in {"maker", "founder", "owner", "keeper"} and "谁" in text and not re.search(r"的[\u4e00-\u9fff]{1,4}(?:是谁|叫什么|叫啥)", text):
         return None
     nodes = _nodes(edges)
     start = _start_name(body or text, nodes)
@@ -600,6 +600,43 @@ def _attribute(
     if len(found) != 1:
         return None
     return found[0]
+
+
+def _unique_maker(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
+    """问的是磨镜的人，而且只记下了一位，才回答那位。问看守或亲属时不借用。"""
+    if not re.search(r"打磨|谁磨|磨了|磨的", query or ""):
+        return None
+    if re.search(r"女儿|闺女|父亲|爸爸|看守|守护|爱人|妻子|老婆", query or ""):
+        return None
+    made = [(dst, host) for _src, rel, dst, _obj, host in edges if rel == "maker"]
+    names = list(dict.fromkeys(dst for dst, _host in made))
+    if len(names) != 1:
+        return None
+    others = [
+        name for name in _nodes(edges)
+        if name in (query or "") and name != names[0] and not name.endswith("塔")
+    ]
+    if others:
+        return None
+    return {"status": "answer", "span": names[0], "fact": made[0][1], "walked": True}
+
+
+def _counted_lens_tower(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
+    """「十六面透镜是哪座塔」用记下的面数对上那座塔。面数对不上就不答。"""
+    if not re.search(r"哪座|哪一座|什么塔", query or ""):
+        return None
+    count = re.search(r"([0-9一二三四五六七八九十]{1,4})面", query or "")
+    if not count:
+        return None
+    hits = [
+        (src, host)
+        for src, rel, _dst, _obj, host in edges
+        if rel == "maker" and str(src).endswith("塔") and count.group(1) in _statement(host)
+    ]
+    names = list(dict.fromkeys(src for src, _host in hits))
+    if len(names) != 1:
+        return None
+    return {"status": "answer", "span": names[0], "fact": hits[0][1], "walked": True}
 
 
 def _keeper_role(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
@@ -753,13 +790,18 @@ def resolve_graph(query: str, facts: list[dict]) -> dict[str, Any] | None:
     rows = [fact for fact in facts if isinstance(fact, dict)]
     edges = build_edges(rows)
     result = _resolve_graph(query, rows, edges)
-    if (
-        result
-        and result.get("status") == "answer"
-        and not result.get("walked")
-        and _answer_rejected(query or "", str(result.get("span") or ""), edges)
-    ):
-        return {"status": "abstain"}
+    if result and result.get("status") == "answer":
+        from memory_core.answer_type import modifier_conflicts
+
+        host = result.get("fact") if isinstance(result.get("fact"), dict) else {}
+        entity = str(host.get("entity") or "")
+        related = [host] if host else []
+        if entity:
+            related.extend(fact for fact in rows if str(fact.get("entity") or "") == entity and fact is not host)
+        if modifier_conflicts(query or "", related):
+            return {"status": "abstain"}
+        if not result.get("walked") and _answer_rejected(query or "", str(result.get("span") or ""), edges):
+            return {"status": "abstain"}
     return result
 
 
@@ -774,6 +816,12 @@ def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str
         if role is not None:
             return role
     if not parsed:
+        made = _unique_maker(query or "", edges)
+        if made is not None:
+            return made
+        tower = _counted_lens_tower(query or "", edges)
+        if tower is not None:
+            return tower
         return None
     if parsed.get("status") in {"answer", "abstain"}:
         return parsed

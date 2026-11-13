@@ -748,42 +748,9 @@ class MemoryService:
                     return self._ack_turn(conv_id, user_msg, note, "statement_ack")
             experts = self.expert_records()
             asked = self_ask(content)
-            if asked == "assistant":
-                text = "I'm Yingyu. I remember what you tell me." if self._ui_locale() == "en" else "我是萤语，帮你记住你告诉我的事。"
-                recall = statement_trace()
-                recall["reason"] = "assistant_intro"
-                recall["reason_text"] = "这是在问助手自己，不使用关于你的记忆"
-                decision = route_with_trace(content, [], None)[0]
-                decision.reason = "assistant_intro"
-                decision.label = "基座"
-                decision.fired = False
-                return self._finish_turn(conv_id, user_msg, text, decision, recall)
-            from memory_core.span_guard import (
-                asks_memory_chain,
-                fixed_refusal,
-                is_open_task,
-                memory_attribute_question,
-            )
+            from memory_core.span_guard import fixed_refusal, is_open_task
 
             open_task = is_open_task(content)
-            if asks_memory_chain(content) and not open_task and not any(
-                isinstance(fact, dict) and not fact.get("superseded")
-                for record in experts
-                for fact in ((record.fact_memory or {}).get("facts") or [])
-            ):
-                decision = route_with_trace(content, [], None)[0]
-                decision.fired = False
-                decision.reason = "memory_miss"
-                decision.label = "基座"
-                decision.expert = None
-                recall = statement_trace()
-                recall["reason"] = "memory_miss"
-                recall["abstain"] = True
-                recall["fired"] = False
-                recall["mounted"] = False
-                recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
-                return self._finish_turn(conv_id, user_msg, fixed_refusal(content), decision, recall)
-            memory_block = ""
             if stated and utterance_is_question(content) and not asked and not open_task:
                 from memory_core.fact_reader import answer_stated_question
 
@@ -814,6 +781,39 @@ class MemoryService:
                 recall["abstain"] = True
                 recall["reason_text"] = "事实已经记下，但这句问的取值不在记忆里"
                 return self._finish_turn(conv_id, user_msg, fixed_refusal(content), decision, recall)
+            if asked == "assistant":
+                text = "I'm Yingyu. I remember what you tell me." if self._ui_locale() == "en" else "我是萤语，帮你记住你告诉我的事。"
+                recall = statement_trace()
+                recall["reason"] = "assistant_intro"
+                recall["reason_text"] = "这是在问助手自己，不使用关于你的记忆"
+                decision = route_with_trace(content, [], None)[0]
+                decision.reason = "assistant_intro"
+                decision.label = "基座"
+                decision.fired = False
+                return self._finish_turn(conv_id, user_msg, text, decision, recall)
+            from memory_core.span_guard import (
+                asks_memory_chain,
+                memory_attribute_question,
+            )
+
+            if asks_memory_chain(content) and not open_task and not any(
+                isinstance(fact, dict) and not fact.get("superseded")
+                for record in experts
+                for fact in ((record.fact_memory or {}).get("facts") or [])
+            ):
+                decision = route_with_trace(content, [], None)[0]
+                decision.fired = False
+                decision.reason = "memory_miss"
+                decision.label = "基座"
+                decision.expert = None
+                recall = statement_trace()
+                recall["reason"] = "memory_miss"
+                recall["abstain"] = True
+                recall["fired"] = False
+                recall["mounted"] = False
+                recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
+                return self._finish_turn(conv_id, user_msg, fixed_refusal(content), decision, recall)
+            memory_block = ""
             if utterance_is_question(content) and not asked and not open_task:
                 read = self._read_memory(content, experts)
                 if read is not None:
@@ -1168,25 +1168,8 @@ class MemoryService:
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
                 elif linked and linked.get("status") == "answer":
-                    from memory_core.answer_type import accept_span
-                    from memory_core.span_guard import statement_of
-
-                    span = str(linked["span"])
-                    host = statement_of(linked.get("fact") or {})
-                    if accept_span(content, span, host) and (
-                        not fact_answer
-                        or _refusal_answer(fact_answer)
-                        or len(fact_answer) > 18
-                        or not accept_span(content, fact_answer.strip().rstrip("。"), host)
-                    ):
-                        fact_answer = span if span[-1:] in "。." else span + "。"
-                        owner = next(
-                            (record for record in experts if linked["fact"] in ((record.fact_memory or {}).get("facts") or [])),
-                            None,
-                        )
-                        if owner is not None:
-                            mount_memory(decision, recall, owner, [linked["fact"]], "entity_first")
-                            recall["reason_text"] = "回答是顺着已经记下的关系摘出来的"
+                    # 角色和关系只由图上的边回答。这条旧摘录不再把看守安到工匠或别的实体上。
+                    pass
             if utterance_is_question(content) and not open_task and not graph_locked:
                 from memory_core.answer_type import accept_span, choose_typed, grounded_subjects, memory_topic, question_kind
                 from memory_core.span_guard import fixed_refusal, statement_of
@@ -1294,7 +1277,17 @@ class MemoryService:
                     sides = [choice_match.group(1).strip(), choice_match.group(2).strip("？?。 ")]
                     hits = []
                     for side in sides:
-                        if any(side and (side in statement_of(fact) or side == str(fact.get("value") or "")) for fact in remembered):
+                        plain = re.sub(r"(?:色|的)+$", "", side)
+                        if any(
+                            side
+                            and (
+                                side in statement_of(fact)
+                                or side == str(fact.get("value") or "")
+                                or (plain and plain in statement_of(fact))
+                                or (plain and plain in str(fact.get("value") or ""))
+                            )
+                            for fact in remembered
+                        ):
                             hits.append(side)
                     if len(hits) == 1:
                         stored_side = hits[0]
@@ -1427,7 +1420,7 @@ class MemoryService:
                     recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
                     recall["mounted_expert"] = None
                     recall["mounted_label"] = "基座"
-            if not fact_answer and not open_task:
+            if (not fact_answer or _refusal_answer(fact_answer or "")) and not open_task:
                 from memory_core.world_facts import world_reply
 
                 remembered_names = []
@@ -1439,6 +1432,8 @@ class MemoryService:
                             if name:
                                 remembered_names.append(name)
                 world = world_reply(content, remembered_names)
+                if world and world.startswith("我不知道") and fact_answer:
+                    world = None
                 if world:
                     fact_answer = world
                     decision.fired = False

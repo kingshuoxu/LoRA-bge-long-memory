@@ -1626,23 +1626,87 @@ def supports_asked_entity(query: str, span: str, statement: str, rows: list[dict
     return False
 
 
-def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
-    """关系链和单句摘录都要过同一种类检查。对不上就当没答出来。"""
-    from memory_core.fact_graph import resolve_graph
+def relation_question(query: str) -> bool:
+    """问的是角色或关系，不是这个实体自己的颜色、年份、高度这类属性。"""
+    text = query or ""
+    if "谁" in text:
+        return True
+    return bool(re.search(
+        r"女儿|闺女|丫头|儿子|父亲|母亲|爸爸|妈妈|妻子|丈夫|爱人|老婆|老公|主人|"
+        r"养的|饲养|看守|守护|守塔|看顾|工匠|师傅|接班|值守|看管|照管|照看|看护|配偶",
+        text,
+    ))
+
+
+def modifier_conflicts(query: str, facts: list[dict]) -> bool:
+    """问句里的颜色或年份和这些事实对不上，就不能用这些事实来答。"""
     from memory_core.span_guard import statement_of
+
+    text = query or ""
+    if re.search(r"是.+还是", text):
+        text = re.split(r"是.+还是", text, maxsplit=1)[0]
+    colors = [color for color in sorted(_COLOURS, key=len, reverse=True) if color in text]
+    years = re.findall(r"[0-9]{3,4}(?=年)|[一二三四五六七八九零〇]{2,4}(?=年)", text)
+    if not colors and not years:
+        return False
+    blob = "\n".join(statement_of(fact) for fact in facts if isinstance(fact, dict))
+    for color in colors:
+        if color not in blob and not any(color in longer for longer in colors if longer != color and longer in blob):
+            return True
+    for year in years:
+        if year not in blob:
+            return True
+    return False
+
+
+def exact_attribute_lookup(query: str, facts: list[dict]) -> tuple[str, dict] | None:
+    """只回答问句里原样出现的那个实体自己的属性。角色和关系不走这里。"""
+    if relation_question(query):
+        return None
+    from memory_core.fact_span import entity_mentioned, near_miss_span
+    from memory_core.span_guard import statement_of
+
+    names: list[str] = []
+    for fact in facts:
+        entity = str(fact.get("entity") or "").strip()
+        if not entity or not entity_mentioned(entity, query):
+            continue
+        if near_miss_span(entity, query):
+            continue
+        if entity not in names:
+            names.append(entity)
+    if len(names) != 1:
+        return None
+    entity = names[0]
+    own = [fact for fact in facts if str(fact.get("entity") or "") == entity]
+    if modifier_conflicts(query, own):
+        return None
+    for fact in own:
+        statement = statement_of(fact)
+        if "自行车" in statement and "自行车" not in query and re.search(r"汽车|的车|开车|辆车", query):
+            continue
+        if re.search(r"汽车|开车", statement) and "自行车" in query and "汽车" not in query:
+            continue
+        span = extract_span(query, statement)
+        if not span or span == entity:
+            continue
+        if answer_fits(query, span, statement):
+            return span, fact
+    return None
+
+
+def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
+    """图走通了才用那一跳。图没有这条链时，只回答同一个实体自己的属性。"""
+    from memory_core.fact_graph import resolve_graph
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
     graphed = resolve_graph(query, rows)
     if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
         return str(graphed.get("span") or ""), fact
-    picked = _choose_typed_inner(query, facts)
-    if not picked:
+    if graphed is not None and graphed.get("status") == "abstain":
         return None
-    span, fact = picked
-    if not supports_asked_entity(query, span, statement_of(fact), rows):
-        return None
-    return picked
+    return exact_attribute_lookup(query, rows)
 
 
 def _choose_typed_inner(query: str, facts: list[dict]) -> tuple[str, dict] | None:

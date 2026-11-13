@@ -37,6 +37,40 @@ class ChatIntakeTests(unittest.TestCase):
             self.assertTrue("没记过" in answer or "不在记忆里" in answer, answer)
 
 
+class ChatTurnTests(unittest.TestCase):
+    def _service(self, home: Path) -> MemoryService:
+        service = MemoryService(home=home, models_dir=home / "models", device="cpu", use_repo_experts=False)
+        service.ensure_ready = lambda: None
+        service.chat.ensure = lambda: None
+        service.chat.reply = lambda *args, **kwargs: "基座编的。"
+        service.chat.complete_base = lambda *args, **kwargs: "基座编的。"
+        service.chat.sync_adapters = lambda *args, **kwargs: None
+        return service
+
+    def test_same_turn_fact_and_question_answers_through_chat(self):
+        turns = (
+            ("我的自行车是朱红色。什么颜色？", "朱红"),
+            ("我的自行车是朱红色，什么颜色？", "朱红"),
+            ("江衡的猫叫小黑。小黑的主人是谁？", "江衡"),
+            ("江衡的猫叫小黑。它的主人是谁？", "江衡"),
+            ("江衡的猫叫小黑，它叫什么名字？", "小黑"),
+            ("江衡的猫叫小黑。它叫什么名字？", "小黑"),
+            ("灯塔是白色的。什么颜色？", "白"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self._service(Path(tmp))
+            for text, gold in turns:
+                conv = service.create_conversation()["id"]
+                answer = service.send_message(conv, text)["assistant"]["content"]
+                self.assertIn(gold, answer, text)
+                self.assertNotIn("不在记忆里", answer, text)
+                self.assertNotIn("基座编的", answer, text)
+            conv = service.create_conversation()["id"]
+            reported = service.send_message(conv, "她告诉我她住在南埠。")["assistant"]["content"]
+            self.assertNotIn("不在记忆里", reported)
+            self.assertNotIn("基座编的", reported)
+
+
 class JobRunningTests(unittest.TestCase):
     def test_finished_job_does_not_block_chat(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -503,7 +503,7 @@ def _finish(span: str) -> str:
 def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
     """前半句是陈述、后半句在问。刚记下的那条事实能对上问句时，就用它回答。"""
     found = read_memory(query, facts, None)
-    if found and not found.get("miss"):
+    if found and not found.get("miss") and not _premise_echo(query, str(found.get("text") or "")):
         return found
     for fact in reversed(facts):
         statement = str(fact.get("statement") or "").strip().rstrip("。")
@@ -526,6 +526,17 @@ def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
     return {"text": _finish(str(span)), "fact": fact, "miss": False}
 
 
+def _premise_echo(query: str, answer: str) -> bool:
+    """前半句里的人名不能当成后半句另一个角色的答案。"""
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    if len(pieces) < 2:
+        return False
+    span = re.sub(r"[。.!！？?\s]", "", answer or "")
+    if len(span) < 2 or span not in pieces[0] or span in pieces[-1]:
+        return False
+    return bool(re.search(r"谁|哪位|什么人|叫什么|叫啥", pieces[-1]))
+
+
 def _answer_from_same_fact(query: str, fact: dict) -> str:
     """后半句问的就是刚写下的那条。问主人给实体，问取值给取值。"""
     pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
@@ -536,7 +547,8 @@ def _answer_from_same_fact(query: str, fact: dict) -> str:
     value = str(fact.get("value") or "").strip()
     if not value or value == entity:
         return ""
-    if value in tail and re.search(r"主人|谁养|是谁", tail) and entity and entity not in tail:
+    asks_owner = bool(re.search(r"主人|谁养|是谁养", tail)) and bool(entity) and entity not in tail
+    if asks_owner and (value in tail or re.match(r"^[它他她这那]", tail)):
         return entity
     points_here = entity in tail or value in tail or bool(re.match(r"^[它他她这那]", tail))
     bare_attr = bool(re.match(r"^(?:什么颜色|啥颜色|什么色|哪里|哪儿|哪一年|哪年|叫什么|叫啥)", tail))
@@ -605,12 +617,8 @@ def read_memory(
         if span:
             return {"text": _finish(span), "fact": fact, "miss": False}
     if graphed is not None and graphed.get("status") == "abstain":
-        from memory_core.span_guard import fixed_refusal
-
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
-        from memory_core.span_guard import fixed_refusal
-
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.grounding import open_entity_question
@@ -641,8 +649,6 @@ def read_memory(
                 "负", "只", "把", "是", "在", "不", "照", "值", "站", "执", "看", "管",
             )):
                 continue
-            from memory_core.span_guard import fixed_refusal
-
             return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
     from memory_core.answer_type import choose_typed, grounded_subjects
@@ -656,6 +662,15 @@ def read_memory(
 
         if answer_fits(query, span, _statement(fact)):
             return {"text": _finish(span), "fact": fact, "miss": False}
+    from memory_core.answer_type import modifier_conflicts, relation_question
+    from memory_core.fact_span import entity_mentioned
+    from memory_core.span_guard import memory_entity_question
+
+    exact = any(entity_mentioned(str(fact.get("entity") or ""), query) for fact in facts)
+    if modifier_conflicts(query, [fact for fact in facts if exact and entity_mentioned(str(fact.get("entity") or ""), query)] or facts):
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    if relation_question(query) or (memory_entity_question(query) and not exact):
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if "我的" in query or query.startswith("我"):
         return None
     if not memory_question(query, facts, best, pool):

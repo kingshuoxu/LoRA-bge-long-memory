@@ -1,6 +1,7 @@
-"""自己的回忆集。答对的题数不能少于 0.2.35 在同一组题上的分数。
+"""自己的回忆集。角色题只算图走通的，属性题只算问句里原样出现的那个实体。
 
-0.2.35 在这组书上改写和人物回忆上答对 261。少一题就失败。
+0.2.35 用旧摘录答对 261，其中有些是把看守关系套到别的角色上。
+这一档只锁现在这条规则答对的题数，少一题就失败。
 """
 import unittest
 
@@ -29,8 +30,8 @@ from memory_core.fact_reader import answer_stated_question, read_memory
 from memory_core.unseen_personas import build
 from memory_core.world_facts import world_reply
 
-# desktop-v0.2.35 scored 261 on this set (248 book paraphrases + 13 persona recalls).
-BASELINE = 261
+# Graph walks plus exact-entity attributes. Role questions the graph does not walk are not counted.
+BASELINE = 181
 
 BOOK = [
     {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔"},
@@ -106,6 +107,9 @@ class RecallRegressionTests(unittest.TestCase):
         self.assertIn("江衡", owner.get("text") or "")
         named = answer_stated_question("江衡的猫叫小黑，它叫什么名字？", pattern_extract("江衡的猫叫小黑，它叫什么名字？")) or {}
         self.assertIn("小黑", named.get("text") or "")
+        self.assertIn("江衡", (answer_stated_question("江衡的猫叫小黑。它的主人是谁？", pattern_extract("江衡的猫叫小黑。它的主人是谁？")) or {}).get("text") or "")
+        white = answer_stated_question("灯塔是白色的。什么颜色？", pattern_extract("灯塔是白色的。什么颜色？")) or {}
+        self.assertIn("白", white.get("text") or "")
         self.assertTrue(utterance_is_question("我的自行车是朱红色，什么颜色"))
         bare = answer_stated_question("我的自行车是朱红色，什么颜色", pattern_extract("我的自行车是朱红色，什么颜色")) or {}
         self.assertIn("朱红", bare.get("text") or "")

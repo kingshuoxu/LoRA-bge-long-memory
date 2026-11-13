@@ -321,11 +321,17 @@ def abstain_reply(entity: str, text: str) -> str:
         if topic:
             return f"{topic} is not in memory."
         return f"I don't have that stored about {label}."
-    from memory_core.span_guard import _awkward_clause
+    from memory_core.span_guard import _awkward_clause, fixed_refusal
 
-    if topic and not _awkward_clause(topic):
+    if (
+        topic
+        and topic != label
+        and not _awkward_clause(topic)
+        and len(topic) >= 2
+        and not topic.endswith(("的", "是", "叫", "于", "谁"))
+    ):
         return f"{topic}不在记忆里。"
-    return "这件事不在记忆里。"
+    return fixed_refusal(text)
 
 
 def already_remembered(fact: dict[str, Any]) -> str:

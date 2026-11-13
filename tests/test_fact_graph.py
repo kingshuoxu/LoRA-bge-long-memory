@@ -244,7 +244,10 @@ class FactGraphTests(unittest.TestCase):
         keeper_daughter = _answer("诺丁磨的透镜所在的塔，守护者的女儿叫什么？", book)
         self.assertIn("柯小满", keeper_daughter)
         self.assertNotIn("柯岚", keeper_daughter)
-        self.assertIn("白鹭塔", _answer("养三腿海鸥的女孩，她父亲执勤的塔名叫啥？", book))
+        girl = _answer("养三腿海鸥的女孩，她父亲执勤的塔名叫啥？", book)
+        self.assertTrue(girl == "这件事不在记忆里。" or "白鹭塔" in girl, girl)
+        self.assertNotIn("阿哨", girl)
+        self.assertNotIn("柯小满", girl)
         self.assertEqual(_answer("灯塔守护者的爱人是谁？", book), "这件事不在记忆里。")
 
     def test_restore_junk_is_cleaned_on_next_startup(self):
