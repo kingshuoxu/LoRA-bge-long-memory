@@ -1681,8 +1681,12 @@ def exact_attribute_lookup(query: str, facts: list[dict]) -> tuple[str, dict] | 
     own = [fact for fact in facts if str(fact.get("entity") or "") == entity]
     if modifier_conflicts(query, own):
         return None
+    asked_things = [thing for thing in ("狗", "猫", "自行车", "汽车") if thing in (query or "")]
     for fact in own:
         statement = statement_of(fact)
+        attr = str(fact.get("attr") or "")
+        if any(thing not in statement and thing not in attr for thing in asked_things):
+            continue
         if "自行车" in statement and "自行车" not in query and re.search(r"汽车|的车|开车|辆车", query):
             continue
         if re.search(r"汽车|开车", statement) and "自行车" in query and "汽车" not in query:

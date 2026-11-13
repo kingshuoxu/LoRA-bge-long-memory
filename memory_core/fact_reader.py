@@ -671,6 +671,11 @@ def read_memory(
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if relation_question(query) or (memory_entity_question(query) and not exact):
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    for thing in ("狗", "猫", "自行车", "汽车"):
+        if thing in query and not any(
+            thing in _statement(fact) or thing in str(fact.get("attr") or "") for fact in facts
+        ):
+            return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if "我的" in query or query.startswith("我"):
         return None
     if not memory_question(query, facts, best, pool):
