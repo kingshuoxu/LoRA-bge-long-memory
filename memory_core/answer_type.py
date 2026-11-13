@@ -1687,6 +1687,8 @@ def exact_attribute_lookup(query: str, facts: list[dict]) -> tuple[str, dict] | 
         attr = str(fact.get("attr") or "")
         if any(thing not in statement and thing not in attr for thing in asked_things):
             continue
+        if "讨厌" in (query or "") and "讨厌" not in statement:
+            continue
         if "自行车" in statement and "自行车" not in query and re.search(r"汽车|的车|开车|辆车", query):
             continue
         if re.search(r"汽车|开车", statement) and "自行车" in query and "汽车" not in query:

@@ -678,6 +678,8 @@ def read_memory(
             thing in _statement(fact) or thing in str(fact.get("attr") or "") for fact in facts
         ):
             return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    if "讨厌" in query and not any("讨厌" in _statement(fact) for fact in facts):
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if "我的" in query or query.startswith("我"):
         return None
     if not memory_question(query, facts, best, pool):
