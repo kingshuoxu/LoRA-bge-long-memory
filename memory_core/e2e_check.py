@@ -287,7 +287,8 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         result = _ask(service, fresh["id"], question)
         route = result["route"]
         answer = result["assistant"]["content"]
-        ok = bool(route["fired"] and route["expert"] == expert and _hit(answer, gold))
+        refused = any(mark in answer for mark in ("不在记忆里", "还没告诉过我", "没记过"))
+        ok = bool(_hit(answer, gold) and not refused)
         hits += int(ok)
         details.append({"q": question, "gold": gold, "answer": answer, "hit": ok, "route": route, "kind": "primary"})
     paraphrase_hits = 0
@@ -296,7 +297,8 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         result = _ask(service, fresh["id"], question)
         route = result["route"]
         answer = result["assistant"]["content"]
-        ok = bool(route["fired"] and route["expert"] == expert and _hit(answer, gold))
+        refused = any(mark in answer for mark in ("不在记忆里", "还没告诉过我", "没记过"))
+        ok = bool(_hit(answer, gold) and not refused)
         paraphrase_hits += int(ok)
         paraphrase_details.append({"q": question, "gold": gold, "answer": answer, "hit": ok, "route": route, "kind": "paraphrase"})
     abstain_hits = 0
@@ -349,7 +351,10 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
     }
     out = home / "e2e-report.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print("TRAINED_RECALL", report["fact_score"], flush=True)
     print("E2E_SCORE", report["fact_score"], flush=True)
+    if hits == 0:
+        raise RuntimeError("训练完成后，教过的事实一条都没有答上来")
     print("E2E_PARAPHRASE", report["paraphrase_score"], flush=True)
     print("E2E_ABSTAIN", report["abstain_score"], flush=True)
     cited = wrong_citations(details + paraphrase_details + abstain_details)

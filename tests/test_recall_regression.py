@@ -1,7 +1,6 @@
-"""自己的回忆集。角色题只算图走通的，属性题只算问句里原样出现的那个实体。
+"""自己的回忆集。图走通的关系，和摘录能对上的改写，都不能再少。
 
-0.2.35 用旧摘录答对 261，其中有些是把看守关系套到别的角色上。
-这一档只锁现在这条规则答对的题数，少一题就失败。
+少一题就失败。训练后的回忆由安装包里的训练检查负责，不靠这里的解析器代替。
 """
 import unittest
 
@@ -30,8 +29,9 @@ from memory_core.fact_reader import answer_stated_question, read_memory
 from memory_core.unseen_personas import build
 from memory_core.world_facts import world_reply
 
-# Graph walks plus exact-entity attributes. Role questions the graph does not walk are not counted.
-BASELINE = 181
+# Book paraphrases the graph or the guarded reader can answer, plus persona recalls.
+# 0.2.35 scored 261 on this set by also using the unguarded reader.
+BASELINE = 267
 
 BOOK = [
     {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔"},

@@ -1701,18 +1701,50 @@ def exact_attribute_lookup(query: str, facts: list[dict]) -> tuple[str, dict] | 
     return None
 
 
+def _fallback_blocked(query: str, span: str, fact: dict) -> bool:
+    """摘录不能拿另一种事物或另一个角色来填。"""
+    from memory_core.span_guard import statement_of
+
+    statement = statement_of(fact)
+    attr = str(fact.get("attr") or "")
+    for thing in ("狗", "猫", "自行车", "汽车"):
+        if thing in (query or "") and thing not in statement and thing not in attr:
+            return True
+    if "讨厌" in (query or "") and "讨厌" not in statement:
+        return True
+    if modifier_conflicts(query, [fact]):
+        return True
+    if re.search(r"哪国|国籍", query or "") and not any(country in (span or "") for country in _COUNTRIES):
+        return True
+    if re.search(r"什么鸟|哪种鸟|什么动物|哪种动物", query or "") and re.search(r"女儿|父亲|爸爸|看守|守护", statement) and not re.search(r"鸟|海鸥|猫|狗", span or ""):
+        return True
+    return False
+
+
 def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
-    """图走通了才用那一跳。图没有这条链时，只回答同一个实体自己的属性。"""
+    """图走通了用那一跳。图没认出这条链时，再用摘录，但换一种事物就不答。"""
     from memory_core.fact_graph import resolve_graph
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
     graphed = resolve_graph(query, rows)
     if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
-        return str(graphed.get("span") or ""), fact
+        span = str(graphed.get("span") or "")
+        if _fallback_blocked(query, span, fact):
+            return None
+        return span, fact
     if graphed is not None and graphed.get("status") == "abstain":
         return None
-    return exact_attribute_lookup(query, rows)
+    picked = exact_attribute_lookup(query, rows)
+    if picked and not _fallback_blocked(query, picked[0], picked[1]):
+        return picked
+    picked = _choose_typed_inner(query, rows)
+    if not picked:
+        return None
+    span, fact = picked
+    if _fallback_blocked(query, span, fact):
+        return None
+    return picked
 
 
 def _choose_typed_inner(query: str, facts: list[dict]) -> tuple[str, dict] | None:

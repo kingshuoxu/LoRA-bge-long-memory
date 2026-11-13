@@ -832,13 +832,13 @@ def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str
         return {"status": "abstain"}
     parsed = _parse(query, edges)
     if not parsed or parsed.get("status") == "abstain":
+        nation = _maker_nationality(query or "", edges)
+        if nation is not None:
+            return nation
         role = _keeper_role(query or "", edges)
         if role is not None:
             return role
     if not parsed:
-        nation = _maker_nationality(query or "", edges)
-        if nation is not None:
-            return nation
         made = _unique_maker(query or "", edges)
         if made is not None:
             return made

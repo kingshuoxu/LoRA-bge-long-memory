@@ -618,8 +618,7 @@ def read_memory(
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
         if span:
             return {"text": _finish(span), "fact": fact, "miss": False}
-    if graphed is not None and graphed.get("status") == "abstain":
-        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
+    # 图弃权不再挡住训练后的专家。只有会引用错取值的情况才在这里停住。
     if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.fact_span import entity_mentioned, near_miss_span
@@ -664,14 +663,11 @@ def read_memory(
 
         if answer_fits(query, span, _statement(fact)):
             return {"text": _finish(span), "fact": fact, "miss": False}
-    from memory_core.answer_type import modifier_conflicts, relation_question
+    from memory_core.answer_type import modifier_conflicts
     from memory_core.fact_span import entity_mentioned
-    from memory_core.span_guard import memory_entity_question
 
     exact = any(entity_mentioned(str(fact.get("entity") or ""), query) for fact in facts)
     if modifier_conflicts(query, [fact for fact in facts if exact and entity_mentioned(str(fact.get("entity") or ""), query)] or facts):
-        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
-    if relation_question(query) or (memory_entity_question(query) and not exact):
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     for thing in ("狗", "猫", "自行车", "汽车"):
         if thing in query and not any(

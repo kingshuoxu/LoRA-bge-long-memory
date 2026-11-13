@@ -215,6 +215,29 @@ def _public_fact(fact: dict) -> dict[str, Any]:
 _CHAPTER = re.compile(r"第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇]")
 
 
+def _reader_blocks_trained(content: str, experts: list) -> bool:
+    """近名、没养过的宠物、问讨厌却只记下喜欢，这些不能交给训练后的专家编。"""
+    from memory_core.fact_span import entity_mentioned, near_miss_span
+
+    rows = []
+    for record in experts:
+        for fact in (getattr(record, "fact_memory", None) or {}).get("facts") or []:
+            if isinstance(fact, dict) and not fact.get("superseded"):
+                rows.append(fact)
+    for fact in rows:
+        entity = str(fact.get("entity") or "").strip()
+        if entity and near_miss_span(entity, content) and not entity_mentioned(entity, content):
+            return True
+    for thing in ("狗", "猫", "自行车", "汽车"):
+        if thing in (content or "") and rows and not any(
+            thing in str(fact.get("statement") or "") or thing in str(fact.get("attr") or "") for fact in rows
+        ):
+            return True
+    if "讨厌" in (content or "") and rows and not any("讨厌" in str(fact.get("statement") or "") for fact in rows):
+        return True
+    return False
+
+
 def _refusal_answer(text: str) -> bool:
     return any(mark in (text or "") for mark in (
         "不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我",
@@ -1059,7 +1082,8 @@ class MemoryService:
                 checked = accept_aligned(content, short, {"statement": fact_answer}) if short else ""
                 if checked:
                     fact_answer = checked if checked[-1] in "。." else checked + "。"
-            if not fact_answer and memory_block:
+            block_trained = _reader_blocks_trained(content, experts)
+            if not fact_answer and memory_block and (not decision.fired or block_trained):
                 fact_answer = memory_block
                 decision.fired = False
                 decision.expert = None
