@@ -550,21 +550,28 @@ def _answer_from_same_fact(query: str, fact: dict) -> str:
     if not value or value == entity:
         return ""
     asks_owner = bool(re.search(r"主人|谁养|是谁养", tail)) and bool(entity) and entity not in tail
-    if asks_owner and (value in tail or re.match(r"^[它他她这那]", tail)):
+    pet_fact = bool(re.search(r"猫|狗|鸟|宠物|名字", f"{fact.get('attr') or ''}{fact.get('statement') or ''}"))
+    if asks_owner and pet_fact and (value in tail or value in (query or "") or re.match(r"^[它他她这那]", tail)):
         return entity
-    points_here = entity in tail or value in tail or bool(re.match(r"^[它他她这那]", tail))
-    bare_attr = bool(re.match(r"^(?:什么颜色|啥颜色|什么色|哪里|哪儿|哪一年|哪年|叫什么|叫啥)", tail))
-    if not points_here and not bare_attr:
-        return ""
-    if re.search(r"什么颜色|啥颜色|什么色", tail) and re.search(r"色", value):
+    if re.search(r"什么颜色|啥颜色|什么色|颜色", tail) and re.search(r"色", value):
         return value
-    if re.search(r"哪里|哪儿|什么地方", tail) and value not in tail:
+    if re.search(r"哪里|哪儿|什么地方|住在哪|住哪", tail) and re.search(r"住|址", f"{fact.get('attr') or ''}{fact.get('statement') or ''}"):
         return value
     if re.search(r"哪一年|哪年|什么时候", tail) and re.search(r"\d|年", value):
+        if re.search(r"拆除|去世|逝世", tail) and not re.search(r"拆除|去世|逝世", str(fact.get("statement") or "")):
+            return ""
         return value
-    if re.search(r"叫什么|叫啥|什么名字", tail) and value not in tail and not re.search(r"主人|父亲|女儿", tail):
+    if re.search(r"叫什么|叫啥|什么名字", tail) and value not in tail and not re.search(r"主人|父亲|女儿|颜色|哪里|哪年", tail):
         return value
     return ""
+
+
+def _reader_ok(query: str, span: str, fact: dict | None) -> bool:
+    from memory_core.answer_type import reader_subject_ok
+
+    if not isinstance(fact, dict):
+        return False
+    return reader_subject_ok(query, span, fact)
 
 
 def _entity_supported(query: str, span: str, fact: dict, facts: list[dict]) -> bool:
@@ -616,7 +623,7 @@ def read_memory(
     if graphed is not None and graphed.get("status") == "answer":
         span = str(graphed.get("span") or "").strip()
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
-        if span:
+        if span and (graphed.get("walked") or _reader_ok(query, span, fact)):
             return {"text": _finish(span), "fact": fact, "miss": False}
     # 图弃权不再挡住训练后的专家。只有会引用错取值的情况才在这里停住。
     if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
@@ -661,7 +668,7 @@ def read_memory(
         span, fact = picked
         from memory_core.answer_type import answer_fits
 
-        if answer_fits(query, span, _statement(fact)):
+        if answer_fits(query, span, _statement(fact)) and (not fact or _reader_ok(query, span, fact)):
             return {"text": _finish(span), "fact": fact, "miss": False}
     from memory_core.answer_type import modifier_conflicts
     from memory_core.fact_span import entity_mentioned
@@ -693,12 +700,12 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts):
+            if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts) and _reader_ok(query, checked, fact):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts):
+        if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts) and _reader_ok(query, checked, fact):
             return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}
 

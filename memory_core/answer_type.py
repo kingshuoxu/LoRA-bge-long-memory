@@ -1721,8 +1721,73 @@ def _fallback_blocked(query: str, span: str, fact: dict) -> bool:
     return False
 
 
+_ROLE_GROUPS = (
+    ("女儿", "闺女", "丫头"),
+    ("儿子", "小子"),
+    ("父亲", "爸爸", "老爸", "爹"),
+    ("母亲", "妈妈"),
+    ("妻子", "老婆", "太太", "爱人"),
+    ("丈夫", "老公"),
+    ("主人",),
+    ("看守", "守护", "守塔", "值守", "看顾"),
+    ("工匠", "师傅", "打磨", "磨镜"),
+    ("宠物", "养的", "饲养"),
+)
+
+
+def _relation_stored(query: str, statement: str) -> bool:
+    """问到的那种关系必须写在这一句里。看守不能拿去回答工匠。"""
+    asked = [group for group in _ROLE_GROUPS if any(word in (query or "") for word in group)]
+    if not asked:
+        return True
+    return all(any(word in (statement or "") for word in group) for group in asked)
+
+
+def _doubled_name(name: str, query: str) -> bool:
+    """江晚写成江晚晚，仍然是另一个名字。"""
+    if not name or len(name) < 2 or not any("\u4e00" <= char <= "\u9fff" for char in name):
+        return False
+    return (name + name[-1]) in (query or "") or (name[0] + name) in (query or "")
+
+
+def reader_subject_ok(query: str, span: str, fact: dict) -> bool:
+    """摘录的答案必须是问句里原样点到的那个实体的取值，而且属性和问句一致。"""
+    from memory_core.fact_span import entity_mentioned, near_miss_span
+    from memory_core.span_guard import statement_of
+
+    entity = str(fact.get("entity") or "").strip()
+    value = str(fact.get("value") or "").strip()
+    statement = statement_of(fact)
+    span = (span or "").strip().rstrip("。")
+    if not span or not entity or span == entity:
+        return False
+    if not entity_mentioned(entity, query) or near_miss_span(entity, query) or _doubled_name(entity, query):
+        return False
+    if span != value and span not in value and value not in span and span not in statement:
+        return False
+    if modifier_conflicts(query, [fact]):
+        return False
+    if relation_question(query) and not _relation_stored(query, statement):
+        return False
+    if re.search(r"拆除|拆掉|去世|逝世|死于", query or "") and not re.search(r"拆除|拆掉|去世|逝世|死于", statement):
+        return False
+    if re.search(r"建于|建成|哪一年建|哪年建", query or "") and "建" not in statement and re.search(r"改|电", statement):
+        return False
+    if re.search(r"开始", query or "") and "开始" not in statement and re.search(r"建于|建成", statement):
+        return False
+    if "宠物" in (query or "") and "猫" not in (query or "") and "狗" not in (query or "") and not re.search(r"猫|狗|鸟|宠物", statement):
+        return False
+    if re.search(r"什么鸟|哪种鸟|什么动物|哪种动物", query or "") and not re.search(r"鸟|海鸥|猫|狗|动物", span):
+        return False
+    if re.search(r"哪国|国籍", query or "") and not any(country in span for country in _COUNTRIES):
+        return False
+    if _fallback_blocked(query, span, fact):
+        return False
+    return answer_fits(query, span, statement)
+
+
 def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
-    """图走通了用那一跳。图没认出这条链时，再用摘录，但换一种事物就不答。"""
+    """图走通了用那一跳。摘录必须对上问句里的那个实体和那种属性。"""
     from memory_core.fact_graph import resolve_graph
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
@@ -1730,19 +1795,18 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
         span = str(graphed.get("span") or "")
-        if _fallback_blocked(query, span, fact):
-            return None
-        return span, fact
+        if graphed.get("walked") or reader_subject_ok(query, span, fact):
+            return span, fact
+    picked = exact_attribute_lookup(query, rows)
+    if picked and reader_subject_ok(query, picked[0], picked[1]):
+        return picked
     if graphed is not None and graphed.get("status") == "abstain":
         return None
-    picked = exact_attribute_lookup(query, rows)
-    if picked and not _fallback_blocked(query, picked[0], picked[1]):
-        return picked
     picked = _choose_typed_inner(query, rows)
     if not picked:
         return None
     span, fact = picked
-    if _fallback_blocked(query, span, fact):
+    if not reader_subject_ok(query, span, fact):
         return None
     return picked
 

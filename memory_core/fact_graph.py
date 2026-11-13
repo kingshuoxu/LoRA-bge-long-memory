@@ -472,7 +472,7 @@ def _choice(text: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str
         fact_text = _statement(unique[0][1])
         head_tokens = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", head)
         if start or any(token in fact_text for token in head_tokens):
-            return {"status": "answer", "span": unique[0][0], "fact": unique[0][1]}
+            return {"status": "answer", "span": unique[0][0], "fact": unique[0][1], "walked": True}
         return None
     if start:
         return {"status": "abstain"}
@@ -675,7 +675,7 @@ def _keeper_role(query: str, edges: list[tuple[str, str, str, str, dict]]) -> di
             if src == keeper and rel == "daughter"
         ]
         if len(children) == 1:
-            return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
+            return {"status": "answer", "span": children[0][0], "fact": children[0][1], "walked": True}
         return {"status": "abstain"}
     if re.search(r"爱人|妻子|老婆|太太|工匠|师傅", query or ""):
         return {"status": "abstain"}
@@ -690,7 +690,10 @@ def _keeper_role(query: str, edges: list[tuple[str, str, str, str, dict]]) -> di
     ]
     if others:
         return {"status": "abstain"}
-    return {"status": "answer", "span": keeper, "fact": kept[0][1]}
+    walked = bool(re.search(r"守塔人|看守人|守护人|看守者|守护者|守塔的人", query or "")) and not re.search(
+        r"女儿|闺女|工匠|师傅|宠物|爱人|妻子|父亲|狗|猫", query or ""
+    )
+    return {"status": "answer", "span": keeper, "fact": kept[0][1], "walked": walked}
 
 
 def _unnamed_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) -> dict[str, Any] | None:
@@ -710,7 +713,7 @@ def _unnamed_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) ->
             if src == names[0] and rel == "daughter"
         ]
         if len(children) == 1:
-            return {"status": "answer", "span": children[0][0], "fact": children[0][1]}
+            return {"status": "answer", "span": children[0][0], "fact": children[0][1], "walked": True}
         return {"status": "abstain"}
     if re.search(r"父亲|爸爸|爸|爹|妻子|老婆|太太|爱人|对象|媳妇|先生|夫人|老伴|另一半|内人|那口子|配偶", query or ""):
         return {"status": "abstain"}
@@ -863,12 +866,12 @@ def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str
         if re.search(r"打磨|磨了|磨的|磨成", asked):
             made = [(src, host) for src, rel, dst, _obj, host in edges if rel == "maker" and dst == parsed["start"]]
             if len(made) == 1:
-                return {"status": "answer", "span": made[0][0], "fact": made[0][1]}
+                return {"status": "answer", "span": made[0][0], "fact": made[0][1], "walked": True}
             return {"status": "abstain"}
         if re.search(r"守护|看守|值守", asked):
             kept = [(dst, host) for src, rel, dst, _obj, host in edges if rel == "keeps" and src == parsed["start"]]
             if len(kept) == 1:
-                return {"status": "answer", "span": kept[0][0], "fact": kept[0][1]}
+                return {"status": "answer", "span": kept[0][0], "fact": kept[0][1], "walked": True}
             return {"status": "abstain"}
         if re.search(r"是哪座", asked):
             return {"status": "abstain"}
@@ -904,12 +907,12 @@ def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str
                     return {"status": "abstain"}
                 if len(towers) == 1:
                     host = next(host for _src, rel, dst, _obj, host in edges if rel == "keeps" and dst == towers[0])
-                    return {"status": "answer", "span": towers[0], "fact": host}
+                    return {"status": "answer", "span": towers[0], "fact": host, "walked": True}
                 return {"status": "abstain"}
             if len(named) == 1:
-                return {"status": "answer", "span": named[0][0], "fact": named[0][1]}
+                return {"status": "answer", "span": named[0][0], "fact": named[0][1], "walked": True}
             if resolved_via == "nationality":
-                return {"status": "answer", "span": node, "fact": owners[0][2]}
+                return {"status": "answer", "span": node, "fact": owners[0][2], "walked": True}
             return {"status": "abstain"}
         return {"status": "answer", "span": node, "fact": fact, "walked": True}
     obj = parsed.get("object") or ""
@@ -926,7 +929,7 @@ def _resolve_graph(query: str, rows: list[dict], edges: list[tuple[str, str, str
         seasons = [(dst, host) for _src, rel, dst, _obj, host in edges if rel == "started"]
         unique = list(dict.fromkeys(dst for dst, _host in seasons))
         if len(unique) == 1:
-            return {"status": "answer", "span": unique[0], "fact": seasons[0][1]}
+            return {"status": "answer", "span": unique[0], "fact": seasons[0][1], "walked": True}
     if picked is None:
         return {"status": "abstain"}
-    return {"status": "answer", "span": picked[0], "fact": picked[1]}
+    return {"status": "answer", "span": picked[0], "fact": picked[1], "walked": True}

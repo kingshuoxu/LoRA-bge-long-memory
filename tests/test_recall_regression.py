@@ -29,9 +29,9 @@ from memory_core.fact_reader import answer_stated_question, read_memory
 from memory_core.unseen_personas import build
 from memory_core.world_facts import world_reply
 
-# Book paraphrases the graph or the guarded reader can answer, plus persona recalls.
-# 0.2.35 scored 261 on this set by also using the unguarded reader.
-BASELINE = 267
+# After the reader post-check: the span has to be that exact entity's stored value,
+# and the predicate has to match the question. 0.2.40 scored higher by skipping this.
+BASELINE = 173
 
 BOOK = [
     {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔"},
@@ -98,6 +98,17 @@ class RecallRegressionTests(unittest.TestCase):
             self.assertNotIn(forbidden, answer, question)
             self.assertIn("不在记忆里", answer, question)
 
+    def test_reader_requires_exact_subject_and_attribute(self):
+        book = BOOK + [{"entity": "江晚", "statement": "江晚的女儿是江小满。", "value": "江小满"}]
+        doubled = _text("江晚晚的女儿叫什么？", book)
+        self.assertNotIn("江小满", doubled)
+        self.assertIn("不在记忆里", doubled)
+        red = _text("红色的白鹭塔叫什么？", BOOK)
+        self.assertNotIn("白鹭塔", red)
+        other_year = _text("白鹭塔哪一年拆除？", BOOK)
+        self.assertNotIn("1873", other_year)
+        self.assertNotIn("1931", other_year)
+
     def test_same_fact_question_and_reported_speech(self):
         self.assertFalse(utterance_is_question("她告诉我她住在南埠。"))
         self.assertFalse(utterance_is_question("我的猫叫咪咪"))
@@ -113,6 +124,8 @@ class RecallRegressionTests(unittest.TestCase):
         self.assertTrue(utterance_is_question("我的自行车是朱红色，什么颜色"))
         bare = answer_stated_question("我的自行车是朱红色，什么颜色", pattern_extract("我的自行车是朱红色，什么颜色")) or {}
         self.assertIn("朱红", bare.get("text") or "")
+        other = answer_stated_question("我的自行车是朱红色。它是哪年买的？", pattern_extract("我的自行车是朱红色。它是哪年买的？")) or {}
+        self.assertNotIn("朱红", other.get("text") or "")
 
     def test_choice_and_capitals(self):
         answer = _text("江小满的自行车是天青色还是墨黑？", [
