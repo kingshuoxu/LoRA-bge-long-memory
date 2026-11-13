@@ -561,6 +561,10 @@ def _answer_from_same_fact(query: str, fact: dict) -> str:
         if re.search(r"拆除|去世|逝世", tail) and not re.search(r"拆除|去世|逝世", str(fact.get("statement") or "")):
             return ""
         return value
+    role_words = ("照管", "看顾", "接班", "值守", "看守", "守护", "看管", "照看", "父亲", "女儿", "工匠", "师傅")
+    asked_roles = [word for word in role_words if word in tail]
+    if asked_roles and not any(word in str(fact.get("statement") or "") for word in asked_roles):
+        return ""
     if re.search(r"叫什么|叫啥|什么名字", tail) and value not in tail and not re.search(r"主人|父亲|女儿|颜色|哪里|哪年", tail):
         return value
     return ""
