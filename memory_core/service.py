@@ -235,6 +235,26 @@ def _reader_blocks_trained(content: str, experts: list) -> bool:
             return True
     if "讨厌" in (content or "") and rows and not any("讨厌" in str(fact.get("statement") or "") for fact in rows):
         return True
+    return _premise_asks_other_role(content, rows)
+
+
+def _premise_asks_other_role(content: str, rows: list[dict]) -> bool:
+    """前半句点出一个已经记下的人，后半句问另一个角色。不能把前半句的人名交回去。"""
+    from memory_core.answer_type import relation_question
+
+    if not relation_question(content):
+        return False
+    parts = [part.strip() for part in re.split(r"[。！？\n；;，,]+", content or "") if part.strip()]
+    if len(parts) < 2:
+        return False
+    head, tail = parts[0], parts[-1]
+    if not re.search(r"谁|叫什么|叫啥|哪位|那位", tail):
+        return False
+    for fact in rows:
+        for token in (str(fact.get("entity") or ""), str(fact.get("value") or "")):
+            token = token.strip()
+            if len(token) >= 2 and token in head and token not in tail:
+                return True
     return False
 
 
@@ -1083,8 +1103,10 @@ class MemoryService:
                 if checked:
                     fact_answer = checked if checked[-1] in "。." else checked + "。"
             block_trained = _reader_blocks_trained(content, experts)
-            if not fact_answer and memory_block and (not decision.fired or block_trained):
-                fact_answer = memory_block
+            if not fact_answer and (memory_block or block_trained) and (not decision.fired or block_trained):
+                from memory_core.span_guard import fixed_refusal
+
+                fact_answer = memory_block or fixed_refusal(content)
                 decision.fired = False
                 decision.expert = None
                 decision.label = "基座"
