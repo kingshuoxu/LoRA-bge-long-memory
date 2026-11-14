@@ -458,6 +458,25 @@ def memory_entity_question(text: str) -> bool:
     ))
 
 
+def clean_refusal(answer: str, query: str = "") -> str:
+    """弃权句只能是完整的一句。问句碎片粘在「不在记忆里」前面时，改回固定句。"""
+    text = (answer or "").strip()
+    if "不在记忆里" not in text:
+        return answer
+    head = text.split("不在记忆里", 1)[0]
+    if head.startswith("关于") or "记住的是" in text or head.startswith("我记得") or head.startswith("没有存过"):
+        if "还" in head and "还没" not in head:
+            return fixed_refusal(query)
+        return text
+    if head.startswith("这件事") or head.startswith("你还没告诉过我") or head.startswith("其余"):
+        return text
+    if "还" in head or len(head) <= 1 or (head and head[-1] in "叫是的于为和与被把给从向对让使由"):
+        return fixed_refusal(query)
+    if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", head):
+        return text if text.endswith("。") else f"{head}不在记忆里。"
+    return fixed_refusal(query)
+
+
 def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
     """固定句式。不把问句碎片粘进弃权。"""
     del facts

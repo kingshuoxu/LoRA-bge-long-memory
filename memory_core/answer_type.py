@@ -679,7 +679,7 @@ def names_then_asks(text: str) -> bool:
     for part in parts:
         if is_main_clause_question(part) or re.search(r"谁|叫什么|是哪|什么人", part):
             asking = True
-        elif is_declarative_fact(part) or re.search(r"[\u4e00-\u9fff]{2,4}(?:是|叫|在|有|养|做)", part):
+        elif is_declarative_fact(part) or re.search(r"[\u4e00-\u9fff]{2,4}(?:是|叫|在|有|养|做|担任|负责|当)", part):
             named = True
     return named and asking
 
@@ -695,6 +695,158 @@ def asks_memory_chain(query: str) -> bool:
         r"[\u4e00-\u9fff]{2,4}.{0,10}(?:打磨|守护|看守|养|磨).{0,18}的.{0,16}(?:谁|哪|什么|啥)",
         text,
     ))
+
+
+_PREMISE_NOT_NAME = {
+    "看守", "守护", "接班", "值守", "工匠", "师傅", "透镜", "灯塔", "这座", "那位",
+    "女儿", "父亲", "母亲", "主人", "海鸥", "什么", "负责", "打磨", "日常", "这个",
+    "那个", "一位", "哪位", "照管", "照看", "看顾", "磨镜", "镜片", "人们", "塔的",
+    "现在", "那么", "所以", "如果", "既然", "因为", "白色", "黑色", "颜色", "成立",
+    "我们", "他们", "她们", "它们", "自己", "别人", "这里", "那里",
+}
+
+
+def _trim_premise_name(window: str) -> str:
+    name = window or ""
+    changed = True
+    while changed and name:
+        changed = False
+        for prefix in ("既然", "如果", "因为", "所以", "那么", "既", "然", "如", "若", "正"):
+            if name.startswith(prefix) and len(name) - len(prefix) >= 2:
+                name = name[len(prefix):]
+                changed = True
+                break
+    if "的" in name:
+        name = name.split("的")[-1]
+    if len(name) < 2 or name in _PREMISE_NOT_NAME:
+        return ""
+    return name
+
+
+def premise_names(clause: str) -> list[str]:
+    """前半句里被点出来的人。角色词和带「的」的短语不是人名。"""
+    found: list[str] = []
+    text = clause or ""
+    for verb in ("担任", "负责", "当了", "当着", "是", "做", "叫", "在"):
+        start = 0
+        while True:
+            at = text.find(verb, start)
+            if at < 0:
+                break
+            name = _trim_premise_name(text[max(0, at - 3):at])
+            if name and name not in found:
+                found.append(name)
+            start = at + len(verb)
+    for match in re.finditer(r"(?:是|由|叫|为|归)([\u4e00-\u9fff]{2,3})", text):
+        name = _trim_premise_name(match.group(1))
+        if name and name not in found:
+            found.append(name)
+    return found
+
+
+def _role_keys(clause: str) -> list[str]:
+    text = re.sub(r"[？?。！!，,]", "", clause or "")
+    text = re.sub(
+        r"谁|哪位|哪一个|哪一位|什么人|那位|这位|叫什么|叫啥|什么名字|是不是|吗|呢|那么|请问|到底|究竟",
+        "",
+        text,
+    )
+    text = re.sub(r"这座|那座|这个|那个|一个人", "", text)
+    drop = {"什么", "怎么", "如何", "一个", "一下", "的人", "人是"}
+    return [key for key in re.findall(r"[\u4e00-\u9fff]{2,6}", text) if key not in drop]
+
+
+def _holds_role(name: str, key: str, text: str) -> bool:
+    """名字自己担任这个角色。「某人的女儿」里，某人不是女儿。"""
+    if not name or not key or name not in (text or "") or key not in text:
+        return False
+    if re.search(re.escape(name) + r"的.{0,4}" + re.escape(key), text):
+        return False
+    return True
+
+
+def premise_subject_blocked(query: str, span: str, facts: list[dict] | None = None) -> bool:
+    """前半句点出的人，不能拿来回答后半句的另一个角色，除非这个角色确实记在他身上。"""
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    if len(pieces) < 2:
+        return False
+    tail = pieces[-1]
+    if not re.search(r"谁|哪位|什么人|叫什么|叫啥|哪一个", tail):
+        return False
+    name = re.sub(r"[。.!！？?\s]", "", span or "")
+    if len(name) < 2 or name in tail:
+        return False
+    names: list[str] = []
+    for piece in pieces[:-1]:
+        for item in premise_names(piece):
+            if item not in names:
+                names.append(item)
+    if name not in names:
+        return False
+    keys = _role_keys(tail)
+    if not keys:
+        return True
+    texts = list(pieces[:-1])
+    for fact in facts or []:
+        if not isinstance(fact, dict):
+            continue
+        texts.append(str(fact.get("statement") or ""))
+        texts.append(f"{fact.get('attr') or ''}{fact.get('value') or ''}")
+    for key in keys:
+        if any(_holds_role(name, key, text) for text in texts):
+            return False
+    return True
+
+
+def stored_choice(query: str, facts: list[dict]) -> tuple[str, dict] | None:
+    """是A还是B里，只有一边写在记忆里时返回那一边。两边都没有、或两边都有，就不选。"""
+    match = re.search(r"是(.+?)还是(.+?)(?:[？?。！!]|$)", query or "")
+    if not match:
+        return None
+    sides = [match.group(1).strip(), match.group(2).strip("？?。！! ")]
+    named = [
+        str(fact.get("entity") or "")
+        for fact in facts
+        if isinstance(fact, dict) and len(str(fact.get("entity") or "")) >= 2 and str(fact.get("entity")) in (query or "")
+    ]
+    hits: list[tuple[str, dict]] = []
+    seen: set[str] = set()
+    for side in sides:
+        plain = re.sub(r"(?:色|的)+$", "", side)
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            value = str(fact.get("value") or "").strip().rstrip("。")
+            statement = str(fact.get("statement") or "")
+            blob = value + statement + str(fact.get("attr") or "")
+            matched = (len(side) >= 2 and side in blob) or (len(plain) >= 2 and plain in blob)
+            if not matched and len(value) >= 2 and value in side:
+                matched = True
+            if not matched:
+                continue
+            entity = str(fact.get("entity") or "")
+            if named and entity and entity not in named:
+                continue
+            if _choice_object_conflict(query, fact):
+                continue
+            key = plain or side
+            if key in seen:
+                break
+            seen.add(key)
+            span = value if value and (value in side or side in value or (plain and plain in value)) else side
+            hits.append((span, fact))
+            break
+    if len(hits) != 1:
+        return None
+    return hits[0]
+
+
+def _choice_object_conflict(query: str, fact: dict) -> bool:
+    statement = f"{fact.get('statement') or ''}{fact.get('attr') or ''}"
+    for thing in ("猫", "狗", "鸟", "自行车", "汽车"):
+        if thing in (query or "") and thing not in statement:
+            return True
+    return False
 
 
 def extract_span(query: str, statement: str) -> str:
@@ -1848,15 +2000,24 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     from memory_core.fact_graph import resolve_graph
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
+    def _kept(picked: tuple[str, dict] | None) -> tuple[str, dict] | None:
+        if not picked or premise_subject_blocked(query, picked[0], rows):
+            return None
+        return picked
+
     graphed = resolve_graph(query, rows)
     if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
         span = str(graphed.get("span") or "")
         if span_type_ok(query, span, fact) and (graphed.get("walked") or reader_subject_ok(query, span, fact)):
-            return span, fact
+            kept = _kept((span, fact))
+            if kept:
+                return kept
     picked = exact_attribute_lookup(query, rows)
     if picked and reader_subject_ok(query, picked[0], picked[1]):
-        return picked
+        kept = _kept(picked)
+        if kept:
+            return kept
     picked = _choose_typed_inner(query, rows)
     if not picked:
         return None
@@ -1870,7 +2031,7 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
         return None
     if not span_type_ok(query, span, fact):
         return None
-    return picked
+    return _kept(picked)
 
 
 def _choose_typed_inner(query: str, facts: list[dict]) -> tuple[str, dict] | None:

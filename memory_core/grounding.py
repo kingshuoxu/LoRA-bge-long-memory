@@ -323,6 +323,8 @@ def abstain_reply(entity: str, text: str) -> str:
         return f"I don't have that stored about {label}."
     from memory_core.span_guard import _awkward_clause, fixed_refusal
 
+    if "还是" in (text or "") or (topic and ("还" in topic or len(topic) <= 1)):
+        return fixed_refusal(text)
     if (
         topic
         and topic != label
@@ -330,7 +332,9 @@ def abstain_reply(entity: str, text: str) -> str:
         and len(topic) >= 2
         and not topic.endswith(("的", "是", "叫", "于", "谁"))
     ):
-        return f"{topic}不在记忆里。"
+        from memory_core.span_guard import clean_refusal
+
+        return clean_refusal(f"{topic}不在记忆里。", text)
     return fixed_refusal(text)
 
 
@@ -655,6 +659,15 @@ def resolve_stored_reply(
         if facts or not _legacy_expert(expert):
             return overview_reply(name, facts), expert, facts, "entity_overview"
         return _legacy_reply(name, content), expert, [], "legacy_retrain"
+    if re.search(r"是.+还是", content or ""):
+        from memory_core.answer_type import stored_choice
+        from memory_core.span_guard import fixed_refusal
+
+        picked = stored_choice(content, facts)
+        if picked:
+            span = picked[0]
+            return (span if span.endswith(("。", ".")) else span + "。"), expert, [picked[1]], "entity_first"
+        return fixed_refusal(content), expert, [], "entity_grounded"
     fact = _pick_fact(content, facts)
     if is_polar(content):
         if fact is None:

@@ -505,6 +505,12 @@ def answer_stated_question(query: str, facts: list[dict]) -> dict | None:
     found = read_memory(query, facts, None)
     if found and not found.get("miss") and not _premise_echo(query, str(found.get("text") or "")):
         return found
+    owned = _owner_in_turn(query)
+    if owned:
+        return {"text": _finish(owned), "fact": {"statement": query, "value": owned}, "miss": False}
+    polar = _polar_in_turn(query)
+    if polar:
+        return {"text": polar if polar.endswith(("。", ".")) else _finish(polar), "fact": {"statement": query, "value": polar}, "miss": False}
     for fact in reversed(facts):
         statement = str(fact.get("statement") or "").strip().rstrip("。")
         if not statement or statement not in (query or ""):
@@ -539,6 +545,84 @@ def _premise_echo(query: str, answer: str) -> bool:
     return bool(re.search(r"谁|哪位|什么人|叫什么|叫啥", pieces[-1]))
 
 
+def _owner_name(statement: str) -> str:
+    """这句话把东西归给了谁。颜色、年份不算主人。"""
+    text = statement or ""
+    named = re.search(r"主人是([\u4e00-\u9fffA-Za-z·]{2,8})", text)
+    if named:
+        return named.group(1)
+    owned = re.search(r"归([\u4e00-\u9fff]{2,4})所有", text)
+    if owned:
+        return owned.group(1)
+    given = re.search(r"(?:属于|归)([\u4e00-\u9fff]{2,4})", text)
+    if given and not given.group(1).startswith("所有"):
+        return given.group(1)
+    copula = re.search(r"是([\u4e00-\u9fff]{2,4})的", text)
+    if copula and "色" not in copula.group(1) and copula.group(1) not in {"什么", "谁", "哪"}:
+        return copula.group(1)
+    holder = re.match(r"^([\u4e00-\u9fff]{2,4})(?:有一|有个|有本|买了|养了|的)", text)
+    if holder and holder.group(1) not in {"这个", "那个", "这本", "这辆", "这台", "一个", "灯塔"}:
+        return holder.group(1)
+    return ""
+
+
+def _owner_in_turn(query: str) -> str:
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    if len(pieces) < 2:
+        return ""
+    tail = pieces[-1]
+    if not re.search(r"主人|车主|拥有者|所有者|归谁|属于谁|是谁的", tail):
+        return ""
+    return _owner_name("".join(pieces[:-1]))
+
+
+def _polar_in_turn(query: str) -> str:
+    from memory_core.extract import pattern_extract
+    from memory_core.paraphrase import is_polar
+
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    if len(pieces) < 2 or not is_polar(pieces[-1]):
+        return ""
+    facts = []
+    for piece in pieces[:-1]:
+        facts.extend(pattern_extract(piece))
+    return _polar_against_facts(pieces[-1], facts) or _polar_against_facts(query, facts)
+
+
+def _polar_against_facts(query: str, facts: list[dict]) -> str:
+    """是非题和已存取值比。对上就说是，对不上就用记住的值纠正。对不上关系就空着。"""
+    from memory_core.paraphrase import guessed_value, is_polar, polar_reply_from_fact
+    from memory_core.relations import query_relations, shares_relation
+
+    if not is_polar(query) or re.search(r"是.+还是", query or ""):
+        return ""
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
+    tail = pieces[-1] if pieces else query
+    asked = query_relations(tail) or query_relations(query)
+    hits: list[dict] = []
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if asked and not shares_relation(tail, str(fact.get("attr") or ""), str(fact.get("statement") or "")):
+            if not shares_relation(query, str(fact.get("attr") or ""), str(fact.get("statement") or "")):
+                continue
+        if not asked:
+            proposed = guessed_value(tail) or guessed_value(query) or ""
+            blob = f"{fact.get('value') or ''}{fact.get('statement') or ''}"
+            if not re.search(r"[0-9]{3,4}", proposed) or not re.search(r"[0-9]{3,4}", blob):
+                continue
+        entity = str(fact.get("entity") or "")
+        text = query or ""
+        if entity and len(entity) >= 2 and entity not in text and not re.search(r"它|这家|那家|这个公司|这家公司", text):
+            continue
+        hits.append(fact)
+    if len(hits) > 1 and re.search(r"它|这家|那家", query or ""):
+        hits = hits[-1:]
+    if len(hits) != 1:
+        return ""
+    return polar_reply_from_fact(tail, hits[0]) or polar_reply_from_fact(query, hits[0]) or ""
+
+
 def _answer_from_same_fact(query: str, fact: dict) -> str:
     """后半句问的就是刚写下的那条。问主人给实体，问取值给取值。"""
     pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", query or "") if part.strip()]
@@ -547,12 +631,27 @@ def _answer_from_same_fact(query: str, fact: dict) -> str:
     tail = pieces[-1]
     entity = str(fact.get("entity") or "").strip()
     value = str(fact.get("value") or "").strip()
+    statement = str(fact.get("statement") or "")
+    asks_who_owns = bool(re.search(r"主人|车主|拥有者|所有者|归谁|属于谁|是谁的|谁养|是谁养", tail))
+    owned = _owner_name(statement)
+    if asks_who_owns and owned and owned not in tail:
+        return owned
     if not value or value == entity:
         return ""
-    asks_owner = bool(re.search(r"主人|谁养|是谁养", tail)) and bool(entity) and entity not in tail
-    pet_fact = bool(re.search(r"猫|狗|鸟|宠物|名字", f"{fact.get('attr') or ''}{fact.get('statement') or ''}"))
+    asks_owner = asks_who_owns and bool(entity) and entity not in tail
+    pet_fact = bool(re.search(r"猫|狗|鸟|宠物|名字", f"{fact.get('attr') or ''}{statement}"))
     if asks_owner and pet_fact and (value in tail or value in (query or "") or re.match(r"^[它他她这那]", tail)):
         return entity
+    from memory_core.paraphrase import is_polar
+    from memory_core.relations import shares_relation
+
+    if is_polar(tail) and (
+        shares_relation(tail, str(fact.get("attr") or ""), statement)
+        or shares_relation(query, str(fact.get("attr") or ""), statement)
+    ):
+        reply = _polar_against_facts(tail, [fact])
+        if reply:
+            return reply
     if re.search(r"什么颜色|啥颜色|什么色|颜色", tail) and re.search(r"色", value):
         return value
     if re.search(r"哪里|哪儿|什么地方|住在哪|住哪", tail) and re.search(r"住|址", f"{fact.get('attr') or ''}{fact.get('statement') or ''}"):
@@ -568,6 +667,119 @@ def _answer_from_same_fact(query: str, fact: dict) -> str:
     if re.search(r"叫什么|叫啥|什么名字", tail) and value not in tail and not re.search(r"主人|父亲|女儿|颜色|哪里|哪年", tail):
         return value
     return ""
+
+
+def _premise_blocked(query: str, span: str, facts: list[dict]) -> bool:
+    from memory_core.answer_type import premise_subject_blocked
+
+    return premise_subject_blocked(query, span, facts)
+
+
+def spoken_facts(experts: list, history: list[dict] | None, content: str) -> list[dict]:
+    """已经巩固的事实，加上这一路对话里刚说完的陈述。"""
+    from memory_core.extract import pattern_extract
+
+    rows: list[dict] = []
+    for record in experts or []:
+        memory = getattr(record, "fact_memory", None) or {}
+        for fact in memory.get("facts") or []:
+            if isinstance(fact, dict) and not fact.get("superseded"):
+                rows.append(fact)
+    for item in history or []:
+        if item.get("role") == "user":
+            rows.extend(pattern_extract(item.get("content") or ""))
+    pieces = [part.strip() for part in re.split(r"[。！？\n；;，,]+", content or "") if part.strip()]
+    if len(pieces) >= 2:
+        for piece in pieces[:-1]:
+            rows.extend(pattern_extract(piece))
+    return rows
+
+
+def direct_memory_reply(query: str, facts: list[dict]) -> str | None:
+    """是非题拿已存取值纠正或确认。问句里的年份不能单独当成已经记住。"""
+    from memory_core.paraphrase import guessed_value, is_polar
+    from memory_core.span_guard import fixed_refusal, general_knowledge_question
+
+    if re.search(r"是.+还是", query or ""):
+        return None
+    if general_knowledge_question(query):
+        return None
+    polar = _polar_against_facts(query, facts)
+    if polar:
+        return polar if polar.endswith(("。", ".")) else _finish(polar)
+    proposed = guessed_value(query) or ""
+    if is_polar(query) and proposed and not _guess_is_stored(query, facts):
+        from memory_core.world_facts import stray_proper_names
+
+        entities = [str(fact.get("entity") or "") for fact in facts if isinstance(fact, dict)]
+        if re.search(r"[0-9]{3,4}", proposed) or stray_proper_names(query, entities):
+            return fixed_refusal(query, facts)
+    return None
+
+
+def _guess_is_stored(query: str, facts: list[dict]) -> bool:
+    from memory_core.paraphrase import _values_agree, guessed_value
+
+    proposed = guessed_value(query) or ""
+    years = re.findall(r"[0-9]{3,4}", proposed)
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        blob = f"{fact.get('statement') or ''}{fact.get('value') or ''}"
+        if years and any(year in blob for year in years):
+            return True
+        if proposed and _values_agree(proposed, str(fact.get("value") or "")):
+            return True
+    return False
+
+
+def settle_reply(query: str, answer: str, facts: list[dict]) -> str:
+    """模型交上来的句子再过一遍：前半句的人、问句里的年份、粘在一起的弃权，都不能留。"""
+    from memory_core.span_guard import clean_refusal, fixed_refusal
+    from memory_core.world_facts import world_reply
+
+    text = (answer or "").strip()
+    if _premise_blocked(query, text, facts):
+        return fixed_refusal(query, facts)
+    if _affirms_unsupported(query, text, facts):
+        polar = _polar_against_facts(query, facts)
+        return polar or fixed_refusal(query, facts)
+    text = clean_refusal(text, query)
+    if not facts and _invented_identity(query, text):
+        return "我不知道。"
+    sides = re.search(r"是(.+?)还是(.+?)(?:[？?。]|$)", query or "")
+    if sides:
+        left, right = sides.group(1).strip(), sides.group(2).strip("？?。 ")
+        if left and right and left in text and right in text:
+            world = world_reply(query, [str(fact.get("entity") or "") for fact in facts if isinstance(fact, dict)])
+            if world:
+                return world
+            return "我不知道。"
+    return text
+
+
+def _affirms_unsupported(query: str, answer: str, facts: list[dict]) -> bool:
+    from memory_core.paraphrase import guessed_value, is_polar
+
+    if not is_polar(query) or not re.match(r"^(?:是的|是|对的|对|没错|Yes)\b", (answer or "").strip()):
+        return False
+    if _guess_is_stored(query, facts):
+        return False
+    proposed = guessed_value(query) or ""
+    years = re.findall(r"[0-9]{3,4}", proposed)
+    if years:
+        return any(year in (answer or "") for year in years)
+    return bool(proposed) and proposed[:8] in (answer or "")
+
+
+def _invented_identity(query: str, answer: str) -> bool:
+    if not re.search(r"干什么|做什么|是什么人|什么身份|什么物种|什么品种|什么动物|哪种动物|哪国人|哪里人|哪儿人", query or ""):
+        return False
+    if any(mark in (answer or "") for mark in ("不在记忆里", "我不知道", "还没告诉", "not in memory")):
+        return False
+    from memory_core.world_facts import stray_proper_names
+
+    return bool(stray_proper_names(query, []))
 
 
 def _reader_ok(query: str, span: str, fact: dict | None) -> bool:
@@ -629,10 +841,21 @@ def read_memory(
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
         from memory_core.answer_type import span_type_ok
 
-        if span and span_type_ok(query, span, fact) and (graphed.get("walked") or _reader_ok(query, span, fact)):
+        if (
+            span
+            and span_type_ok(query, span, fact)
+            and (graphed.get("walked") or _reader_ok(query, span, fact))
+            and not _premise_blocked(query, span, facts)
+        ):
             return {"text": _finish(span), "fact": fact, "miss": False}
     # 图弃权不再挡住训练后的专家。只有会引用错取值的情况才在这里停住。
     if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
+        from memory_core.answer_type import stored_choice
+
+        picked = stored_choice(query, facts)
+        if picked and not _premise_blocked(query, picked[0], facts):
+            span, fact = picked
+            return {"text": _finish(span), "fact": fact, "miss": False}
         return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.grounding import open_entity_question
@@ -670,7 +893,7 @@ def read_memory(
     names = grounded_subjects(query, facts)
 
     picked = choose_typed(query, facts)
-    if picked:
+    if picked and not _premise_blocked(query, picked[0], facts):
         span, fact = picked
         return {"text": _finish(span), "fact": fact, "miss": False}
     from memory_core.answer_type import modifier_conflicts
@@ -703,12 +926,22 @@ def read_memory(
         if accepted:
             span, fact = accepted
             checked = accept_aligned(query, span, fact)
-            if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts) and _reader_ok(query, checked, fact):
+            if (
+                _slot_ok(query, checked, fact, names)
+                and _entity_supported(query, checked, fact, facts)
+                and _reader_ok(query, checked, fact)
+                and not _premise_blocked(query, checked, facts)
+            ):
                 return {"text": _finish(checked), "fact": fact, "miss": False}
     for fact in hosts:
         span = slot_from_fact(query, fact)
         checked = accept_aligned(query, span, fact) if span else ""
-        if _slot_ok(query, checked, fact, names) and _entity_supported(query, checked, fact, facts) and _reader_ok(query, checked, fact):
+        if (
+            _slot_ok(query, checked, fact, names)
+            and _entity_supported(query, checked, fact, facts)
+            and _reader_ok(query, checked, fact)
+            and not _premise_blocked(query, checked, facts)
+        ):
             return {"text": _finish(checked), "fact": fact, "miss": False}
     return {"text": natural_refusal(query, hosts), "fact": None, "miss": True}
 

@@ -133,8 +133,69 @@ class RecallRegressionTests(unittest.TestCase):
         ])
         self.assertIn("天青", answer)
         self.assertNotIn("墨黑", answer)
+        short = _text("江小满的车是天青色还是墨黑？", [
+            {"entity": "江小满", "statement": "江小满的自行车是天青色。", "value": "天青色"},
+        ])
+        self.assertIn("天青", short)
+        brand = _text("江小满的自行车是飞鸽还是永久", [
+            {"entity": "江小满", "statement": "江小满的自行车品牌是飞鸽。", "value": "飞鸽"},
+            {"entity": "江小满", "statement": "江小满的自行车是天青色。", "value": "天青色"},
+        ])
+        self.assertIn("飞鸽", brand)
+        self.assertNotIn("天青", brand)
         self.assertEqual(world_reply("墨西哥的首都是哪里？", []), "墨西哥城。")
         self.assertEqual(world_reply("法国的首都是哪里？", []), "巴黎。")
         self.assertEqual(world_reply("青岚国的首都是哪里？", []), "我不知道。")
         self.assertEqual(world_reply("泽川工坊的创始人是谁？", []), "我不知道。")
         self.assertIsNone(world_reply("水的化学式是什么？", []))
+        self.assertEqual(world_reply("月亮是行星还是卫星？", []), "卫星。")
+        self.assertEqual(world_reply("月亮是卫星还是行星？", []), "卫星。")
+        self.assertEqual(world_reply("水是化合物还是元素？", []), "我不知道。")
+        self.assertEqual(world_reply("诺丁是干什么的？", []), "我不知道。")
+        self.assertEqual(world_reply("阿哨是什么动物？", []), "我不知道。")
+
+    def test_premise_subject_is_not_the_other_role(self):
+        from memory_core.blind_heldout import omitted_tower_guards
+
+        for question in (
+            "柯岚是看守。谁是接班人？",
+            "柯岚担任看守。接班的那位是谁？",
+            "柯岚在值守。谁负责接班？",
+            "既然柯岚是看守，谁来接班？",
+            "看守是柯岚。谁是接班人？",
+        ):
+            answer = _text(question, BOOK)
+            self.assertNotEqual(answer.strip().rstrip("。"), "柯岚", question)
+            self.assertNotIn("柯岚。", answer, question)
+        for question in omitted_tower_guards():
+            self.assertIn("柯岚", _text(question, BOOK), question)
+        daughter = _text("柯岚是这座塔的看守。守护者的女儿是谁？", BOOK)
+        self.assertIn("柯小满", daughter)
+        father = _text("柯小满是养鸟的人。谁是她父亲？", BOOK)
+        self.assertIn("柯岚", father)
+
+    def test_same_turn_year_and_owner(self):
+        wrong = answer_stated_question(
+            "衡泽工坊成立于2008年。它是2012年成立的吗？",
+            pattern_extract("衡泽工坊成立于2008年。它是2012年成立的吗？"),
+        ) or {}
+        self.assertTrue(str(wrong.get("text") or "").startswith("不是"), wrong)
+        self.assertIn("2008", wrong.get("text") or "")
+        right = answer_stated_question(
+            "衡泽工坊成立于2008年。是2008年成立的吗？",
+            pattern_extract("衡泽工坊成立于2008年。是2008年成立的吗？"),
+        ) or {}
+        self.assertTrue(str(right.get("text") or "").startswith("是"), right)
+        self.assertNotIn("不在记忆里", right.get("text") or "")
+        for question, gold in (
+            ("这辆自行车是江衡的。主人是谁？", "江衡"),
+            ("江衡有一本词典。它的主人是谁？", "江衡"),
+            ("江衡买了这辆自行车。车主是谁？", "江衡"),
+            ("这台机器归江衡所有。拥有者是谁？", "江衡"),
+            ("磨豆机的主人是罗知微。谁是主人？", "罗知微"),
+        ):
+            answer = (answer_stated_question(question, pattern_extract(question)) or {}).get("text") or ""
+            self.assertIn(gold, answer, question)
+        color = (answer_stated_question("灯塔是白色的。主人是谁？", pattern_extract("灯塔是白色的。主人是谁？")) or {}).get("text") or ""
+        self.assertNotIn("白色", color)
+        self.assertNotIn("灯塔", color)

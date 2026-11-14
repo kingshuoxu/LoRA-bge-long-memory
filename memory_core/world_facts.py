@@ -148,6 +148,26 @@ def _capital_of(text: str) -> str:
     return ""
 
 
+_COMMON_NAMES = {
+    "熊猫", "猫", "狗", "水", "月亮", "月球", "太阳", "地球", "人", "动物", "鸟", "鱼",
+    "马", "牛", "老虎", "狮子", "大象", "茶", "盐", "金", "银", "铁", "木头", "石头",
+}
+
+
+def stray_proper_names(text: str, known_names: list[str] | None = None) -> list[str]:
+    """问句里的专名。国家、首都和普通事物不算。"""
+    raw = text or ""
+    known = {name for name in (known_names or []) if name and len(name) >= 2}
+    known.update(_CAPITALS)
+    known.update(_CHECKED_SIDES)
+    known.update(_COMMON_NAMES)
+    known.update(_STOP)
+    return [
+        token for token in re.findall(r"[\u4e00-\u9fff]{2,8}", raw)
+        if token not in known and not any(token in country or country in token for country in _CAPITALS)
+    ]
+
+
 def world_reply(text: str, known_names: list[str] | None = None) -> str | None:
     """首都和核对过的二选一给答案。记忆里没有的专名说不知道。其余交给基座。"""
     raw = (text or "").strip()
@@ -163,10 +183,17 @@ def world_reply(text: str, known_names: list[str] | None = None) -> str | None:
             for side in sides:
                 if capital in side or side in capital:
                     return side if side.endswith("。") else side + "。"
+            return "我不知道。"
         return capital + "。"
     for name, side in _CHECKED_SIDES.items():
         if name in raw and "还是" in raw and side in raw:
             return side + "。"
+    known = [name for name in (known_names or []) if name and len(name) >= 2]
+    if re.search(r"是.+还是", raw) and not any(name in raw for name in known):
+        return "我不知道。"
+    if re.search(r"干什么|做什么|是什么人|什么身份|什么物种|什么品种|什么动物|哪种动物|哪国人|哪里人|哪儿人", raw):
+        if stray_proper_names(raw, known_names):
+            return "我不知道。"
     if not re.search(
         r"是谁|叫什么|叫啥|什么牌子|什么品牌|创始人|老板是|哪里人|哪儿人|哪国人|产地|原产|"
         r"哪里|哪儿|什么地方|什么动物|哪种|哪一年|哪年|多大|多高|多长|多重|什么品种|是什么|几米|尺寸|身高",

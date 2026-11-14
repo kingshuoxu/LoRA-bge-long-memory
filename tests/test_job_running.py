@@ -70,6 +70,50 @@ class ChatTurnTests(unittest.TestCase):
             self.assertNotIn("不在记忆里", reported)
             self.assertNotIn("基座编的", reported)
 
+    def test_chat_does_not_confirm_a_question_or_return_the_premise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = self._service(Path(tmp))
+            service.chat.reply = lambda *args, **kwargs: "是的，青禾社成立于1999年。"
+            conv = service.create_conversation()["id"]
+            unknown = service.send_message(conv, "青禾社是1999年成立的吗？")["assistant"]["content"]
+            self.assertNotIn("1999", unknown)
+            self.assertTrue("不在记忆里" in unknown or "我不知道" in unknown, unknown)
+            service.chat.reply = lambda *args, **kwargs: "柯岚。"
+            for question in (
+                "柯岚是看守。谁是接班人？",
+                "柯岚担任看守。接班的那位是谁？",
+                "既然柯岚是看守，谁来接班？",
+            ):
+                answer = service.send_message(service.create_conversation()["id"], question)["assistant"]["content"]
+                self.assertNotEqual(answer.strip().rstrip("。"), "柯岚", question)
+            service.chat.reply = lambda *args, **kwargs: "诺丁是工匠。"
+            job = service.send_message(service.create_conversation()["id"], "诺丁是干什么的？")["assistant"]["content"]
+            self.assertNotIn("工匠", job)
+            self.assertIn("我不知道", job)
+            service.chat.reply = lambda *args, **kwargs: "水既是化合物也是元素。"
+            both = service.send_message(service.create_conversation()["id"], "水是化合物还是元素？")["assistant"]["content"]
+            self.assertNotIn("化合物", both)
+            self.assertNotIn("元素", both)
+            service.chat.reply = lambda *args, **kwargs: "月亮既是行星也是卫星。"
+            moon = service.send_message(service.create_conversation()["id"], "月亮是行星还是卫星？")["assistant"]["content"]
+            self.assertIn("卫星", moon)
+            self.assertNotIn("行星", moon)
+            year = service.send_message(
+                service.create_conversation()["id"],
+                "衡泽工坊成立于2008年。它是2012年成立的吗？",
+            )["assistant"]["content"]
+            self.assertTrue(year.startswith("不是"), year)
+            self.assertIn("2008", year)
+            first = service.create_conversation()["id"]
+            service.send_message(first, "衡泽工坊成立于2008年。")
+            service.chat.reply = lambda *args, **kwargs: "是的，成立于2012年。"
+            follow = service.send_message(first, "它是2012年成立的吗？")["assistant"]["content"]
+            self.assertTrue(follow.startswith("不是"), follow)
+            self.assertIn("2008", follow)
+            glued = service.send_message(service.create_conversation()["id"], "自行车是天青色还是墨黑？")["assistant"]["content"]
+            self.assertNotIn("还墨", glued)
+            self.assertTrue("不在记忆里" in glued or "我不知道" in glued or "天青" in glued, glued)
+
 
 class JobRunningTests(unittest.TestCase):
     def test_finished_job_does_not_block_chat(self):

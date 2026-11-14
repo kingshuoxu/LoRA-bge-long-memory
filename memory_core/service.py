@@ -1178,16 +1178,35 @@ class MemoryService:
                 elif graphed is not None and graphed.get("status") == "answer":
                     graph_locked = True
                     span = str(graphed.get("span") or "").strip()
-                    fact_answer = span if span[-1:] in "。." else span + "。"
-                    owner = next(
-                        (record for record in experts if graphed.get("fact") in ((record.fact_memory or {}).get("facts") or [])),
-                        None,
-                    )
-                    if owner is not None:
-                        mount_memory(decision, recall, owner, [graphed["fact"]], "entity_first")
-                        recall["doc_chips"] = []
-                        recall["abstain"] = False
-                        recall["reason_text"] = "回答是顺着已经记下的关系走出来的"
+                    from memory_core.answer_type import premise_subject_blocked
+
+                    if premise_subject_blocked(content, span, remembered):
+                        from memory_core.span_guard import fixed_refusal
+
+                        fact_answer = fixed_refusal(content, remembered)
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["reason_text"] = "前半句点了名字，后半句问的角色不在记忆里"
+                        recall["mounted_expert"] = None
+                        recall["mounted_label"] = "基座"
+                    else:
+                        fact_answer = span if span[-1:] in "。." else span + "。"
+                        owner = next(
+                            (record for record in experts if graphed.get("fact") in ((record.fact_memory or {}).get("facts") or [])),
+                            None,
+                        )
+                        if owner is not None:
+                            mount_memory(decision, recall, owner, [graphed["fact"]], "entity_first")
+                            recall["doc_chips"] = []
+                            recall["abstain"] = False
+                            recall["reason_text"] = "回答是顺着已经记下的关系走出来的"
             if utterance_is_question(content) and not open_task and not graph_locked:
                 from memory_core.span_guard import relation_decision
 
@@ -1491,9 +1510,32 @@ class MemoryService:
                     recall["abstain"] = world.startswith("我不知道")
                     recall["reason"] = decision.reason
                     recall["reason_text"] = "常识只回答核对过的首都；没见过的专名不交给基座编"
+            from memory_core.fact_reader import direct_memory_reply, settle_reply, spoken_facts
+
+            spoken = spoken_facts(experts, history, content)
+            if utterance_is_question(content) and not open_task and (not fact_answer or _refusal_answer(fact_answer)):
+                guided = direct_memory_reply(content, spoken)
+                if guided:
+                    fact_answer = guided
+                    if _refusal_answer(guided) or guided.startswith("我不知道"):
+                        decision.fired = False
+                        decision.expert = None
+                        decision.label = "基座"
+                        decision.reason = "memory_miss"
+                        recall["fired"] = False
+                        recall["mounted"] = False
+                        recall["abstain"] = True
+                        recall["reason"] = "memory_miss"
+                        recall["matched_facts"] = []
+                        recall["reason_text"] = "是非题里的取值没有记过，不能顺着问句确认"
+                    else:
+                        recall["abstain"] = False
+                        recall["fired"] = False
+                        recall["reason_text"] = "是非题用的是已经记下的取值"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
+            answer = settle_reply(content, answer, spoken)
             if answer and decision.fired and not open_task:
                 from memory_core.answer_type import span_type_ok
 
