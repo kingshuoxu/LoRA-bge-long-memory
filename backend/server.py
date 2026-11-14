@@ -125,6 +125,8 @@ def make_handler(app: App):
                 return _json_bytes({"documents": service.list_documents(), "job": service.document_status()})
             if method == "POST" and parts == ["documents"]:
                 return _json_bytes(service.start_document_import(str(payload.get("path") or "")))
+            if method == "POST" and parts == ["documents", "cancel"]:
+                return _json_bytes(service.cancel_document_import())
             if len(parts) == 3 and parts[0] == "documents" and parts[2] == "queue" and method == "POST":
                 ids = payload.get("points") or payload.get("point_ids") or []
                 return _json_bytes(service.queue_document_points(parts[1], [str(item) for item in ids]))
@@ -217,7 +219,7 @@ def main():
         server = ThreadingHTTPServer((host, port), make_handler(app))
     except OSError:
         server = ThreadingHTTPServer((host, 0), make_handler(app))
-        port = server.server_address[1]
+    port = server.server_address[1]
     print(f"LORA_MEMORY_READY port={port}", flush=True)
     try:
         server.serve_forever()

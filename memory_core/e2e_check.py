@@ -1,7 +1,9 @@
 """端到端验收：写入几条虚构事实，巩固成专家，再在新对话里提问。
 
 退出码 0 表示：事实题全部答对且挂上了新专家；没出现在训练问句里的改写至少 90% 答对；
-同一人没写过的属性至少 90% 不让这个专家直接作答（列出已存事实并说明不在记忆里也算）；常识题和 CMMLU 风格题没有挂上它。
+同一人没写过的属性全部弃权（列出已存事实并说明不在记忆里也算）。
+任何一条把已存取值当成另一个属性或另一个人的答案，都直接失败，不看比例。
+常识题和 CMMLU 风格题没有挂上它。
 """
 from __future__ import annotations
 
@@ -59,8 +61,18 @@ NEVER = [
     "沈星河的母亲是谁？",
     "沈星河多大了？",
     "沈星河的学校叫什么？",
+    "沈星河在哪所学校上学？",
+    "沈星河就读的学校叫什么名字？",
+    "请问沈星河的学校叫啥？",
+    "沈星河的学校的名字是什么？",
+    "沈星河毕业于哪所学校？",
+    "周晚宁的学校叫什么？",
+    "周晚宁就读的学校叫什么名字？",
     "沈星河喜欢吃什么？",
 ]
+
+# 这些取值已经写进记忆。问学校、问别人时答成其中任何一个，验收直接失败。
+STORED_VALUES = ("云朵", "青岚镇", "朱红色", "桂花乌龙")
 
 # 研究仓库里的常识题是 data/generic_questions.jsonl 的 20 条，再加上
 # scripts/eval_entity_guard_realistic.py 的 15 条。没有单独的 40 题文件，
@@ -136,6 +148,47 @@ def _wait(service: MemoryService, job_id: str, timeout: float = 7200) -> dict:
     raise TimeoutError("训练超时")
 
 
+def cited_stored_value(answer: str, allowed: str = "") -> str:
+    """整句就是某个已存取值，或用它起头。说明句里顺带提到已存事实不算。"""
+    bare = (answer or "").strip().strip("。！!？? \n")
+    for value in STORED_VALUES:
+        if allowed and value in allowed:
+            continue
+        if bare == value or bare.startswith(value):
+            return value
+    return ""
+
+
+def invented_school(question: str, answer: str) -> str:
+    """学校没记下时，回答里却出现了一所学校的名字。"""
+    if not any(mark in (question or "") for mark in ("学校", "上学", "毕业", "就读")):
+        return ""
+    if any(mark in (answer or "") for mark in ("没记过", "不在记忆里", "没提到", "不记得", "没有存过", "还没告诉", "我不确定", "没有找到")):
+        return ""
+    for suffix in ("中学", "小学", "大学", "学院"):
+        if suffix in (answer or ""):
+            return suffix
+    return ""
+
+
+def wrong_citations(rows: list[dict]) -> list[str]:
+    """答成了别的取值，或没教过的属性没有弃权。调用方应据此让进程失败。"""
+    found = []
+    for item in rows:
+        answer = str(item.get("answer") or "")
+        gold = str(item.get("gold") or "")
+        question = str(item.get("q") or "")
+        value = cited_stored_value(answer, gold)
+        school = invented_school(question, answer)
+        if value:
+            found.append(f"Q: {question} A: {answer} cited={value}")
+        elif school:
+            found.append(f"Q: {question} A: {answer} cited={school}")
+        elif item.get("kind") == "never" and not item.get("abstain"):
+            found.append(f"Q: {question} A: {answer} cited=not-abstained")
+    return found
+
+
 def abstain_ok(route: dict, answer: str, expert: str) -> bool:
     """没写过的属性不能让这位专家用 LoRA 直接作答。
 
@@ -143,8 +196,9 @@ def abstain_ok(route: dict, answer: str, expert: str) -> bool:
     """
     if route.get("reason") == "entity_grounded":
         text = answer or ""
-        named = any(mark in text for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得", "没记过")) or "not in memory" in text.casefold() or "haven't told me" in text.casefold()
-        return bool(named and route.get("expert") == expert)
+        named = any(mark in text for mark in ("不在记忆里", "还没告诉过我", "没提到", "不记得", "没记过", "没有存过")) or "not in memory" in text.casefold() or "haven't told me" in text.casefold()
+        route_expert = route.get("expert")
+        return bool(named and (not route_expert or route_expert == expert))
     return not (route.get("fired") and route.get("expert") == expert)
 
 
@@ -157,6 +211,9 @@ def _ask(service: MemoryService, conv_id: str, question: str) -> dict:
 
 
 def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool = False, device: str | None = None) -> dict:
+    from memory_core.fact_reader import assert_school_is_recalled
+
+    assert_school_is_recalled()
     home = Path(home)
     models = Path(models_dir) if models_dir else default_models_dir()
     service = MemoryService(
@@ -230,7 +287,8 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         result = _ask(service, fresh["id"], question)
         route = result["route"]
         answer = result["assistant"]["content"]
-        ok = bool(route["fired"] and route["expert"] == expert and _hit(answer, gold))
+        refused = any(mark in answer for mark in ("不在记忆里", "还没告诉过我", "没记过"))
+        ok = bool(_hit(answer, gold) and not refused)
         hits += int(ok)
         details.append({"q": question, "gold": gold, "answer": answer, "hit": ok, "route": route, "kind": "primary"})
     paraphrase_hits = 0
@@ -239,7 +297,8 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
         result = _ask(service, fresh["id"], question)
         route = result["route"]
         answer = result["assistant"]["content"]
-        ok = bool(route["fired"] and route["expert"] == expert and _hit(answer, gold))
+        refused = any(mark in answer for mark in ("不在记忆里", "还没告诉过我", "没记过"))
+        ok = bool(_hit(answer, gold) and not refused)
         paraphrase_hits += int(ok)
         paraphrase_details.append({"q": question, "gold": gold, "answer": answer, "hit": ok, "route": route, "kind": "paraphrase"})
     abstain_hits = 0
@@ -292,18 +351,38 @@ def run_check(home: Path, models_dir: Path | None = None, exercise_cancel: bool 
     }
     out = home / "e2e-report.json"
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print("TRAINED_RECALL", report["fact_score"], flush=True)
     print("E2E_SCORE", report["fact_score"], flush=True)
+    if hits == 0:
+        raise RuntimeError("训练完成后，教过的事实一条都没有答上来")
     print("E2E_PARAPHRASE", report["paraphrase_score"], flush=True)
     print("E2E_ABSTAIN", report["abstain_score"], flush=True)
+    cited = wrong_citations(details + paraphrase_details + abstain_details)
+    print("E2E_WRONG_VALUE", len(cited), flush=True)
+    for line in cited:
+        print(line, flush=True)
+    if cited:
+        raise RuntimeError("答成了错误的取值，验收不能靠比例放过：" + cited[0])
+    from memory_core.span_guard import refusal_dangling
+
+    dangling = []
+    for item in abstain_details:
+        mark = refusal_dangling(str(item.get("answer") or ""))
+        if mark:
+            dangling.append(f"Q: {item.get('q')} A: {item.get('answer')} dangling={mark}")
+    print("E2E_DANGLING", len(dangling), flush=True)
+    for line in dangling:
+        print(line, flush=True)
+    if dangling:
+        raise RuntimeError("弃权句被截断了：" + dangling[0])
     print("E2E_GENERAL_ACTIVATED", f"{report['general_activated_new_expert']}/{report['general_total']}", flush=True)
     print("E2E_CMMLU_ACTIVATED", f"{report['cmmlu_activated_new_expert']}/{report['cmmlu_total']}", flush=True)
     print("E2E_DEVICE", report["device"], "lr", status.get("lr"), "dtype", status.get("dtype"), "best_loss", status.get("best_loss"), flush=True)
     paraphrase_rate = paraphrase_hits / len(PARAPHRASE) if PARAPHRASE else 1.0
-    abstain_rate = abstain_hits / len(NEVER) if NEVER else 1.0
     base_ok = (
         hits == len(QUESTIONS)
         and paraphrase_rate >= 0.90
-        and abstain_rate >= 0.90
+        and abstain_hits == len(NEVER)
         and not general_bad
         and not cmmlu_bad
         and not any(base_turns)

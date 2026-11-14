@@ -12,7 +12,7 @@ from memory_core.prompts import has_cjk
 _COUNTRIES = ("瑞典", "挪威", "中国", "日本", "英国", "法国", "德国", "美国", "荷兰", "丹麦", "芬兰", "俄罗斯")
 _SOLAR = ("霜降", "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至", "立秋", "处暑", "白露", "秋分", "寒露", "立冬", "小雪", "大雪", "冬至", "小寒", "大寒")
 _STOP = frozenset(
-    "什么 怎么 这个 那个 一个 我们 他们 就是 可以 没有 不是 自己 时候 地方 东西 开始 每年 那天 这座 那座 已经 还是 因为 所以 如果 但是 然后 知道 告诉 请问 一下 哪里 哪儿 哪年 谁的 是谁".split()
+    "什么 怎么 这个 那个 一个 我们 他们 就是 可以 没有 不是 自己 时候 地方 东西 开始 每年 那天 这座 那座 已经 还是 因为 所以 如果 但是 然后 知道 告诉 请问 一下 哪里 哪儿 哪年 谁的 是谁 打磨 守护 看守 工匠 师傅".split()
 )
 # 问句里的属性，和句子里必须出现的说法。电灯对不上建塔那一句。
 _PREDICATES = (
@@ -146,8 +146,10 @@ def predicate_covered(query: str, statement: str, fact: dict | None = None) -> b
         return any(mark in text for mark in ("出生", "生日", "生于"))
     if any(mark in asked for mark in ("哪个省", "什么省", "省份")) or "属于哪" in asked:
         return "省" in text
-    if any(mark in asked for mark in ("哪国", "国籍", "哪国人")):
-        return any(country in text for country in _COUNTRIES)
+    if any(mark in asked for mark in ("哪国", "国籍", "哪国人", "哪个国家", "什么国家", "在哪个国家")):
+        from memory_core.answer_type import nation_supported
+
+        return nation_supported(asked, text)
     if any(mark in asked for mark in ("多少钱", "价格", "卖多少")):
         return any(mark in text for mark in ("钱", "价格", "元"))
     if any(mark in asked for mark in ("性别", "是男", "是女", "是公", "是母", "公是母")):
@@ -176,6 +178,8 @@ def predicate_covered(query: str, statement: str, fact: dict | None = None) -> b
         return "面" in text
     if kind == "number" and any(mark in asked for mark in ("几岁", "多大", "年龄")):
         return bool(re.search(r"岁|年龄", text))
+    if "多远" in asked or ("离" in asked and "远" in asked):
+        return "远" in text or "码头" in text
     if kind == "colour":
         if "色" in text:
             return True
@@ -189,6 +193,10 @@ def predicate_covered(query: str, statement: str, fact: dict | None = None) -> b
         return any(mark in text for mark in ("家乡", "老家", "长大"))
     if kind == "time":
         return bool(re.search(r"\d{3,4}年", text)) or any(term in text for term in _SOLAR)
+    from memory_core.answer_type import role_supported
+
+    if not role_supported(asked, text):
+        return False
     return True
 
 
@@ -235,37 +243,168 @@ def about_user(query: str) -> bool:
     return bool(re.search(r"(?<![\u4e00-\u9fff])我(?:的|住|叫|是)?", text))
 
 
-def _predicate_phrase(query: str) -> str:
-    text = query or ""
-    options = (
-        (("哪个省", "什么省", "省份", "属于哪"), "属于哪个省"),
-        (("出生", "生日", "生于"), "的出生年份"),
-        (("家乡", "老家", "长大"), "的家乡"),
-        (("现居", "住在", "住哪", "住址"), "住在哪里"),
-        (("父亲", "爸爸", "她爸", "他爸"), "的父亲"),
-        (("母亲", "妈妈", "她妈", "他妈"), "的母亲"),
-        (("妻子", "老婆"), "的妻子"),
-        (("丈夫", "老公"), "的丈夫"),
-        (("师傅", "工匠"), "的师傅"),
-        (("主人",), "的主人"),
-        (("哪国", "国籍"), "是哪国人"),
-        (("多少钱", "价格"), "的价格"),
-        (("性别", "是男", "是女", "是公", "是母"), "的性别"),
-        (("市长",), "的市长"),
-        (("多远",), "能照多远"),
-        (("几岁", "多大"), "的年龄"),
-        (("多高", "塔高"), "有多高"),
-        (("特产",), "的特产"),
+# 从长到短。先去掉「叫什么名字」，不能只削掉「什么名字」而留下一个「叫」。
+_QUESTION_TAILS = (
+    "你知道吗",
+    "你知道不",
+    "你晓得吗",
+    "知道吗",
+    "知道不",
+    "你知道",
+    "你晓得",
+    "叫什么名字来着",
+    "叫什么名字",
+    "叫啥名字",
+    "叫啥来着",
+    "叫什么名",
+    "叫啥名",
+    "是什么名字",
+    "的名字是什么",
+    "的名字是啥",
+    "什么名字",
+    "叫什么",
+    "叫啥",
+    "是什么",
+    "是谁",
+    "是啥",
+    "是多少",
+    "有多少",
+    "多少",
+    "吗",
+    "呢",
+)
+
+_DANGLING_END = set("叫是的于为和与被把给从向对让使由")
+
+
+def _strip_question_tail(text: str) -> str:
+    changed = True
+    while text and changed:
+        changed = False
+        for tail in _QUESTION_TAILS:
+            if text.endswith(tail) and len(text) > len(tail):
+                text = text[: -len(tail)].strip()
+                changed = True
+                break
+    text = re.sub(
+        r"^(?P<who>[\u4e00-\u9fff·]{1,8})毕业于哪所(?P<what>[\u4e00-\u9fff]{1,8})$",
+        r"\g<who>的\g<what>",
+        text,
     )
-    best = ""
-    best_at = -1
-    for marks, phrase in options:
-        for mark in marks:
-            index = text.rfind(mark)
-            if index > best_at:
-                best_at = index
-                best = phrase
-    return best
+    text = re.sub(
+        r"^(?P<who>[\u4e00-\u9fff·]{1,8})就读的(?P<what>[\u4e00-\u9fff]{1,8})$",
+        r"\g<who>的\g<what>",
+        text,
+    )
+    if text.endswith("的名字") and len(text) > len("的名字"):
+        text = text[: -len("的名字")].strip()
+    text = re.sub(r"上的什么学校", "的学校", text)
+    text = re.sub(r"念的哪所(?:学校)?", "的学校", text)
+    text = re.sub(r"读的哪所(?:学校)?", "的学校", text)
+    text = re.sub(r"在哪个学校(?:读书|念书)?", "的学校", text)
+    while text and text[-1] in _DANGLING_END:
+        if text[-1] == "的" and ("还是" in text or text.endswith(("男的", "女的", "公的", "母的", "对的", "错的"))):
+            break
+        text = text[:-1].strip()
+    return text
+
+
+def _school_asker(text: str) -> str:
+    if not re.search(r"学校|上学|毕业|就读|念书|读书|学生|哪儿念|哪里念", text or ""):
+        return ""
+    raw = re.sub(r"^(?:请问|请|那么)", "", text or "")
+    matched = re.match(r"([\u4e00-\u9fff·]{2,4})", raw)
+    if not matched:
+        return ""
+    name = matched.group(1)
+    while len(name) > 2:
+        nxt = re.sub(r"(?:现在|是在|是|在|的|现|哪|念|上|读|就|毕)$", "", name)
+        if nxt == name:
+            break
+        name = nxt
+    return name if len(name) >= 2 else ""
+
+
+def _awkward_clause(clause: str) -> bool:
+    """没有主语的「会弹钢琴」，或整段转述，都不能当成弃权的主语。"""
+    text = (clause or "").strip()
+    if not text:
+        return False
+    if re.match(r"^(?:会|能|可以|要|想)", text):
+        return True
+    if text in {"住", "在", "是", "叫", "的", "有", "不"}:
+        return True
+    if re.search(r"那位|哪位|这位|跟你说|告诉你", text):
+        return True
+    if re.search(r"问过|说过|说道|不知道|告诉", text):
+        return True
+    return False
+
+
+def asks_memory_chain(query: str) -> bool:
+    from memory_core.answer_type import asks_memory_chain as _asks
+
+    return _asks(query)
+
+
+def memory_attribute_question(text: str) -> bool:
+    """在问某个名字的属性或关系。记忆里没有时不能交给基座编一个现实答案。"""
+    from memory_core.extract import (
+        is_advice_question,
+        is_choice_question,
+        is_imperative_request,
+        without_tag_question,
+    )
+
+    raw = without_tag_question(text or "")
+    if not raw or is_open_task(raw) or is_imperative_request(raw) or is_advice_question(raw):
+        return False
+    if is_choice_question(raw):
+        return True
+    if re.search(r"首都|化学式|等于几|怎么说|隐喻", raw):
+        return False
+    return bool(re.search(
+        r"什么颜色|啥颜色|什么牌子|什么品牌|有多高|多高|哪一年|哪年|在哪里|在哪儿|哪里人|哪儿人|是谁|叫什么|叫啥|去世|逝世|拆除|建于|上班|哪里工作|哪儿工作|老家|产地|原产|植物|产自|出产",
+        raw,
+    ))
+
+
+def _asked_clause(query: str) -> str:
+    """保留问句里真正在问的那一段。问句尾巴不能剩一个叫、是、的、于。"""
+    text = (query or "").strip().rstrip("？?。！!")
+    text = re.sub(r"^(?:请问|问一下|告诉我)", "", text).strip()
+    text = re.sub(r"(?:你知道不|你知道吗|你知道|知道不|知道吗)$", "", text).strip()
+    text = text.strip("，,、；;。 ")
+    asker = _school_asker(text) or _school_asker(query or "")
+    if asker:
+        return f"{asker}的学校"
+    text = _strip_question_tail(text)
+    return text or (query or "").strip().rstrip("？?")
+
+
+def personal_attribute_question(text: str) -> bool:
+    """某人的学校、猫、电话这类属性。没记下时不能交给基座编一个。"""
+    raw = text or ""
+    if not any(mark in raw for mark in ("学校", "上学", "毕业", "就读", "念书", "读书", "猫", "猫咪", "狗", "宠物", "电话", "母亲", "父亲", "生日", "汽车")):
+        return False
+    if not re.search(r"[？?]|什么|啥|哪|谁|多少|吗", raw):
+        return False
+    return bool(re.search(r"[\u4e00-\u9fff]{2,4}(?:的|在哪|就读|毕业)", raw))
+
+
+def refusal_dangling(answer: str) -> str:
+    """弃权句末如果停在叫、是、的、于，返回那个字。完整的「女的」「还是」不算。"""
+    raw = answer or ""
+    if not any(mark in raw for mark in ("没记过", "没提到", "不在记忆里", "不记得", "还没告诉", "我不确定")):
+        return ""
+    text = raw.strip().rstrip("。！!？? \n")
+    if not text or "还是" in text:
+        return ""
+    if text.endswith(("男的", "女的", "公的", "母的", "对的", "错的")):
+        return ""
+    if text[-1] in _DANGLING_END:
+        return text[-1]
+    return ""
 
 
 def _subject(query: str, facts: list[dict]) -> str:
@@ -276,6 +415,14 @@ def _subject(query: str, facts: list[dict]) -> str:
         for index in range(0, max(0, len(text) - size + 1)):
             token = text[index:index + size]
             if token in _STOP or token in best or "的" in token:
+                continue
+            if token.startswith(("只", "条", "个", "座", "辆", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "两")):
+                continue
+            if token[:2] in {"那只", "这只", "一只", "那条", "这条"}:
+                continue
+            if token in {"三条腿", "三腿", "只三", "条腿", "三条"}:
+                continue
+            if any(mark in token for mark in ("是", "还", "公", "母", "男", "女", "啥", "什", "谁", "吗", "呢")):
                 continue
             if not re.fullmatch(r"[\u4e00-\u9fff]{2,4}", token):
                 continue
@@ -293,48 +440,79 @@ def _from_book(subject: str, facts: list[dict]) -> bool:
     return False
 
 
+def general_knowledge_question(text: str) -> bool:
+    """常识题交给基座。记忆里没有的专名不走这条。"""
+    raw = text or ""
+    return bool(re.search(r"首都|化学式|等于几|等于多少|怎么说|隐喻|翻译成|怎么煮|推荐一", raw))
+
+
+def memory_entity_question(text: str) -> bool:
+    """在问某个对象的关系或属性。走不通就弃权，不再拿另一条已存取值来填。"""
+    raw = text or ""
+    if general_knowledge_question(raw):
+        return False
+    return bool(re.search(
+        r"叫什么|叫啥|是谁|什么名字|什么颜色|啥颜色|什么牌子|什么品牌|哪一年|哪年|哪里上班|哪儿工作|"
+        r"养的|的父亲|的爸爸|的女儿|的闺女|的儿子|主人|国籍|哪国人|什么学校|哪所学校|有多高|多高",
+        raw,
+    ))
+
+
+def clean_refusal(answer: str, query: str = "") -> str:
+    """弃权句只能是完整的一句。问句碎片粘在「不在记忆里」前面时，改回固定句。"""
+    text = (answer or "").strip()
+    if "不在记忆里" not in text:
+        return answer
+    head = text.split("不在记忆里", 1)[0]
+    if head.startswith("关于") or "记住的是" in text or head.startswith("我记得") or head.startswith("没有存过"):
+        if "还" in head and "还没" not in head:
+            return fixed_refusal(query)
+        return text
+    if head.startswith("这件事") or head.startswith("你还没告诉过我") or head.startswith("其余"):
+        return text
+    if "还" in head or len(head) <= 1 or (head and head[-1] in "叫是的于为和与被把给从向对让使由"):
+        return fixed_refusal(query)
+    if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", head):
+        return text if text.endswith("。") else f"{head}不在记忆里。"
+    return fixed_refusal(query)
+
+
 def fixed_refusal(query: str, facts: list[dict] | None = None) -> str:
-    """固定句式。只有在问使用者本人时才说「你还没告诉过我」。"""
-    facts = list(facts or [])
+    """固定句式。不把问句碎片粘进弃权。"""
+    del facts
     if not has_cjk(query):
         return "That is not in memory."
-    phrase = _predicate_phrase(query)
-    owned = possessed_name_query(query)
-    if owned:
-        return f"你还没告诉过我你的{owned}叫什么。"
-    subject = _subject(query, facts)
-    user = about_user(query) and subject in {"", "我"}
-    if user:
-        if "生日" in query or "出生" in query:
-            return "你还没告诉过我生日。"
-        if any(mark in query for mark in ("住哪", "住在", "住哪儿")):
-            return "你还没告诉过我住在哪里。"
-        if phrase:
-            return f"你还没告诉过我{phrase}。"
+    from memory_core.extract import is_self_fact_question
+
+    if is_self_fact_question(query or ""):
         return "你还没告诉过我这件事。"
-    if subject and phrase:
-        if _from_book(subject, facts):
-            return f"书里没提到{subject}{phrase}。"
-        return f"我没记过{subject}{phrase}。"
-    if subject:
-        if _from_book(subject, facts):
-            return f"书里没提到{subject}的这件事。"
-        return f"我没记过{subject}的这件事。"
-    return "我没记过这件事。"
+    return "这件事不在记忆里。"
+
+
+def uncertain_reply(query: str, found: list[dict]) -> str:
+    """多跳没走完。只复述已经看见的原句，不把中间的人或错的属性当成答案。"""
+    lines: list[str] = []
+    for fact in found:
+        text = statement_of(fact).strip().rstrip("。")
+        if text and text not in lines:
+            lines.append(text)
+        if len(lines) >= 3:
+            break
+    if not lines:
+        return fixed_refusal(query, found)
+    return "这个我不确定，书里记得的是：" + "；".join(lines) + "。"
 
 
 def is_open_task(text: str) -> bool:
-    """写、译、聊、建议。这些走基座。我单独出现不算在问记忆。"""
+    """写、译、聊、建议、怎么办。这些走基座。问「我的X是什么」才走记忆。"""
+    from memory_core.extract import is_advice_question, is_imperative_request, is_self_fact_question
+
     raw = (text or "").strip()
     if not raw:
         return False
-    if any(mark in raw for mark in (
-        "帮我写", "写一句", "写一首", "写一段", "写个笑话", "写封", "写一封",
-        "帮我翻译", "翻译成", "译成", "润色", "改写一下", "起草",
-        "祝福", "讲个笑话", "讲个故事", "聊聊天", "随便聊",
-        "给点建议", "给些建议", "有什么建议", "帮我回复", "怎么回复",
-        "推荐一本", "怎么煮", "怎么做",
-    )):
+    if is_self_fact_question(raw):
+        return False
+    if is_imperative_request(raw) or is_advice_question(raw):
         return True
     if raw in {"你好", "您好", "在吗", "谢谢", "早上好", "晚安", "再见", "嗨"}:
         return True
@@ -472,34 +650,276 @@ def _chain_terminal(query: str) -> str:
     return ""
 
 
-def _edge_step(node: str, hop: str, edges: list[tuple[str, str, str, dict]]) -> tuple[str, dict] | None:
-    for rel, src, dst, fact in edges:
-        if rel == hop and src == node:
-            return dst, fact
-    if hop == "daughter":
-        keeper = _edge_step(node, "keeper", edges)
-        if keeper:
-            return _edge_step(keeper[0], "daughter", edges)
-    return None
+_HOP_WORDS = (
+    ("小主人", "owner"),
+    ("主人", "owner"),
+    ("老爸", "father"),
+    ("父亲", "father"),
+    ("爸爸", "father"),
+    ("她爸", "father"),
+    ("他爸", "father"),
+    ("爸", "father"),
+    ("母亲", "mother"),
+    ("妈妈", "mother"),
+    ("她妈", "mother"),
+    ("他妈", "mother"),
+    ("妻子", "wife"),
+    ("老婆", "wife"),
+    ("丈夫", "husband"),
+    ("老公", "husband"),
+    ("丫头", "daughter"),
+    ("闺女", "daughter"),
+    ("女儿", "daughter"),
+    ("谁守", "keeper"),
+    ("看守", "keeper"),
+    ("守护的人", "keeper"),
+    ("守的塔", "tower"),
+    ("灯塔", "tower"),
+    ("的塔", "tower"),
+    ("谁磨", "craft"),
+    ("打磨", "craft"),
+    ("师傅", "craft"),
+    ("工匠", "craft"),
+    ("多高", "height"),
+    ("塔高", "height"),
+    ("哪国", "nation"),
+    ("国籍", "nation"),
+    ("哪里", "origin"),
+    ("哪儿", "origin"),
+    ("产自", "origin"),
+    ("特产", "specialty"),
+)
+_PERSON_HOPS = {"owner", "father", "daughter", "keeper", "craft", "pet"}
 
 
-def _apply_terminal(node: str, terminal: str, edges: list[tuple[str, str, str, dict]], fact: dict) -> tuple[str, dict] | None:
-    if terminal in {"", "identity"}:
-        return node, fact
+def _mask_role_objects(query: str) -> str:
+    """「守护灯塔的人」是一个角色，灯塔不是下一跳。"""
+    return re.sub(r"((?:守护|看守).{0,8})(?:灯塔|这座塔|那座塔)(的人)", r"\1\2", query or "")
+
+
+def _explicit_hops(query: str, names: list[str]) -> list[str]:
+    """按问句从左到右读关系词。只认明确写出来的关系，不把名字里的字算进去。"""
+    hops: list[str] = []
+    index = 0
+    text = _mask_role_objects(query or "")
+    asks_name = any(mark in text for mark in ("叫什么", "叫啥", "什么名字")) and "谁" not in text
+    while index < len(text):
+        if _inside_name(text, index, 1, names):
+            index += 1
+            continue
+        if text.startswith("养", index):
+            wants_pet = asks_name or ("谁" not in text and any(mark in text for mark in ("什么", "啥", "鸟")))
+            kind = "pet" if wants_pet else "owner"
+            if not hops or hops[-1] != kind:
+                hops.append(kind)
+            index += 1
+            continue
+        matched = ""
+        hop = ""
+        for word, kind in _HOP_WORDS:
+            if text.startswith(word, index) and len(word) > len(matched):
+                matched = word
+                hop = kind
+        if not matched:
+            index += 1
+            continue
+        if not hops or hops[-1] != hop:
+            hops.append(hop)
+        index += len(matched)
+    if "特产" in text and any(mark in text for mark in ("哪里", "哪儿", "产自", "什么地方")):
+        return ["origin"]
+    if "特产" in text and any(mark in text for mark in ("叫什么", "是什么", "什么")) and "origin" not in hops:
+        return ["specialty"]
+    if "守护" in text and "的人" in text and "keeper" not in hops:
+        hops.insert(0, "keeper")
+    duration = any(mark in text for mark in ("多少年", "守了", "守护了", "多久"))
+    if not duration and "电" in text and any(mark in text for mark in ("哪一年", "哪年")):
+        hops.append("electric")
+    elif not duration and "出生" not in text and any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")):
+        hops.append("built")
+    return hops
+
+
+def asked_kind(query: str) -> str:
+    """问句要的取值种类。用来拦住把塔名当成年限、把十六面当成徒弟人数。"""
+    text = query or ""
+    if any(mark in text for mark in ("守了", "守护了", "多少年", "多久")) and "建于" not in text and "建成" not in text:
+        return "duration"
+    if "面" in text and any(mark in text for mark in ("多少", "几", "一共")):
+        return "faces"
+    if any(mark in text for mark in ("徒弟", "学徒")) and any(mark in text for mark in ("多少", "几", "几个", "几位")):
+        return "apprentice"
+    if any(mark in text for mark in ("多高", "塔高", "高度", "多少米", "几米")):
+        return "height"
+    if any(mark in text for mark in ("多少个", "几个", "几个人", "多少位", "几位", "多少名", "多少次", "多少")):
+        return "count"
+    if "出生" in text or "生日" in text:
+        return "birth"
+    if any(mark in text for mark in ("哪一年", "哪年", "建于", "建成")):
+        return "year"
+    if any(mark in text for mark in ("是谁", "谁")):
+        return "person"
+    if any(mark in text for mark in ("哪里", "哪儿", "什么地方")):
+        return "place"
+    return ""
+
+
+def span_fits(query: str, span: str) -> bool:
+    kind = asked_kind(query)
+    text = (span or "").strip().rstrip("。")
+    if not kind:
+        return True
+    if kind in {"year", "birth"}:
+        return bool(re.fullmatch(r"\d{3,4}年", text))
+    if kind == "duration":
+        return bool(re.fullmatch(r"(?:\d{1,4}|[一二三四五六七八九十百]+)年", text))
+    if kind in {"apprentice", "count"}:
+        # 必须是「三个 / 一位 / 两次」这种数量，不能因为句子里有「名叫」就算数。
+        return bool(re.fullmatch(
+            r"(?:一共|共)?(?:\d{1,6}|[零〇一二三四五六七八九十百千万两]{1,8})(?:个|位|名|次)(?:人)?",
+            text,
+        ))
+    if kind == "height":
+        return "米" in text
+    if kind == "faces":
+        return text.endswith("面")
+    if kind == "person":
+        if any(job in text for job in ("工匠", "师傅", "学徒", "徒弟", "市长")):
+            return False
+        if any(text.startswith(country) for country in _COUNTRIES):
+            return False
+        if text.endswith(("塔", "盐", "鸥")):
+            return False
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)) and text not in _COUNTRIES
+    if kind == "place":
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,8}", text))
+    return True
+
+
+def predicate_in_statement(query: str, statement: str) -> bool:
+    """问的那个属性必须写在被引用的句子里，只点到同一个人不够。"""
+    text = statement or ""
+    kind = asked_kind(query)
+    if kind == "apprentice":
+        return any(mark in text for mark in ("徒弟", "学徒"))
+    if kind == "count" and "工匠" in (query or ""):
+        return "多少" in text or "几个" in text
+    if kind == "count" and "人" in (query or "") and "守" in (query or ""):
+        return "多少人" in text or "几个人" in text
+    if kind == "duration":
+        return any(mark in text for mark in ("守了", "守护了"))
+    if kind == "birth":
+        return any(mark in text for mark in ("出生", "生日", "生于"))
+    if kind == "year":
+        return "建" in text or "电" in text or bool(re.search(r"\d{3,4}年", text))
+    if kind == "faces":
+        return "面" in text
+    if kind == "height":
+        return "米" in text or "塔高" in text
+    if kind == "person":
+        role = _role_asked(query)
+        if role == "keeper":
+            return "守" in text or "看守" in text
+        if role == "craft":
+            return any(mark in text for mark in ("打磨", "工匠", "师傅"))
+        if role == "owner":
+            return "养" in text or "主人" in text
+        if role == "father":
+            return any(mark in text for mark in ("女儿", "父亲", "爸爸", "爸"))
+        if role == "daughter":
+            return "女儿" in text or "闺女" in text
+    return True
+
+
+def _role_asked(query: str) -> str:
+    """问句最后问的那个角色。同一句里先出现的工匠不是守护者。"""
+    text = query or ""
+    marks = []
+    for word, role in (
+        ("看守", "keeper"),
+        ("守护", "keeper"),
+        ("谁守", "keeper"),
+        ("在守", "keeper"),
+        ("打磨", "craft"),
+        ("工匠", "craft"),
+        ("师傅", "craft"),
+        ("主人", "owner"),
+        ("父亲", "father"),
+        ("爸爸", "father"),
+        ("老爸", "father"),
+        ("女儿", "daughter"),
+        ("闺女", "daughter"),
+        ("丫头", "daughter"),
+    ):
+        index = text.rfind(word)
+        if index >= 0:
+            marks.append((index, role))
+    if "养" in text and "谁" in text:
+        marks.append((text.rfind("养"), "owner"))
+    if not marks:
+        return ""
+    marks.sort()
+    return marks[-1][1]
+
+
+def _neighbors(node: str, hop: str, edges: list[tuple[str, str, str, dict]]) -> list[tuple[str, dict]]:
+    """先沿边往前，没有再走回来。问「谁打磨的塔谁在守」时，工匠名要回到那座塔。"""
+    forward = []
+    backward = []
     for rel, src, dst, host in edges:
-        if rel == terminal and src == node:
-            return dst, host
-    if terminal == "nation":
-        craft = _edge_step(node, "craft", edges)
-        if craft:
-            return _apply_terminal(craft[0], "nation", edges, craft[1])
+        if rel != hop or src == dst:
+            continue
+        if src == node:
+            forward.append((dst, host))
+        elif dst == node:
+            backward.append((src, host))
+    return forward + backward
+
+
+def _walk_hops(node: str, hops: list[str], edges: list[tuple[str, str, str, dict]]) -> tuple[str, dict] | None:
+    if not hops:
+        return node, {}
+    hop, *rest = hops
+    for nxt, host in _neighbors(node, hop, edges):
+        if not rest:
+            return nxt, host
+        deeper = _walk_hops(nxt, rest, edges)
+        if deeper is not None:
+            return deeper
     return None
+
+
+def _hop_type_ok(hop: str, span: str) -> bool:
+    text = (span or "").strip().rstrip("。")
+    if hop in _PERSON_HOPS:
+        if any(job in text for job in ("工匠", "师傅", "学徒", "徒弟", "市长")):
+            return False
+        if any(text.startswith(country) for country in _COUNTRIES):
+            return False
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", text)) and text not in _COUNTRIES
+    if hop == "height":
+        return "米" in text
+    if hop == "nation":
+        return text in _COUNTRIES
+    if hop in {"origin", "specialty", "tower"}:
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,8}", text))
+    return False
+
+
+def _related_facts(query: str, facts: list[dict], names: list[str]) -> list[dict]:
+    mentioned = [name for name in names if name and name in (query or "")]
+    found: list[dict] = []
+    for fact in facts:
+        text = statement_of(fact)
+        if any(name in text for name in mentioned):
+            found.append(fact)
+    return found
 
 
 def _start_node(query: str, names: list[str]) -> str:
     hits = []
     for name in names:
-        index = query.find(name)
+        index = (query or "").find(name)
         if index >= 0:
             hits.append((index, -len(name), name))
     if not hits:
@@ -508,101 +928,109 @@ def _start_node(query: str, names: list[str]) -> str:
     return hits[0][2]
 
 
-def walk_chain(query: str, facts: list[dict]) -> tuple[str, dict] | str | None:
-    """顺着最后一问走到头。走不到就返回 blocked，不许把中间那个人交出去。"""
+def relation_decision(query: str, facts: list[dict]) -> dict | None:
+    """一跳必须有明确的边。两跳以上每一跳都要有边，而且最后的取值种类要对。
+
+    走不到就弃权，并复述看见的原句。不把主语或中间的人当成答案，也不挂引用。
+    """
+    if any(mark in (query or "") for mark in ("条腿", "几面", "多少面", "几岁", "多少钱")):
+        return None
     edges = _relation_edges(facts)
     names = _node_names(edges)
-    terminal = _chain_terminal(query)
-    if not terminal:
+    hops = _explicit_hops(query, names)
+    if not hops:
         return None
-    hops = _ordered_hops(query, names)
     start = _start_node(query, names)
+    if not start and hops[-1] == "nation" and any(mark in (query or "") for mark in ("师傅", "工匠")):
+        nations = [(src, dst, fact) for rel, src, dst, fact in edges if rel == "nation"]
+        if len(nations) == 1:
+            src, dst, fact = nations[0]
+            if _hop_type_ok("nation", dst):
+                return {"status": "answer", "span": dst, "fact": fact}
+        return {"status": "abstain", "text": uncertain_reply(query, _related_facts(query, facts, names))}
+    if not start and any(mark in (query or "") for mark in ("灯塔", "这座塔", "那座塔")):
+        towers = []
+        for rel, src, dst, _host in edges:
+            candidate = dst if rel == "tower" else src if rel == "keeper" and "塔" in src else ""
+            if candidate and candidate not in towers:
+                towers.append(candidate)
+        if len(towers) == 1:
+            start = towers[0]
     if not start:
         return None
-    if not hops and terminal == "identity":
+    walked = _walk_hops(start, hops, edges)
+    if walked is None:
         return None
-    node = start
-    fact = next((item for _rel, src, _dst, item in edges if src == node or _dst == node), facts[0] if facts else {})
-    for hop in hops:
-        nxt = _edge_step(node, hop, edges)
-        if not nxt:
-            return "blocked" if len(hops) >= 2 else None
-        node, fact = nxt
-    applied = _apply_terminal(node, terminal, edges, fact)
-    if not applied:
-        return "blocked" if len(hops) >= 2 else None
-    span, host = applied
-    if span in (query or "") and terminal == "identity":
+    node, fact = walked
+    if not fact:
+        fact = next((item for _rel, src, dst, item in edges if node in {src, dst}), None)
+    return {"status": "answer", "span": node, "fact": fact}
+
+
+def _refusal_text(text: str) -> bool:
+    return any(mark in (text or "") for mark in (
+        "不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我",
+        "没提到", "不记得", "没记过", "我不确定",
+    ))
+
+
+def _fact_containing(span: str, facts: list[dict]) -> dict | None:
+    needle = (span or "").strip().rstrip("。")
+    if not needle:
         return None
-    return span, host
+    for fact in facts:
+        if needle in statement_of(fact):
+            return fact
+    return None
+
+
+def enforce_answer_type(query: str, answer: str, facts: list[dict] | None = None) -> dict | None:
+    """问句要了种类，却答成整句或另一种单位时，改成不带引用的弃权。
+
+    已经是弃权句，或短取值和原句对得上时，不动。
+    """
+    if not asked_kind(query) or _refusal_text(answer):
+        return None
+    rows = [fact for fact in (facts or []) if isinstance(fact, dict)]
+    candidate = (answer or "").strip().rstrip("。")
+    host = _fact_containing(candidate, rows)
+    statement = statement_of(host) if host else ""
+    if not span_fits(query, candidate):
+        from memory_core.fact_recall import answer_span
+
+        extracted = answer_span(query, statement or (answer or ""))
+        if extracted and span_fits(query, extracted):
+            candidate = extracted.rstrip("。")
+            host = _fact_containing(candidate, rows) or host
+            statement = statement_of(host) if host else statement
+        else:
+            candidate = ""
+    if candidate and span_fits(query, candidate):
+        support = statement if statement and predicate_in_statement(query, statement) else ""
+        if not support:
+            for fact in rows:
+                text = statement_of(fact)
+                if candidate in text and predicate_in_statement(query, text):
+                    host = fact
+                    support = text
+                    break
+        # 文档原句还没写进专家时，原句自己就能证明这个取值。
+        if not support and predicate_in_statement(query, answer or ""):
+            support = answer or ""
+        if support or (not rows and predicate_in_statement(query, candidate)):
+            if (answer or "").strip().rstrip("。") == candidate:
+                return None
+            return {"status": "span", "span": candidate, "fact": host}
+    return {"status": "abstain", "text": fixed_refusal(query, rows)}
 
 
 def relation_answer(query: str, facts: list[dict]) -> tuple[str, dict] | None:
-    """女儿对父亲、养对主人、特产对产地、工匠对国籍。多跳必须走到最后一问。"""
-    walked = walk_chain(query, facts)
-    if walked == "blocked":
-        return "", None
-    if isinstance(walked, tuple) and walked[0]:
-        return walked
-    asked = query or ""
-    kind = question_type(asked)
-    focus_person = any(mark in asked for mark in ("父亲", "爸爸", "母亲", "妈妈", "主人"))
-    focus_child = any(mark in asked for mark in ("闺女", "女儿")) and "养" not in asked
-    focus_place = kind == "place" or any(mark in asked for mark in ("产地", "哪里的特产", "什么地方的特产"))
-    focus_nation = kind == "nationality"
-    if kind in {"time", "number", "colour", "name"} and not focus_person and not focus_nation and not focus_child:
+    decision = relation_decision(query, facts)
+    if not decision:
         return None
-    for fact in facts:
-        text = statement_of(fact)
-        parent = re.search(r"([\u4e00-\u9fff]{2,4})的女儿([\u4e00-\u9fff]{2,3})", text)
-        if parent and any(mark in asked for mark in ("父亲", "爸爸")) and parent.group(2) in asked:
-            return parent.group(1), fact
-        if parent and any(mark in asked for mark in ("女儿", "闺女")) and any(mark in asked for mark in ("叫什么", "是谁")) and parent.group(1) in asked and "养" not in asked:
-            return parent.group(2), fact
-        owned = re.search(r"([\u4e00-\u9fff]{2,3})养了", text)
-        named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
-        if owned and named and "主人" in asked and named.group(1) in asked:
-            return owned.group(1), fact
-        origin = re.search(r"([\u4e00-\u9fff]{2,6})的特产", text)
-        if origin and named and focus_place and named.group(1) in asked:
-            return origin.group(1), fact
-        if origin and named and any(mark in asked for mark in ("特产",)) and kind == "place" and origin.group(1) in asked:
-            return named.group(1), fact
-        if (
-            any(mark in asked for mark in ("闺女", "女儿"))
-            and any(mark in asked for mark in ("叫什么", "是谁"))
-            and "养" not in asked
-            and parent is None
-        ):
-            tower = re.search(r"([\u4e00-\u9fff]{2,3}).*名叫([\u4e00-\u9fff]{2,8})", text)
-            if tower and "守护" in text and tower.group(2) in asked:
-                for other in facts:
-                    child = re.search(
-                        re.escape(tower.group(1)) + r"的女儿([\u4e00-\u9fff]{2,3})",
-                        statement_of(other),
-                    )
-                    if child:
-                        return child.group(1), other
-        if "塔" in asked and any(mark in asked for mark in ("叫什么", "叫啥")) and any(mark in asked for mark in ("父亲", "爸爸")):
-            pet = re.search(r"名叫([\u4e00-\u9fff]{1,8})", text)
-            keeper = re.search(r"([\u4e00-\u9fff]{2,3})养了", text)
-            if pet and keeper and pet.group(1) in asked:
-                for other in facts:
-                    elder = re.search(r"([\u4e00-\u9fff]{2,4})的女儿" + re.escape(keeper.group(1)), statement_of(other))
-                    if not elder:
-                        continue
-                    for tower_fact in facts:
-                        named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", statement_of(tower_fact))
-                        if named and elder.group(1) in statement_of(tower_fact) and "塔" in statement_of(tower_fact):
-                            return named.group(1), tower_fact
-        country = next((item for item in _COUNTRIES if item in text), "")
-        craft = re.search(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
-        if country and focus_nation and (
-            (craft and craft.group(1) in asked)
-            or any(mark in asked for mark in ("工匠", "师傅"))
-        ):
-            return country, fact
-    return None
+    if decision["status"] != "answer":
+        return "", None
+    return decision["span"], decision["fact"]
 
 
 def accept_aligned(query: str, span: str, fact: dict, require_predicate: bool = True) -> str:

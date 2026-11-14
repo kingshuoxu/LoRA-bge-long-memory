@@ -284,8 +284,10 @@ def _topic_piece(text: str, entity: str) -> str:
     if entity:
         rest = rest.replace(entity, "")
     if has_cjk(text):
+        rest = re.sub(r"(?:你知道不|你知道吗|你知道|知道不|知道吗)", "", rest)
         rest = re.sub(r"[的是叫吗呢吧什么哪谁多少几？?，。]", "", rest)
         rest = re.split(r"位于|在", rest)[0]
+        rest = re.sub(r"(?:你知道|知道不)$", "", rest)
         rest = re.sub(r"不+$", "", rest).strip()
         return rest[:12]
     rest = re.sub(r"\b(what|where|who|which|when|how|is|are|was|were|does|do|did|the|a|an|of|about)\b", " ", rest, flags=re.IGNORECASE)
@@ -311,13 +313,29 @@ def abstain_reply(entity: str, text: str) -> str:
         if who:
             return f"我不记得你告诉过我{who}的生日。"
         return "我不记得你告诉过我生日。"
+    if not english and any(mark in text for mark in ("学校", "上学", "毕业", "就读", "念书", "读书", "学生")):
+        from memory_core.span_guard import fixed_refusal
+
+        return fixed_refusal(text)
     if english:
         if topic:
             return f"{topic} is not in memory."
         return f"I don't have that stored about {label}."
-    if topic:
-        return f"{topic}不在记忆里。"
-    return f"没有存过关于{label}的这件事。"
+    from memory_core.span_guard import _awkward_clause, fixed_refusal
+
+    if "还是" in (text or "") or (topic and ("还" in topic or len(topic) <= 1)):
+        return fixed_refusal(text)
+    if (
+        topic
+        and topic != label
+        and not _awkward_clause(topic)
+        and len(topic) >= 2
+        and not topic.endswith(("的", "是", "叫", "于", "谁"))
+    ):
+        from memory_core.span_guard import clean_refusal
+
+        return clean_refusal(f"{topic}不在记忆里。", text)
+    return fixed_refusal(text)
 
 
 def already_remembered(fact: dict[str, Any]) -> str:
@@ -351,6 +369,10 @@ def acknowledge_statement(fact: dict[str, Any]) -> str:
         if statement.startswith("我的狗"):
             return f"好，你的狗叫{value}。"
         who = "你" if entity == "我" else entity
+        if attr == "转述" or not who or not attr or value.startswith("的") or "所" in attr:
+            return "好，记住了。"
+        if attr.startswith("个") and not attr.startswith("个性"):
+            attr = "一" + attr
         if attr.endswith("的名字"):
             head = attr[: -len("的名字")]
             return f"好，{who}的{head}叫{value}。"
@@ -566,13 +588,13 @@ def _clarify_reply(stored: str, span: str, text: str) -> str:
     english = not has_cjk(text)
     if english:
         return f"I remember {stored}, but not the rest of that."
-    from memory_core.span_guard import _predicate_phrase
+    from memory_core.span_guard import _asked_clause
 
-    phrase = _predicate_phrase(text)
-    if phrase.startswith("的"):
-        phrase = phrase[1:]
-    if phrase:
-        return f"我记得{stored}，但没提到{phrase}。"
+    clause = _asked_clause(text)
+    if clause.startswith(stored):
+        clause = clause[len(stored):].lstrip("的")
+    if clause:
+        return f"我记得{stored}，但没提到{clause}。"
     return f"我记得{stored}，但没提到这件事。"
 
 
@@ -637,6 +659,15 @@ def resolve_stored_reply(
         if facts or not _legacy_expert(expert):
             return overview_reply(name, facts), expert, facts, "entity_overview"
         return _legacy_reply(name, content), expert, [], "legacy_retrain"
+    if re.search(r"是.+还是", content or ""):
+        from memory_core.answer_type import stored_choice
+        from memory_core.span_guard import fixed_refusal
+
+        picked = stored_choice(content, facts)
+        if picked:
+            span = picked[0]
+            return (span if span.endswith(("。", ".")) else span + "。"), expert, [picked[1]], "entity_first"
+        return fixed_refusal(content), expert, [], "entity_grounded"
     fact = _pick_fact(content, facts)
     if is_polar(content):
         if fact is None:
@@ -652,7 +683,11 @@ def resolve_stored_reply(
         value = str(fact.get("value") or fact.get("answer") or "").strip()
         short = bool(value) and value.rstrip("。") != statement.rstrip("。") and len(value) <= 24
         if answer_span(content, statement) or short:
-            return spoken_fact(content, fact), expert, [fact], "entity_first"
+            spoken = spoken_fact(content, fact)
+            from memory_core.answer_type import answer_fits
+
+            if spoken and answer_fits(content, spoken, statement):
+                return spoken, expert, [fact], "entity_first"
     pool = list(facts)
     for expert_item in experts:
         memory = getattr(expert_item, "fact_memory", None) or {}
@@ -665,7 +700,11 @@ def resolve_stored_reply(
 
         hit = covered_fact(content, facts)
     if hit is not None:
-        return spoken_fact(content, hit), expert, [hit], "entity_first"
+        spoken = spoken_fact(content, hit)
+        from memory_core.answer_type import answer_fits
+
+        if spoken and answer_fits(content, spoken, str(hit.get("statement") or "")):
+            return spoken, expert, [hit], "entity_first"
     return _unmatched(name, content, expert)
 
 

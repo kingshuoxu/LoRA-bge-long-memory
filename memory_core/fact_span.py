@@ -12,8 +12,6 @@ from pathlib import Path
 
 import re
 
-import torch
-
 from memory_core.paths import ensure_scripts_path
 from memory_core.prompts import has_cjk
 
@@ -62,10 +60,11 @@ def _entity_surfaces(name: str) -> list[str]:
 # 多出来的名字音节（兰、科、司、智、制）不在这里，所以短名对不上更长的名字。
 _GRAMMAR = frozenset(
     "的是叫吗呢吧啊呀在住有养会做从来去和与也还最现目正已不没家这那开骑弹玩"
-    "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本"
+    "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本上"
     "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
     "老总主靠自居公相年手电邮职生习股我"
     "成偏毕建磨属"
+    "只条个座辆念现"
 )
 
 _LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*")
@@ -345,6 +344,8 @@ def entity_mentioned(name: str, query: str) -> bool:
         return _mentions_self(query)
     if name_bounded(name, query):
         return True
+    if has_cjk(name):
+        return False
     ensure_scripts_path()
     from router import entity_key
 
@@ -537,6 +538,8 @@ class FactBank:
 
 
 def build_fact_bank(facts: list[dict]) -> FactBank | None:
+    import torch
+
     ensure_scripts_path()
     from router import embed
 
@@ -573,6 +576,8 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
 
 
 def save_fact_bank(path: Path, bank: FactBank) -> None:
+    import torch
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -587,6 +592,8 @@ def save_fact_bank(path: Path, bank: FactBank) -> None:
 
 
 def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
+    import torch
+
     path = Path(path)
     if not path.is_file():
         return None

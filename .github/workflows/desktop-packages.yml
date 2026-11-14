@@ -13,14 +13,14 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
   package:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 300
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install pypdf
-          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs
+          python -m unittest tests.test_legacy_wal tests.test_extract tests.test_self_and_docs tests.test_migrate_0214 tests.test_recall_regression
 
       - name: Build embedded CPython and PyTorch
         shell: bash
@@ -98,13 +98,33 @@ jobs:
             packaging/runtime/python.exe -c "import torch,transformers,peft; print(torch.__version__, 'cuda', torch.cuda.is_available())"
           fi
 
+      - name: Dead training job can be cancelled
+        shell: bash
+        run: |
+          if [ -x packaging/runtime/bin/python3 ]; then
+            packaging/runtime/bin/python3 packaging/job_recover_check.py
+          else
+            packaging/runtime/python.exe packaging/job_recover_check.py
+          fi
+
       - name: Linux packaging tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools xvfb fonts-noto-cjk
 
       - name: Install Electron builder
         working-directory: desktop
-        run: npm ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=0
+          until npm ci; do
+            n=$((n + 1))
+            if [ "$n" -ge 6 ]; then
+              exit 1
+            fi
+            echo "npm ci 失败，隔开再试 ($n)" >&2
+            sleep $((n * 30))
+          done
 
       - name: GUI smoke
         working-directory: desktop
@@ -123,11 +143,22 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           # 没有证书时保持 signAndEditExecutable=false。填了 CSC_LINK 才签名。
+          # GitHub 下载 appimage 工具偶发 504，隔开再试。
           if [ -n "${CSC_LINK:-}" ]; then
-            npx electron-builder --publish never -c.win.signAndEditExecutable=true
+            build=(npx electron-builder --publish never -c.win.signAndEditExecutable=true)
           else
-            npx electron-builder --publish never
+            build=(npx electron-builder --publish never)
           fi
+          ok=0
+          for attempt in 1 2 3 4 5 6; do
+            if "${build[@]}"; then
+              ok=1
+              break
+            fi
+            echo "electron-builder failed, attempt ${attempt}"
+            sleep $((attempt * 30))
+          done
+          test "$ok" = 1
 
       - name: Cache embedding and base models
         uses: actions/cache@v4
@@ -153,6 +184,51 @@ jobs:
         shell: bash
         run: bash packaging/upgrade-from-027.sh
 
+      - name: Chat in the same session after a 0.2.7 home migration
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/post_upgrade_chat.py
+
+      - name: 0.2.14 junk migration keeps declarative facts
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/migrate_0214_check.py
+
+      - name: Nebula stays up after a 0.2.14 home migration
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LD_LIBRARY_PATH: ${{ github.workspace }}/packaging/runtime/lib
+        run: |
+          set -euo pipefail
+          py="${{ github.workspace }}/packaging/runtime/bin/python3"
+          if [ ! -x "$py" ]; then
+            echo "找不到内置 Python: $py" >&2
+            exit 1
+          fi
+          "$py" packaging/nebula_0214_check.py
+
       - name: AppImage upgrade keeps user data
         if: runner.os == 'Linux'
         shell: bash
@@ -160,11 +236,39 @@ jobs:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
         run: bash packaging/appimage-upgrade.sh
 
+      - name: PDF import stays within the thread cap
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          OMP_NUM_THREADS: "2"
+          PYTHONUNBUFFERED: "1"
+          HF_HUB_DISABLE_TELEMETRY: "1"
+        run: |
+          set -euo pipefail
+          script=""
+          for candidate in $(find desktop/dist -type f -name e2e-check.sh); do
+            script="$candidate"
+            break
+          done
+          if [ -z "$script" ]; then
+            echo "packaged runtime was not found" >&2
+            exit 1
+          fi
+          root="$(dirname "$script")"
+          export PYTHONPATH="$root/app${PYTHONPATH:+:$PYTHONPATH}"
+          export LD_LIBRARY_PATH="$root/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export LORA_MEMORY_HOME="${RUNNER_TEMP:-/tmp}/lora-pdf-bound"
+          export LORA_MEMORY_DOC_BOUND=240
+          rm -rf "$LORA_MEMORY_HOME"
+          "$root/runtime/bin/python3" packaging/pdf_bound_check.py
+
       - name: Full mode document check
         if: runner.os == 'Linux'
         shell: bash
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          OMP_NUM_THREADS: "4"
           PYTHONUNBUFFERED: "1"
           HF_HUB_DISABLE_TELEMETRY: "1"
         run: |
@@ -191,6 +295,7 @@ jobs:
         shell: bash
         env:
           LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          OMP_NUM_THREADS: "4"
           HF_HUB_DISABLE_TELEMETRY: "1"
           PYTHONUNBUFFERED: "1"
         run: |
@@ -244,7 +349,7 @@ jobs:
 
   publish:
     name: publish-desktop-release
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    if: always() && startsWith(github.ref, 'refs/tags/desktop-v') && needs.package.result == 'success'
     needs: package
     runs-on: ubuntu-22.04
     permissions:
@@ -267,12 +372,30 @@ jobs:
       - name: Bundle release files
         run: |
           python -m pip install pyyaml
-          git log -1 --pretty=%s > release-notes.txt
+          if [ -f "docs/release-${GITHUB_REF_NAME}.md" ]; then
+            cp "docs/release-${GITHUB_REF_NAME}.md" release-notes.txt
+          else
+            git log -1 --pretty=%B > release-notes.txt
+          fi
           python packaging/publish_desktop_release.py \
             --artifacts release-artifacts \
             --out release \
             --tag "${GITHUB_REF_NAME}" \
             --notes-file release-notes.txt
+          python - << 'PY'
+          import json, os
+          from pathlib import Path
+          Path("release").mkdir(parents=True, exist_ok=True)
+          Path("release/provenance.json").write_text(json.dumps({
+              "tag": os.environ.get("GITHUB_REF_NAME"),
+              "sha": os.environ.get("GITHUB_SHA"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+              "workflow": os.environ.get("GITHUB_WORKFLOW"),
+              "repository": os.environ.get("GITHUB_REPOSITORY"),
+              "ref": os.environ.get("GITHUB_REF"),
+          }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: Publish prerelease
         env:

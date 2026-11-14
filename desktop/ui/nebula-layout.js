@@ -40,21 +40,40 @@ export function sourceOffset(fact, expert) {
   };
 }
 
+function isChapter(text) {
+  return /第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇]/.test(String(text || ""));
+}
+
+function withoutChapter(text) {
+  return String(text || "")
+    .replace(/第[0-9０-９一二三四五六七八九十百零两]+[章节回部篇][\s　]*[^\s，。！？\n]{0,12}/g, "")
+    .replace(/^[，,、\s]+/, "")
+    .trim();
+}
+
 export function factCaption(fact) {
-  const statement = String((fact && fact.statement) || "").replace(/[。．.!]+$/u, "").trim();
+  const statement = withoutChapter(String((fact && fact.statement) || "").replace(/[。．.!]+$/u, ""));
   let value = String((fact && fact.value) || "").trim();
-  const attr = String((fact && fact.attr) || "").trim();
-  if (value.length > 12 || value.includes("，") || value.includes(",")) {
-    const named = statement.match(/名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})/);
-    const year = statement.match(/[0-9]{3,4}年/);
-    const measure = statement.match(/[0-9零〇一二三四五六七八九十百两]{1,8}(?:米|面)/);
+  let attr = String((fact && fact.attr) || "").trim();
+  if (isChapter(value)) value = "";
+  if (isChapter(attr)) attr = "";
+  const named = statement.match(/名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})/);
+  const year = statement.match(/[0-9]{3,4}年/);
+  const measure = statement.match(/[0-9零〇一二三四五六七八九十百两]{1,8}(?:米|面)/);
+  if (!value || value.length > 12 || value.includes("，") || value.includes(",")) {
     if (named) value = named[1];
     else if (measure) value = measure[0];
     else if (year) value = year[0];
-    else value = value.slice(0, 10);
+    else value = statement.split(/[，,]/)[0].slice(0, 12);
   }
-  const name = value || attr || statement.slice(0, 12);
-  const meta = attr && attr !== name && attr.length <= 12 ? attr : "";
+  const name = value || statement.slice(0, 12) || "这条事实";
+  let meta = "";
+  if (attr && attr !== name && attr !== "重点" && attr.length <= 12 && !isChapter(attr)) {
+    meta = attr;
+  } else if (statement && statement !== name) {
+    meta = statement.replace(name, "").replace(/^[，,、\s名叫]+/, "").split(/[，,]/)[0].slice(0, 12);
+  }
+  if (isChapter(meta)) meta = "";
   return { name, meta };
 }
 
