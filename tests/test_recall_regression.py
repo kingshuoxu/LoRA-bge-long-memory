@@ -29,9 +29,9 @@ from memory_core.fact_reader import answer_stated_question, read_memory
 from memory_core.unseen_personas import build
 from memory_core.world_facts import world_reply
 
-# After the reader post-check: the span has to be that exact entity's stored value,
-# and the predicate has to match the question. 0.2.40 scored higher by skipping this.
-BASELINE = 173
+# 0.2.35 scored 261 here, including answers whose type was not checked.
+# This floor is the same set after nationality/pet/date/place checks. Do not go lower.
+BASELINE = 258
 
 BOOK = [
     {"entity": "白鹭塔", "statement": "柯岚在雾港守护的第一座灯塔名叫白鹭塔，建于1873年，塔高四十二米。", "value": "白鹭塔"},

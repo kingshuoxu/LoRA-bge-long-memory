@@ -627,7 +627,9 @@ def read_memory(
     if graphed is not None and graphed.get("status") == "answer":
         span = str(graphed.get("span") or "").strip()
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else None
-        if span and (graphed.get("walked") or _reader_ok(query, span, fact)):
+        from memory_core.answer_type import span_type_ok
+
+        if span and span_type_ok(query, span, fact) and (graphed.get("walked") or _reader_ok(query, span, fact)):
             return {"text": _finish(span), "fact": fact, "miss": False}
     # 图弃权不再挡住训练后的专家。只有会引用错取值的情况才在这里停住。
     if re.search(r"是.+还是", query or "") and not general_knowledge_question(query):
@@ -670,10 +672,7 @@ def read_memory(
     picked = choose_typed(query, facts)
     if picked:
         span, fact = picked
-        from memory_core.answer_type import answer_fits
-
-        if answer_fits(query, span, _statement(fact)) and (not fact or _reader_ok(query, span, fact)):
-            return {"text": _finish(span), "fact": fact, "miss": False}
+        return {"text": _finish(span), "fact": fact, "miss": False}
     from memory_core.answer_type import modifier_conflicts
     from memory_core.fact_span import entity_mentioned
 

@@ -1494,6 +1494,26 @@ class MemoryService:
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
+            if answer and decision.fired and not open_task:
+                from memory_core.answer_type import span_type_ok
+
+                remembered = []
+                for record in experts:
+                    for fact in (record.fact_memory or {}).get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                cited = [
+                    fact for fact in remembered
+                    if len(str(fact.get("value") or "")) >= 2 and str(fact.get("value")) in answer
+                ]
+                if cited and not any(span_type_ok(content, str(fact.get("value") or ""), fact) for fact in cited):
+                    from memory_core.span_guard import fixed_refusal
+
+                    answer = fixed_refusal(content)
+                    decision.fired = False
+                    recall["fired"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
             if legacy_note:
                 answer = f"{answer}\n{legacy_note}"
             extra = json.dumps({"kind": "recall", "trace": recall}, ensure_ascii=False)

@@ -1729,7 +1729,7 @@ _ROLE_GROUPS = (
     ("妻子", "老婆", "太太", "爱人"),
     ("丈夫", "老公"),
     ("主人",),
-    ("看守", "守护", "守塔", "值守", "看顾"),
+    ("看守", "守护", "守塔", "值守", "看顾", "守塔人", "看守人", "守护人", "守护者", "看守者", "执勤", "站岗", "值班", "照看", "看管", "照管", "看护"),
     ("工匠", "师傅", "打磨", "磨镜"),
     ("宠物", "养的", "饲养"),
 )
@@ -1750,8 +1750,69 @@ def _doubled_name(name: str, query: str) -> bool:
     return (name + name[-1]) in (query or "") or (name[0] + name) in (query or "")
 
 
+def _copied_from_question(query: str, span: str) -> bool:
+    """问句里的颜色、年份、尺寸不能原样当成答案。是A还是B里选中的那一边除外。"""
+    if not span or span not in (query or ""):
+        return False
+    if re.search(r"是.+还是", query or ""):
+        return False
+    return bool(re.search(r"色|[0-9]{3,4}|年|米|条|面", span))
+
+
+def span_type_ok(query: str, span: str, fact: dict | None = None) -> bool:
+    """答案的种类要和问句一致。国籍是国家，宠物是动物，年份是年份，不能从问句里抄条件。"""
+    from memory_core.span_guard import statement_of
+
+    span = (span or "").strip().rstrip("。")
+    if not span or _copied_from_question(query, span):
+        return False
+    statement = statement_of(fact) if isinstance(fact, dict) else ""
+    attr = str(fact.get("attr") or "") if isinstance(fact, dict) else ""
+    blob = statement + attr
+    if re.search(r"哪国|国籍|哪一国", query or ""):
+        if any(country in span for country in _COUNTRIES):
+            return True
+        return bool(statement) and (span + "人") in statement
+    if re.search(r"什么鸟|哪种鸟|什么动物|哪种动物|养的是什么", query or ""):
+        return bool(re.search(r"鸟|海鸥|猫|狗|鸽|鸥|动物", span))
+    if re.search(r"宠物|猫|狗", query or "") and re.search(r"叫什么|叫啥|名字", query or ""):
+        if re.search(r"学|校", span) and not re.search(r"猫|狗|鸟|宠物", blob):
+            return False
+        return bool(re.search(r"猫|狗|鸟|宠物|名字", blob))
+    if re.search(r"学校|上学|就读|毕业", query or ""):
+        return bool(re.search(r"学|校", span) or re.search(r"上学|就读|毕业|学校", blob))
+    if re.search(r"哪一年|哪年|什么时候|何时|建于|多高|几条|多少面|几面|多少米", query or ""):
+        if any(term in span for term in _SOLAR):
+            return True
+        if not re.search(r"[0-9一二三四五六七八九十百千两]+(?:年|米|面|条|腿)?", span):
+            return False
+        if re.search(r"拆除|拆掉|去世|逝世", query or "") and not re.search(r"拆除|拆掉|去世|逝世|死于", blob):
+            return False
+        if re.search(r"建", query or "") and "建" not in blob and re.search(r"改|电", blob):
+            return False
+        if re.search(r"开始", query or "") and "开始" not in blob and re.search(r"建于|建成", blob):
+            return False
+        return True
+    if re.search(r"哪里|哪儿|什么地方|住哪|住址|老家", query or ""):
+        return not re.search(r"[0-9]{3,4}年$", span)
+    asked = [part.strip() for part in re.split(r"[，,。；;]", query or "") if part.strip()]
+    tail = asked[-1] if asked else (query or "")
+    named_tower = re.search(
+        r"(?:哪座塔|什么塔|(?:灯塔|的塔|座塔)(?P<gap>.{0,8})(?:叫什么|叫啥|叫做|名称|名字|哪一座|哪座))",
+        query or "",
+    )
+    gap = named_tower.groupdict().get("gap") or "" if named_tower else ""
+    if named_tower and "人" not in gap and not re.search(r"女儿|闺女|丫头", query or ""):
+        return "塔" in span
+    if relation_question(query) or question_kind(query) == "person":
+        if re.search(r"年$|米$|塔$|海鸥|^猫$|^狗$", span):
+            return False
+        return bool(re.search(r"[\u4e00-\u9fffA-Za-z]{2,8}", span))
+    return True
+
+
 def reader_subject_ok(query: str, span: str, fact: dict) -> bool:
-    """摘录的答案必须是问句里原样点到的那个实体的取值，而且属性和问句一致。"""
+    """取值要属于这句事实，种类和问句一致。点到的名字必须整段相同。"""
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.span_guard import statement_of
 
@@ -1759,27 +1820,23 @@ def reader_subject_ok(query: str, span: str, fact: dict) -> bool:
     value = str(fact.get("value") or "").strip()
     statement = statement_of(fact)
     span = (span or "").strip().rstrip("。")
-    if not span or not entity or span == entity:
+    if not span or (span == entity and question_kind(query) != "person"):
         return False
-    if not entity_mentioned(entity, query) or near_miss_span(entity, query) or _doubled_name(entity, query):
-        return False
+    if entity and (near_miss_span(entity, query) or _doubled_name(entity, query)):
+        if not entity_mentioned(entity, query):
+            return False
     if span != value and span not in value and value not in span and span not in statement:
         return False
     if modifier_conflicts(query, [fact]):
         return False
-    if relation_question(query) and not _relation_stored(query, statement):
+    if relation_question(query) and question_kind(query) == "person" and not _relation_stored(query, statement):
         return False
-    if re.search(r"拆除|拆掉|去世|逝世|死于", query or "") and not re.search(r"拆除|拆掉|去世|逝世|死于", statement):
+    known_roles = {word for group in _ROLE_GROUPS for word in group}
+    for word in re.findall(r"[\u4e00-\u9fff]{1,4}(?:人|者|夫|匠)", query or ""):
+        if word in {"什么人", "谁"} or word in known_roles or word in statement:
+            continue
         return False
-    if re.search(r"建于|建成|哪一年建|哪年建", query or "") and "建" not in statement and re.search(r"改|电", statement):
-        return False
-    if re.search(r"开始", query or "") and "开始" not in statement and re.search(r"建于|建成", statement):
-        return False
-    if "宠物" in (query or "") and "猫" not in (query or "") and "狗" not in (query or "") and not re.search(r"猫|狗|鸟|宠物", statement):
-        return False
-    if re.search(r"什么鸟|哪种鸟|什么动物|哪种动物", query or "") and not re.search(r"鸟|海鸥|猫|狗|动物", span):
-        return False
-    if re.search(r"哪国|国籍", query or "") and not any(country in span for country in _COUNTRIES):
+    if not span_type_ok(query, span, fact):
         return False
     if _fallback_blocked(query, span, fact):
         return False
@@ -1795,18 +1852,23 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     if graphed is not None and graphed.get("status") == "answer":
         fact = graphed.get("fact") if isinstance(graphed.get("fact"), dict) else {}
         span = str(graphed.get("span") or "")
-        if graphed.get("walked") or reader_subject_ok(query, span, fact):
+        if span_type_ok(query, span, fact) and (graphed.get("walked") or reader_subject_ok(query, span, fact)):
             return span, fact
     picked = exact_attribute_lookup(query, rows)
     if picked and reader_subject_ok(query, picked[0], picked[1]):
         return picked
-    if graphed is not None and graphed.get("status") == "abstain":
-        return None
     picked = _choose_typed_inner(query, rows)
     if not picked:
         return None
     span, fact = picked
-    if not reader_subject_ok(query, span, fact):
+    from memory_core.fact_span import entity_mentioned, near_miss_span
+
+    entity = str(fact.get("entity") or "")
+    if entity and (near_miss_span(entity, query) or _doubled_name(entity, query)) and not entity_mentioned(entity, query):
+        return None
+    if modifier_conflicts(query, [fact]):
+        return None
+    if not span_type_ok(query, span, fact):
         return None
     return picked
 
