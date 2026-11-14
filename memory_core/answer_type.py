@@ -1754,7 +1754,7 @@ def _copied_from_question(query: str, span: str) -> bool:
     """问句里的颜色、年份、尺寸不能原样当成答案。是A还是B里选中的那一边除外。"""
     if not span or span not in (query or ""):
         return False
-    if re.search(r"是.+还是", query or ""):
+    if re.search(r"是.+还是|吗|是不是|对不对", query or ""):
         return False
     return bool(re.search(r"色|[0-9]{3,4}|年|米|条|面", span))
 
