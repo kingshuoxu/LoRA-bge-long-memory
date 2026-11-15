@@ -43,19 +43,21 @@
 
 :root {
   color-scheme: dark;
-  --ink: #eef3fb;
-  --muted: #a9b6c9;
-  --line: rgba(198, 214, 238, 0.18);
-  --line-strong: rgba(226, 236, 255, 0.34);
-  --accent: #b7d7ff;
-  --accent-2: #7ef0e0;
+  --ink: #ececec;
+  --muted: #a1a1aa;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --accent: #e8e8e8;
+  --accent-2: #d6d6d6;
   --gold: #f2d291;
   --danger: #ffb0aa;
-  --glass: rgba(8, 12, 22, 0.42);
-  --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
-  --serif: "EB Garamond", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
-  --display: "Cormorant Garamond", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
-  font-family: var(--serif);
+  --canvas: #16171a;
+  --panel: #1c1d21;
+  --glass: rgba(22, 23, 26, 0.92);
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  --display: "Noto Serif SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+  font-family: var(--display);
   font-weight: 400;
 }
 
@@ -68,18 +70,10 @@ body {
   margin: 0;
   min-height: 100vh;
   color: var(--ink);
-  background: #070910;
-  letter-spacing: 0.01em;
+  background: var(--canvas);
+  letter-spacing: 0;
 }
-html.sky-fallback body {
-  background:
-    radial-gradient(1200px 500px at 50% 42%, rgba(88, 70, 150, 0.35), transparent 60%),
-    radial-gradient(900px 380px at 70% 60%, rgba(30, 90, 110, 0.28), transparent 55%),
-    radial-gradient(2px 2px at 20% 30%, #fff, transparent 60%),
-    radial-gradient(1px 1px at 70% 20%, #f2d291, transparent 60%),
-    radial-gradient(1.5px 1.5px at 40% 70%, #d5e6ff, transparent 60%),
-    #070910;
-}
+html.sky-fallback body { background: var(--canvas); }
 
 #sky {
   position: fixed;
@@ -88,8 +82,9 @@ html.sky-fallback body {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  display: block;
+  display: none;
 }
+body.sky-on #sky { display: block; }
 
 button, textarea, input { font-family: var(--serif); font-size: 16px; color: inherit; }
 h1, h2, h3, .brand strong, .eyebrow, .constellation text {
@@ -112,8 +107,10 @@ button:hover {
 }
 button:active { transform: translateY(1px); }
 button.primary {
-  background: linear-gradient(180deg, rgba(183, 215, 255, 0.28), rgba(126, 240, 224, 0.1));
-  border-color: rgba(210, 228, 255, 0.46);
+  background: #f4f4f5;
+  color: #17171a;
+  border-color: #f4f4f5;
+  font-weight: 600;
 }
 button.danger {
   border-color: rgba(255, 176, 170, 0.4);
@@ -367,12 +364,11 @@ main {
   display: flex;
   gap: 12px;
   align-items: center;
-  padding: 8px 4px 8px 14px;
-  border-radius: 0;
-  border: 0;
-  border-left: 1px solid rgba(242, 210, 145, 0.28);
-  background: transparent;
-  max-width: min(460px, 100%);
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  max-width: min(280px, 42vw);
 }
 #chat-view, #memory-view, #consolidate-view, #nebula-view {
   flex: 1;
@@ -382,15 +378,15 @@ main {
 }
 #memory-view { display: block; overflow: auto; }
 .chat-split {
-  display: grid;
-  grid-template-columns: minmax(380px, 1.05fr) minmax(420px, 0.95fr);
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  gap: 18px;
 }
+.recall-host { display: none !important; }
 .chat-column, .recall-host, .nebula-host, .nebula-column { min-width: 0; min-height: 0; }
 .nebula-host, .recall-host { flex: 1; display: flex; flex-direction: column; }
-.chat-column { display: flex; flex-direction: column; }
+.chat-column { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .nebula-column {
   display: flex;
   flex-direction: column;
@@ -411,25 +407,26 @@ main {
   gap: 14px;
 }
 .bubble {
-  max-width: min(640px, 92%);
-  padding: 14px 16px;
-  border-radius: 18px;
-  line-height: 1.65;
+  max-width: min(720px, 100%);
+  padding: 4px 2px;
+  border-radius: 0;
+  line-height: 1.7;
   white-space: pre-wrap;
-  animation: rise 0.45s ease;
 }
 .bubble.user {
   align-self: flex-end;
-  background: linear-gradient(180deg, rgba(40, 78, 120, 0.55), rgba(16, 28, 48, 0.4));
-  border: 1px solid rgba(183, 215, 255, 0.22);
-  backdrop-filter: blur(12px);
+  max-width: min(560px, 88%);
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: #2a2b32;
+  border: 0;
 }
 .bubble .body { display: block; }
 .bubble.assistant {
-  align-self: flex-start;
-  background: rgba(8, 12, 20, 0.28);
-  border: 1px solid rgba(183, 215, 255, 0.08);
-  backdrop-filter: blur(16px);
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  padding: 8px 2px 4px;
 }
 .route { margin-top: 8px; font-size: 12px; letter-spacing: 0.08em; color: var(--muted); }
 .route.memory { color: var(--gold); }
@@ -465,7 +462,81 @@ main {
   grid-template-columns: 1fr auto;
   gap: 10px;
   align-items: end;
-  padding: 0 22px 18px;
+  margin: 0 22px 18px;
+  padding: 10px 10px 10px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 28px;
+  background: #212226;
+}
+.composer textarea {
+  border: 0;
+  background: transparent;
+  padding: 8px 4px;
+  min-height: 52px;
+  resize: none;
+}
+#send { min-width: 76px; height: 44px; border-radius: 22px; }
+.typing {
+  display: flex;
+  gap: 5px;
+  padding: 0 28px 8px;
+}
+.typing[hidden] { display: none !important; }
+.typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d4d4d8;
+  animation: pulse 1s infinite ease-in-out;
+}
+.typing span:nth-child(2) { animation-delay: 0.15s; }
+.typing span:nth-child(3) { animation-delay: 0.3s; }
+.toast {
+  position: fixed;
+  top: 76px;
+  left: 292px;
+  z-index: 40;
+  width: min(360px, 46vw);
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #2a2b32;
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
+.toast[hidden] { display: none !important; }
+#memory-view { padding: 8px 28px 32px; }
+#doc-review .sheet {
+  width: min(760px, 94vw);
+  display: flex;
+  flex-direction: column;
+  max-height: min(78vh, 720px);
+}
+#doc-review-list {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.doc-point {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  line-height: 1.65;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #1a1b1f;
+}
+.doc-point input { margin-top: 6px; flex: none; }
+.doc-point span { flex: 1; min-width: 0; white-space: normal; }
+.pending-box { padding: 0 4px 8px; }
+.pending-head, .doc-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.pending-list { display: flex; flex-direction: column; gap: 8px; }
+.pending-item, .doc-card {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
 }
 textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   width: 100%;
@@ -509,7 +580,16 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 .stage-panel:has(#loss-card[hidden]) { grid-template-columns: 1fr; }
 .stage-panel:has(#fact-editor:not([hidden])) { grid-template-columns: 1fr; }
 .stage-panel:has(#fact-editor:not([hidden])) #loss-card { display: none !important; }
-#fact-editor { grid-column: 1 / -1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+#fact-editor {
+  grid-column: 1 / -1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.stage-panel:has(#fact-editor:not([hidden])) #stage-feed { display: none; }
+#fact-list { overflow: auto; min-height: 0; flex: 1; }
+#fact-editor .sheet-actions { flex: none; position: sticky; bottom: 0; background: var(--canvas); padding-top: 8px; }
 .stage-feed { display: flex; flex-direction: column; gap: 10px; overflow: auto; min-height: 0; padding-right: 4px; }
 .event {
   padding: 14px 16px;
@@ -767,3 +847,15 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   .nebula-wrap { height: 360px; flex: none; }
   .stage-panel { max-height: 52vh; }
 }
+.composer textarea,
+.composer textarea:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.side, .top, .sheet, .boot-card {
+  background: var(--panel);
+  backdrop-filter: none;
+}
+.sheet { background: #232428; }
+body.sky-on .side, body.sky-on .top { background: rgba(18, 16, 28, 0.72); }

@@ -42,8 +42,25 @@ async function api(path, options = {}) {
   return data;
 }
 
+function showToast(text) {
+  const toast = $("toast");
+  if (!toast) return;
+  window.clearTimeout(showToast.timer);
+  showToast.timer = 0;
+  if (!text) {
+    toast.textContent = "";
+    toast.hidden = true;
+    return;
+  }
+  toast.textContent = text;
+  toast.hidden = false;
+  showToast.timer = window.setTimeout(() => {
+    toast.hidden = true;
+  }, 2800);
+}
+
 function showError(error) {
-  window.alert(tx(error.message || String(error)));
+  showToast(tx(error.message || String(error)));
 }
 
 function parseExtra(message) {
@@ -66,13 +83,17 @@ function setView(view) {
   $("nebula-view").hidden = view !== "nebula";
   $("memory-view").hidden = view !== "memory";
   const column = $("nebula-column");
-  const host = view === "nebula" ? $("nebula-host") : $("recall-host");
+  const host = $("nebula-host");
   if (column && host && column.parentElement !== host) host.appendChild(column);
   document.querySelectorAll(".nav").forEach((button) => button.classList.remove("active"));
   const nav = { chat: "nav-chat", consolidate: "nav-consolidate", nebula: "nav-nebula", memory: "memory-tab" }[view];
   if ($(nav)) $(nav).classList.add("active");
   const labels = { chat: "nav.chat", consolidate: "nav.consolidate", nebula: "nav.nebula", memory: "nav.memory" };
   $("eyebrow").textContent = t(labels[view] || "nav.chat");
+  document.body.classList.toggle("sky-on", view === "nebula");
+  const comet = $("recall-comet");
+  if (comet && view !== "nebula") comet.hidden = true;
+  showToast("");
   if (state.nebula) state.nebula.resize();
 }
 
@@ -113,7 +134,7 @@ function renderJobBar() {
   const bar = $("jobbar");
   const job = state.job;
   const previewing = state.preview && (state.preview.status === "running" || state.preview.status === "done");
-  if (!job || (previewing && job.status !== "running" && job.status !== "done")) {
+  if (!job || job.status === "done" || (previewing && job.status !== "running")) {
     bar.hidden = true;
     return;
   }
@@ -338,9 +359,7 @@ function renderFeed(trace) {
     }
     return;
   }
-  const uncovered = (state.preview && state.preview.uncovered) || [];
-  const warnings = uncovered.map((item) => `<article class="event warn"><strong>${esc(t("fact.uncovered", { sentence: item.sentence }))}</strong><div><button type="button" data-add-manual="${esc(item.sentence)}">${esc(t("fact.addManual"))}</button></div></article>`);
-  if (!shown.length && !recall.length && !warnings.length) {
+  if (!shown.length && !recall.length) {
     const empty = `<div class="empty">${esc(t("empty.feed"))}</div>`;
     if (empty !== stageView.feed) {
       stageView.feed = empty;
@@ -351,10 +370,7 @@ function renderFeed(trace) {
   const rows = shown.map((event) => {
     if (event.stage === "select") return `<article class="event"><strong>${esc(t("feed.selected"))}</strong><div>${esc(event.title || event.conversation_id || "")}</div><div class="muted">${esc(event.chars == null ? "" : t("feed.chars", { n: event.chars }))}</div></article>`;
     if (event.stage === "extract") {
-      if (event.uncovered) {
-        const lines = (event.sentences || []).map((sentence) => `<div>${esc(t("fact.uncovered", { sentence }))} <button type="button" data-add-manual="${esc(sentence)}">${esc(t("fact.addManual"))}</button></div>`).join("");
-        return `<article class="event warn"><strong>${esc(event.detail || t("fact.uncovered", { sentence: "" }))}</strong>${lines}</article>`;
-      }
+      if (event.uncovered) return "";
       const note = event.duplicate ? t("feed.duplicate") : (advancedOn() ? tx(event.note || event.how || "") : "");
       return `<article class="event"><strong>${esc(event.statement || t("feed.extracted"))}</strong><div class="muted">${esc([event.entity, event.attr, event.value].filter(Boolean).join(" · "))} ${esc(note)}</div></article>`;
     }
@@ -376,7 +392,7 @@ function renderFeed(trace) {
   (trace.saved_facts || []).forEach((fact) => {
     rows.push(`<article class="event"><strong>${esc(fact.statement || "")}</strong><div class="muted">${esc([fact.entity, fact.attr, fact.value].filter(Boolean).join(" · "))}</div></article>`);
   });
-  const html = warnings.join("") + rows.join("");
+  const html = rows.filter(Boolean).join("");
   if (html === stageView.feed) return;
   stageView.feed = html;
   $("stage-feed").innerHTML = html;
@@ -484,21 +500,7 @@ function dayLabel(key, sample) {
 }
 
 function visibleConversations() {
-  const ranked = [...state.conversations].sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
-  const seen = new Set();
-  const kept = [];
-  ranked.forEach((conv) => {
-    const key = String(conv.title || "").trim();
-    if (conv.id === state.currentId) {
-      kept.push(conv);
-      if (key) seen.add(key);
-      return;
-    }
-    if (key && seen.has(key)) return;
-    if (key) seen.add(key);
-    kept.push(conv);
-  });
-  return kept;
+  return [...state.conversations].sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
 }
 
 function renderConversations() {
@@ -555,13 +557,17 @@ function recallTrace(extra) {
 }
 
 function chipLabel(trace) {
+  const docChips = trace && trace.doc_chips;
+  if (docChips && docChips.length) return docChips.map((chip) => chip.label).filter(Boolean).join("  ");
   if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("chip.ack") : t("chip.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const matched = trace.matched_facts || [];
-  const entity = matched.map((fact) => fact.entity).find(Boolean);
-  const name = entity || (row ? row.display_name : trace.mounted_expert);
-  const facts = matched.map((fact) => fact.value || fact.attr).filter(Boolean).slice(0, 3);
-  return facts.length ? t("chip.from", { name, facts: facts.join(t("list.sep")) }) : t("chip.whole", { name });
+  let name = (row && row.display_name) || "";
+  if (!name || name === "我" || name === "I") name = t("nebula.self");
+  const facts = matched.map((fact) => fact.value || fact.attr).filter(Boolean).slice(0, 2);
+  const source = matched.flatMap((fact) => fact.source_conversations || []).map((item) => item.title).find(Boolean);
+  const label = facts.length ? t("chip.from", { name, facts: facts.join(t("list.sep")) }) : t("chip.whole", { name });
+  return source ? `${label} · ${source}` : label;
 }
 
 function chipTitle(trace) {
@@ -655,8 +661,11 @@ async function playRecall(trace, fromEl, streamNode, fullText) {
   showRecallBanner(trace);
   if (!state.nebula) return;
   const lit = state.nebula.highlight(trace);
-  if (streamNode && fullText) revealText(streamNode, fullText);
-  if (!lit.mounted) return;
+  if (!lit.mounted || state.view !== "nebula") {
+    const comet = $("recall-comet");
+    if (comet) comet.hidden = true;
+    return;
+  }
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const points = lit.nodeIds.map((id) => state.nebula.screenPoint(id)).filter(Boolean);
   flyToStars(fromEl, points);
@@ -733,23 +742,46 @@ async function openConversation(id, switchView, revealId) {
 async function loadMemory() {
   setView("memory");
   $("title").textContent = t("title.memory");
-  const data = await api("/api/experts");
+  const [data, pending, docs] = await Promise.all([
+    api("/api/experts"),
+    api("/api/pending"),
+    api("/api/documents"),
+  ]);
+  state.pending = pending.pending || [];
+  state.documents = docs.documents || [];
   const root = $("memory-view");
-  if (!data.experts.length) {
-    root.innerHTML = `<div class="empty">${esc(t("empty.memory"))}</div>`;
-    return;
-  }
-  root.innerHTML = data.experts.map((expert) => {
-    const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.statement || fact.question || "")}</li>`).join("");
-    const sources = (expert.sources || []).map((src) => String(src.title || src.id || "").replace(/[。．.!?！？]+$/u, "")).join(t("list.sep")) || t("fact.noSource");
+  const queue = renderPendingHtml(state.pending);
+  const documents = `<section class="doc-section"><div class="doc-head"><strong>${esc(t("docs.title"))}</strong><button type="button" id="import-doc-library">${esc(t("docs.import"))}</button></div>${
+    state.documents.length
+      ? state.documents.map((doc) => `<article class="doc-card"><h3>${esc(doc.title)}</h3><p class="muted">${esc(t("fact.activeCount", { n: doc.points ? doc.points.length : 0 }))}</p><button type="button" data-open-doc="${esc(doc.id)}">${esc(t("docs.review"))}</button> <button class="danger" type="button" data-del-doc="${esc(doc.id)}">${esc(t("docs.delete"))}</button></article>`).join("")
+      : `<div class="empty">${esc(t("docs.empty"))}</div>`
+  }</section>`;
+  const experts = (data.experts || []).map((expert) => {
+    const facts = (expert.facts || []).slice(0, 30).map((fact) => `<li>${fact.superseded ? esc(t("fact.superseded")) : ""}${esc(fact.value || fact.statement || fact.question || "")}</li>`).join("");
+    const titles = [];
+    (expert.sources || []).forEach((src) => {
+      const name = String(src.title || "").replace(/[。．.!?！？]+$/u, "").trim();
+      if (name && !titles.includes(name)) titles.push(name);
+    });
+    (expert.facts || []).forEach((fact) => {
+      (fact.source_conversations || []).forEach((src) => {
+        const name = String(src.title || "").replace(/[。．.!?！？]+$/u, "").trim();
+        if (name && !titles.includes(name)) titles.push(name);
+      });
+    });
+    const title = expert.self || expert.display_name === "关于你" ? t("nebula.self") : (expert.display_name || "");
+    const sourceLine = titles.length ? `<p>${esc(t("fact.sources", { names: titles.join(t("list.sep")) }))}</p>` : "";
     return `<article class="card">
-      <h3>${esc(expert.self || expert.display_name === "关于你" ? t("nebula.self") : (expert.display_name || expert.name))}</h3>
-      <div class="muted">${esc(expert.name)} · ${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
-      <p>${esc(t("fact.sources", { names: sources }))}</p>
+      <h3>${esc(title)}</h3>
+      <div class="muted">${esc(t("fact.activeCount", { n: expert.n_facts }))}</div>
+      ${sourceLine}
       <ul>${facts || `<li>${esc(t("empty.factText"))}</li>`}</ul>
       <button class="danger" type="button" data-del="${esc(expert.name)}">${esc(t("action.delete"))}</button>
     </article>`;
   }).join("");
+  root.innerHTML = `${queue}${documents}${experts || `<div class="empty">${esc(t("empty.memory"))}</div>`}`;
+  const libraryImport = $("import-doc-library");
+  if (libraryImport) libraryImport.onclick = () => importDocument().catch(showError);
   root.querySelectorAll("[data-del]").forEach((button) => {
     button.onclick = async () => {
       if (!window.confirm(t("memory.deleteConfirm"))) return;
@@ -761,6 +793,22 @@ async function loadMemory() {
       }
     };
   });
+  root.querySelectorAll("[data-del-doc]").forEach((button) => {
+    button.onclick = async () => {
+      if (!window.confirm(t("docs.deleteAsk"))) return;
+      try {
+        await api(`/api/documents/${button.dataset.delDoc}`, { method: "DELETE" });
+        await refreshPending();
+        if (state.view === "memory") await loadMemory();
+      } catch (error) {
+        showError(error);
+      }
+    };
+  });
+  root.querySelectorAll("[data-open-doc]").forEach((button) => {
+    button.onclick = () => openDocReview(button.dataset.openDoc).catch(showError);
+  });
+  bindTrainAll(root);
 }
 
 function renderFacts() {
@@ -849,10 +897,94 @@ function bindManualAdds(root) {
   if (blank) blank.onclick = () => add("");
 }
 
+function renderPendingHtml(items) {
+  const rows = (items || []).map((fact) => `<article class="pending-item" data-pending="${esc(fact.statement || "")}">${esc(fact.statement || fact.value || "")}</article>`).join("");
+  return `<section class="pending-box"><div class="pending-head"><strong>${esc(t("pending.title"))}</strong>${
+    items && items.length ? `<button type="button" class="primary train-all">${esc(t("pending.trainAll"))}</button>` : ""
+  }</div><div class="pending-list">${rows || `<div class="empty">${esc(t("pending.empty"))}</div>`}</div></section>`;
+}
+
+function bindTrainAll(root) {
+  (root || document).querySelectorAll(".train-all").forEach((button) => { button.onclick = trainAll; });
+}
+
+async function trainAll() {
+  try {
+    const data = await api("/api/pending/train", { method: "POST", body: "{}" });
+    state.job = data.job;
+    state.preview = null;
+    state.selected.clear();
+    await openConsolidate();
+    renderJobBar();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function refreshPending() {
+  try {
+    const data = await api("/api/pending");
+    state.pending = data.pending || [];
+  } catch (error) {
+    state.pending = [];
+  }
+  const host = $("pending-box");
+  if (host && state.view === "consolidate") {
+    host.innerHTML = renderPendingHtml(state.pending);
+    bindTrainAll(host);
+  }
+}
+
+async function openDocReview(docId) {
+  const docs = state.documents && state.documents.length ? state.documents : ((await api("/api/documents")).documents || []);
+  const doc = docs.find((item) => item.id === docId);
+  if (!doc) return;
+  state.reviewDoc = doc;
+  const list = $("doc-review-list");
+  list.innerHTML = (doc.points || []).map((point) => `<label class="doc-point"><input type="checkbox" data-point="${esc(point.id)}" ${point.selected === false ? "" : "checked"} /><span>${esc(point.text)}</span></label>`).join("") || `<div class="empty">${esc(t("docs.empty"))}</div>`;
+  showToast("");
+  $("doc-review").hidden = false;
+}
+
+async function importDocument(filePath) {
+  let target = filePath || "";
+  if (!target) {
+    if (!window.desktop || !window.desktop.pickDocument) return showError(new Error(t("error.request")));
+    target = await window.desktop.pickDocument();
+  }
+  if (!target) return;
+  state.docJob = { phase: "parse", percent: 8, title: target.split(/[\\/]/).pop() };
+  showToast(t("docs.reading", { title: state.docJob.title }));
+  await api("/api/documents", { method: "POST", body: JSON.stringify({ path: target }) });
+  state.docPolling = true;
+}
+
+async function finishDocImport() {
+  const status = await api("/api/documents");
+  state.documents = status.documents || [];
+  const job = status.job || {};
+  if (!state.docPolling) return;
+  if (job.phase === "error") {
+    state.docPolling = false;
+    showError(new Error(job.message || t("error.request")));
+    return;
+  }
+  if (job.phase !== "done") {
+    if (job.title) showToast(t("docs.reading", { title: job.title || "" }));
+    return;
+  }
+  showToast("");
+  state.docPolling = false;
+  const doc = state.documents.find((item) => item.id === job.doc_id) || state.documents[state.documents.length - 1];
+  if (doc) await openDocReview(doc.id);
+  else showToast(job.message || "");
+}
+
 async function openConsolidate() {
   setView("consolidate");
   $("title").textContent = t("title.consolidate");
   renderStages();
+  await refreshPending();
 }
 
 function factScoreLine(fact) {
@@ -990,6 +1122,33 @@ async function commitStar() {
   await openConsolidate();
 }
 
+$("import-doc").onclick = () => importDocument().catch(showError);
+$("doc-review-skip").onclick = () => { $("doc-review").hidden = true; };
+$("doc-review-add").onclick = async () => {
+  const doc = state.reviewDoc;
+  if (!doc) return;
+  const ids = [...$("doc-review-list").querySelectorAll("[data-point]:checked")].map((box) => box.dataset.point);
+  try {
+    await api(`/api/documents/${doc.id}/queue`, { method: "POST", body: JSON.stringify({ points: ids }) });
+    $("doc-review").hidden = true;
+    showToast(t("toast.ok"));
+    await refreshPending();
+    if (state.view === "memory") await loadMemory();
+  } catch (error) {
+    showError(error);
+  }
+};
+window.addEventListener("dragover", (event) => {
+  if ([...event.dataTransfer.types].includes("Files")) event.preventDefault();
+});
+window.addEventListener("drop", (event) => {
+  const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+  if (!file) return;
+  event.preventDefault();
+  const filePath = window.desktop && window.desktop.pathForFile ? window.desktop.pathForFile(file) : "";
+  if (filePath) importDocument(filePath).catch(showError);
+});
+
 $("new-chat").onclick = async () => {
   try {
     const conv = await api("/api/conversations", { method: "POST", body: JSON.stringify({ title: t("title.new") }) });
@@ -1012,6 +1171,8 @@ $("consolidate").onclick = async () => {
   const ids = [...state.selected];
   if (!ids.length && state.currentId) ids.push(state.currentId);
   if (!ids.length) return showError(new Error(t("star.needChat")));
+  state.selected.clear();
+  renderConversations();
   state.sourceIds = ids;
   state.facts = [];
   state.job = null;
@@ -1051,6 +1212,7 @@ $("composer").onsubmit = async (event) => {
   if (!text || state.sending) return;
   state.sending = true;
   $("send").disabled = true;
+  $("typing").hidden = false;
   try {
     if (!state.currentId) {
       const conv = await api("/api/conversations", { method: "POST", body: JSON.stringify({ title: t("title.new") }) });
@@ -1068,6 +1230,10 @@ $("composer").onsubmit = async (event) => {
   } finally {
     state.sending = false;
     $("send").disabled = false;
+    const typing = $("typing");
+    if (typing) typing.hidden = true;
+    const comet = $("recall-comet");
+    if (comet && state.view !== "nebula") comet.hidden = true;
     $("input").focus();
   }
 };
@@ -1102,10 +1268,22 @@ async function pollWork() {
       const finished = state.job.status === "running" && job.status === "done";
       state.job = job;
       renderJobBar();
+      if (finished) {
+        state.selected.clear();
+        renderConversations();
+        state.pendingSynced = job.id;
+        refreshPending().catch(() => {});
+      }
       if (state.view === "consolidate") renderStages();
       if (finished && state.view === "nebula") openNebula().catch(() => {});
     } catch (error) { /* 下一轮再试 */ }
+  } else if (state.job && state.job.status === "done" && state.pendingSynced !== state.job.id) {
+    state.pendingSynced = state.job.id;
+    state.selected.clear();
+    renderConversations();
+    refreshPending().catch(() => {});
   }
+  if (state.docPolling) finishDocImport().catch(() => {});
   applyShotJob();
 }
 

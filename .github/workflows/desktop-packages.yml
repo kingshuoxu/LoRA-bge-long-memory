@@ -98,7 +98,7 @@ jobs:
 
       - name: Linux packaging tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools xvfb
+        run: sudo apt-get update && sudo apt-get install -y fakeroot dpkg libarchive-tools xvfb fonts-noto-cjk
 
       - name: Install Electron builder
         working-directory: desktop
@@ -132,6 +132,24 @@ jobs:
         with:
           path: model-cache
           key: lora-bge-models-v1
+
+      - name: Install Playwright
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: npm install --no-save playwright
+
+      - name: Desktop UI end to end
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          LORA_MEMORY_MODELS: ${{ github.workspace }}/model-cache
+          LORA_MEMORY_E2E_FAST: "1"
+        run: xvfb-run -a node e2e/flow.js
+
+      - name: Upgrade from desktop 0.2.7 keeps user data
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash packaging/upgrade-from-027.sh
 
       - name: AppImage upgrade keeps user data
         if: runner.os == 'Linux'

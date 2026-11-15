@@ -2,7 +2,8 @@
 (function () {
   const STR = {
     "zh-CN": {
-      "app.name": "LoRA 长记忆",
+      "app.name": "萤语",
+      "app.about": "萤语 Yingyu。对话、记忆和模型都留在这台电脑上。",
       "boot.loading": "正在准备本地模型…",
       "boot.download": "首次运行会下载 Qwen2.5-0.5B-Instruct 和 bge-small-zh-v1.5，大约 1.1 GB，只下载一次。",
       "boot.failed": "模型没有就绪",
@@ -148,6 +149,20 @@
       "settings.title": "设置",
       "settings.advanced": "显示路由和分数",
       "fact.uncovered": "这句没有抽成事实：{sentence}",
+      "pending.title": "待巩固",
+      "pending.empty": "说出一条事实，或从文档里勾选重点，会出现在这里。",
+      "pending.trainAll": "全部训练",
+      "pending.queued": "已放入待巩固",
+      "docs.title": "文档",
+      "docs.import": "导入文档",
+      "docs.empty": "还没有导入的文档",
+      "docs.review": "选择要巩固的重点",
+      "docs.add": "加入待巩固",
+      "docs.skip": "先不加入",
+      "docs.deleteAsk": "删除这份文档？索引和还没巩固的条目会去掉。已经巩固的记忆还留着。",
+      "docs.delete": "删除",
+      "docs.reading": "正在读入《{title}》",
+      "toast.ok": "已放入待巩固",
       "fact.addManual": "手动添加",
       "fact.emptySource": "这些对话没有抽出事实：{names}",
       "settings.check": "检查更新",
@@ -177,7 +192,8 @@
       "list.earlier": "更早",
     },
     en: {
-      "app.name": "LoRA Long Memory",
+      "app.name": "Yingyu",
+      "app.about": "Yingyu. Chats, memory and models stay on this computer.",
       "boot.loading": "Preparing the local models…",
       "boot.download": "The first launch downloads Qwen2.5-0.5B-Instruct and bge-small-zh-v1.5, about 1.1 GB, once.",
       "boot.failed": "The models are not ready",
@@ -323,6 +339,20 @@
       "settings.title": "Settings",
       "settings.advanced": "Show routing scores",
       "fact.uncovered": "This sentence was not saved as a fact: {sentence}",
+      "pending.title": "To consolidate",
+      "pending.empty": "Say a fact, or pick key points from a document, and it shows up here.",
+      "pending.trainAll": "Train all",
+      "pending.queued": "Added to the queue",
+      "docs.title": "Documents",
+      "docs.import": "Import",
+      "docs.empty": "No documents yet",
+      "docs.review": "Choose key points to keep",
+      "docs.add": "Add to queue",
+      "docs.skip": "Not now",
+      "docs.deleteAsk": "Delete this document? The index and unconsolidated points go away. Memory already consolidated stays.",
+      "docs.delete": "Delete",
+      "docs.reading": "Reading {title}",
+      "toast.ok": "Added to the queue",
       "fact.addManual": "Add manually",
       "fact.emptySource": "No facts were extracted from: {names}",
       "settings.check": "Check for updates",
@@ -485,8 +515,7 @@
       const saved = localStorage.getItem("lora-memory-locale");
       if (saved === "zh-CN" || saved === "en") return saved;
     } catch (error) { /* 隐私模式仍按系统语言 */ }
-    const language = (navigator.language || navigator.userLanguage || "zh-CN").toLowerCase();
-    return language.startsWith("zh") ? "zh-CN" : "en";
+    return "zh-CN";
   }
 
   function fill(template, vars) {

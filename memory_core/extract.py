@@ -210,6 +210,10 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
             question = f"What is my {attr}?"
         else:
             question = f"What is {entity}'s {attr}?"
+    elif how == "self_name":
+        question = "我叫什么？" if has_cjk(entity + value) else "What is my name?"
+    elif how == "owned":
+        question = f"我的{attr}叫什么？"
     else:
         question = _attr_question(entity, attr, "是什么？")
     return {
@@ -262,9 +266,53 @@ def _split_yu(sentence: str) -> tuple[str, str, str] | None:
     return None
 
 
+def _looks_like_personal_name(value: str) -> bool:
+    if not 1 <= len(value) <= 8:
+        return False
+    if any(ch in value for ch in "，,。；;！!？?\n的是不在有要想说会能个了吗呢啊呀"):
+        return False
+    if value.count(" ") > 1:
+        return False
+    return all(ch.isalpha() or ch in " ·•" or "\u4e00" <= ch <= "\u9fff" for ch in value)
+
+
+def _match_speaker(sentence: str) -> dict[str, Any] | None:
+    """「我叫 / 我是 / 你好，我是」记成使用者的名字。猫狗这类另立实体。"""
+    greeting = re.match(r"^(?:你好[，,\s]*)?我(?:叫|是)(?P<value>.+)$", sentence)
+    if greeting:
+        value = greeting.group("value").strip()
+        if _looks_like_personal_name(value):
+            inner = re.sub(r"^你好[，,\s]*", "", sentence)
+            return _make_fact("我", "名字", value, "self_name", inner)
+    mine = re.match(r"^我的(?P<thing>[\u4e00-\u9fff]{1,8})叫(?P<value>[\u4e00-\u9fffA-Za-z0-9·]{1,16})$", sentence)
+    if not mine:
+        return None
+    thing = mine.group("thing")
+    value = mine.group("value").strip()
+    if not value:
+        return None
+    if thing in {"名字", "姓名"}:
+        return _make_fact("我", "名字", value, "self_name", sentence)
+    shown = thing[0] if thing in {"猫猫", "狗狗"} else thing
+    if "猫" in thing or "狗" in thing:
+        fact = _make_fact(value, "宠物", value, "owned", sentence)
+        if fact:
+            fact["question"] = f"我的{shown}叫什么名字？"
+            fact["attr"] = "宠物"
+        return fact
+    fact = _make_fact(value, shown, value, "owned", sentence)
+    if fact:
+        fact["question"] = f"我的{shown}叫什么？"
+        fact["attr"] = shown
+    return fact
+
+
 def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None:
     sentence = _bind_subject(sentence, current)
-    found: dict[str, Any] | None = None
+    found = _match_speaker(sentence)
+    if found is not None:
+        return found
+    found = None
     matched = re.match(
         r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)是(?P<value>[^，。]{1,32})$",
         sentence,
@@ -878,7 +926,25 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
             f"{entity}的{attr}叫什么？",
             f"{entity}的{attr}是谁？",
         ])
+    if speaker_pronoun(entity) and attr in {"名字", "姓名"}:
+        questions.extend([
+            "我是谁？",
+            "我叫什么？",
+            "我叫什么名字？",
+            "我的名字是什么？",
+            "我的名字叫什么？",
+        ])
+    if attr == "宠物" or statement.startswith("我的猫") or statement.startswith("我的狗"):
+        questions.extend([
+            "我的猫叫什么名字？",
+            "我的猫叫什么？",
+            f"{entity}是谁？",
+            f"关于{entity}",
+        ])
     questions.extend(_relation_questions(entity, attr, statement, False))
+    for extra in fact.get("extra_questions") or []:
+        if extra:
+            questions.append(str(extra))
     company_qa = fact.get("_company_qa") or []
     for qa in company_qa:
         if qa.get("q"):

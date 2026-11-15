@@ -14,7 +14,7 @@ if [ "$version" = "$prev" ]; then
   exit 1
 fi
 
-new_app="$root/desktop/dist/LoRA-bge-memory-${version}-linux-x86_64.AppImage"
+new_app="$root/desktop/dist/Yingyu-${version}-linux-x86_64.AppImage"
 yml="$root/desktop/dist/latest-linux.yml"
 if [ ! -f "$new_app" ] || [ ! -f "$yml" ]; then
   echo "缺少 $new_app 或 latest-linux.yml" >&2
@@ -43,7 +43,7 @@ rm -rf "$root/desktop/dist-prev"
     -c.directories.output=dist-prev
 )
 
-old_app="$root/desktop/dist-prev/LoRA-bge-memory-${prev}-linux-x86_64.AppImage"
+old_app="$root/desktop/dist-prev/Yingyu-${prev}-linux-x86_64.AppImage"
 if [ ! -f "$old_app" ]; then
   echo "没有打出 $old_app" >&2
   exit 1

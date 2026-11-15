@@ -44,8 +44,8 @@ export function factCaption(fact) {
   const statement = String((fact && fact.statement) || "").replace(/[。．.!]+$/u, "").trim();
   const value = String((fact && fact.value) || "").trim();
   const attr = String((fact && fact.attr) || "").trim();
-  const name = statement || value || attr;
-  const meta = attr && attr !== name ? attr : (value && value !== name ? value : "");
+  const name = value || attr || statement;
+  const meta = attr && attr !== name ? attr : "";
   return { name, meta };
 }
 

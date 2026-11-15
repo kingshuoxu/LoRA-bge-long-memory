@@ -1,8 +1,8 @@
 {
   "name": "lora-bge-memory",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
-  "description": "LoRA 长记忆桌面客户端",
+  "description": "萤语 Yingyu 桌面客户端",
   "author": "LoRA-bge-long-memory",
   "homepage": "https://github.com/kingshuoxu/LoRA-bge-long-memory",
   "main": "main.js",
@@ -16,7 +16,7 @@
   },
   "build": {
     "appId": "com.lorabge.memory",
-    "productName": "LoRA-bge-memory",
+    "productName": "Yingyu",
     "executableName": "lora-bge-memory",
     "asar": true,
     "directories": {
@@ -79,7 +79,7 @@
         "to": "e2e-check.cmd"
       }
     ],
-    "artifactName": "LoRA-bge-memory-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Yingyu-${version}-${os}-${arch}.${ext}",
     "linux": {
       "target": [
         "AppImage",
@@ -87,11 +87,11 @@
       ],
       "category": "Utility",
       "maintainer": "LoRA-bge-long-memory",
-      "synopsis": "用 LoRA 专家保存长期记忆的本地对话",
-      "description": "本地多轮对话。选中历史对话后可巩固成 LoRA 专家，并在之后的对话里自动挂载。",
+      "synopsis": "萤语，本地长记忆对话",
+      "description": "本地多轮对话。说下想记住的事，巩固之后会在以后的对话里想起。",
       "desktop": {
-        "Name": "LoRA 长记忆",
-        "Comment": "用 LoRA 专家保存长期记忆的本地对话",
+        "Name": "萤语",
+        "Comment": "Yingyu，本地长记忆对话",
         "Categories": "Utility;"
       }
     },
@@ -122,7 +122,7 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "differentialPackage": true,
-      "shortcutName": "LoRA 长记忆"
+      "shortcutName": "萤语"
     },
     "mac": {
       "target": [
@@ -134,7 +134,7 @@
       "notarize": false
     },
     "dmg": {
-      "title": "LoRA 长记忆"
+      "title": "萤语"
     }
   },
   "dependencies": {

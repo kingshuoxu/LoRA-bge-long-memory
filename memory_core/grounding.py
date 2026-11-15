@@ -120,6 +120,8 @@ def open_entity_question(text: str, entity: str) -> bool:
         )
         if any(cue in compact_cjk for cue in cues):
             return True
+        if compact_cjk in {f"{entity}是谁", f"{entity}是什么", f"{entity}呢"}:
+            return True
     # 英文提示和汉字名字可以写在同一句里，例如 overview of 某个已存的人。
     compact = re.sub(r"\s+", " ", text).strip()
     name = re.escape(entity)
@@ -303,12 +305,36 @@ def abstain_reply(entity: str, text: str) -> str:
     return f"没有存过关于{label}的这件事。"
 
 
+def already_remembered(fact: dict[str, Any]) -> str:
+    """同一件事再说一遍。不另开一条待巩固。"""
+    value = str(fact.get("value") or "").strip()
+    statement = str(fact.get("statement") or "")
+    attr = str(fact.get("attr") or "")
+    entity = str(fact.get("entity") or "")
+    if has_cjk(f"{entity}{attr}{value}{statement}"):
+        if attr == "宠物" or "猫" in statement:
+            return f"已经记住了，你的猫叫{value}。"
+        if "狗" in statement and entity != "我":
+            return f"已经记住了，你的狗叫{value}。"
+        if entity == "我" and attr in {"名字", "姓名"}:
+            return f"已经记住了，你是{value}。"
+        return "已经记住了。"
+    return "Already remembered."
+
+
 def acknowledge_statement(fact: dict[str, Any]) -> str:
     """陈述句的确认。不复读成孤零零的取值，也不说已经训练好。"""
     entity = str(fact.get("entity") or "").strip()
     attr = str(fact.get("attr") or "").strip().replace("的的", "的")
     value = str(fact.get("value") or "").strip()
-    if has_cjk(f"{entity}{attr}{value}"):
+    statement = str(fact.get("statement") or "")
+    if has_cjk(f"{entity}{attr}{value}{statement}"):
+        if entity == "我" and attr in {"名字", "姓名"}:
+            return f"好的，记住了，你是{value}。"
+        if attr == "宠物" or statement.startswith("我的猫"):
+            return f"好，你的猫叫{value}。"
+        if statement.startswith("我的狗"):
+            return f"好，你的狗叫{value}。"
         who = "你" if entity == "我" else entity
         if attr.endswith("的名字"):
             head = attr[: -len("的名字")]
@@ -616,6 +642,7 @@ def matched_rows(facts: list[dict]) -> list[dict]:
             "value": fact.get("value") or fact.get("answer") or "",
             "passed": True,
             "grounded": True,
+            "source_conversations": fact.get("source_conversations") or [],
         })
     return rows
 

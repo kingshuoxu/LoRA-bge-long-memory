@@ -117,6 +117,19 @@ def make_handler(app: App):
                 return _json_bytes({"ok": True})
             if len(parts) == 3 and parts[0] == "conversations" and parts[2] == "messages" and method == "POST":
                 return _json_bytes(service.send_message(parts[1], payload.get("content", "")))
+            if method == "GET" and parts == ["pending"]:
+                return _json_bytes({"pending": service.list_pending()})
+            if method == "POST" and parts == ["pending", "train"]:
+                return _json_bytes({"job": service.train_pending()})
+            if method == "GET" and parts == ["documents"]:
+                return _json_bytes({"documents": service.list_documents(), "job": service.document_status()})
+            if method == "POST" and parts == ["documents"]:
+                return _json_bytes(service.start_document_import(str(payload.get("path") or "")))
+            if len(parts) == 3 and parts[0] == "documents" and parts[2] == "queue" and method == "POST":
+                ids = payload.get("points") or payload.get("point_ids") or []
+                return _json_bytes(service.queue_document_points(parts[1], [str(item) for item in ids]))
+            if len(parts) == 2 and parts[0] == "documents" and method == "DELETE":
+                return _json_bytes(service.remove_document(parts[1]))
             if method == "GET" and parts == ["experts"]:
                 return _json_bytes({"experts": service.list_experts()})
             if len(parts) == 2 and parts[0] == "experts" and method == "DELETE":
