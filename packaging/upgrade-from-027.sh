@@ -17,8 +17,21 @@ fi
 cache="${LORA_MEMORY_PREV_APPIMAGE:-$root/packaging/cache/LoRA-bge-memory-${prev}-linux-x86_64.AppImage}"
 if [ ! -f "$cache" ]; then
   mkdir -p "$(dirname "$cache")"
-  curl -L --fail -o "$cache" \
-    "https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/desktop-v${prev}/LoRA-bge-memory-${prev}-linux-x86_64.AppImage"
+  url="https://github.com/kingshuoxu/LoRA-bge-long-memory/releases/download/desktop-v${prev}/LoRA-bge-memory-${prev}-linux-x86_64.AppImage"
+  ok=0
+  for attempt in 1 2 3 4 5 6; do
+    rm -f "$cache"
+    if curl -L --fail --retry 2 --retry-all-errors --retry-delay 5 -o "$cache" "$url"; then
+      ok=1
+      break
+    fi
+    echo "0.2.7 安装包下载失败，隔开再试 ($attempt)" >&2
+    sleep $((attempt * 30))
+  done
+  if [ "$ok" != 1 ] || [ ! -s "$cache" ]; then
+    echo "下载不到 0.2.7 安装包" >&2
+    exit 1
+  fi
 fi
 
 feed="$(mktemp -d)"

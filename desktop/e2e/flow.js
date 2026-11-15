@@ -9,7 +9,7 @@ const path = require("path");
 const { _electron: electron } = require("playwright");
 
 const root = path.resolve(__dirname, "..", "..");
-const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.14");
+const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.42");
 const pdf = path.join(root, "tests", "fixtures", "wugang", "wugang_chrome.pdf");
 const report = [];
 
@@ -226,11 +226,17 @@ async function main() {
 
     await page.locator("#nav-chat").click();
     await send(page, "白鹭塔建于哪一年？");
-    await page.waitForFunction(() => {
-      const bodies = [...document.querySelectorAll("#messages .bubble.assistant .body")];
-      const last = bodies[bodies.length - 1];
-      return last && last.textContent.includes("1873") && last.textContent.includes("四十二米");
-    });
+    try {
+      await page.waitForFunction(() => {
+        const bodies = [...document.querySelectorAll("#messages .bubble.assistant .body")];
+        const last = bodies[bodies.length - 1];
+        return last && last.textContent.includes("1873") && last.textContent.includes("四十二米");
+      });
+    } catch (error) {
+      const bodies = await page.locator("#messages .bubble.assistant .body").allInnerTexts();
+      note(`year bodies: ${JSON.stringify(bodies)}`);
+      throw error;
+    }
     await waitText(page, "第3页");
     await shot(page, "08-year-page.png");
     note("Q: 白鹭塔建于哪一年？ expect 1873 / 第3页");

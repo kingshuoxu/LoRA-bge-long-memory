@@ -258,7 +258,10 @@ def utterance_is_question(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
         return False
-    from memory_core.extract import _looks_like_question
+    from memory_core.extract import _looks_like_question, is_declarative_fact, is_reported_statement
+
+    if is_reported_statement(raw) or is_declarative_fact(raw):
+        return False
 
     if _looks_like_question(raw):
         return True
@@ -673,6 +676,12 @@ def propose_from_records(
             "source_text": text or surface,
         }
 
+    from memory_core.extract import without_tag_question
+
+    if utterance_is_question(text) and not _correction_mark(text):
+        return None
+    if without_tag_question(text) != text and not _correction_mark(text):
+        return None
     if _speaker_only(text) and not _correction_mark(text):
         return None
     if _about_someone_else(text, records):

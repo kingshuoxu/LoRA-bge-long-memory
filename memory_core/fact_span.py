@@ -12,8 +12,6 @@ from pathlib import Path
 
 import re
 
-import torch
-
 from memory_core.paths import ensure_scripts_path
 from memory_core.prompts import has_cjk
 
@@ -62,10 +60,11 @@ def _entity_surfaces(name: str) -> list[str]:
 # 多出来的名字音节（兰、科、司、智、制）不在这里，所以短名对不上更长的名字。
 _GRAMMAR = frozenset(
     "的是叫吗呢吧啊呀在住有养会做从来去和与也还最现目正已不没家这那开骑弹玩"
-    "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本"
+    "多几谁哪什怎如请帮告问说讲介聊给被把向往了着过到对跟下一于关今曾将其本上"
     "该能要想喜爱讨厌诉绍为让部员工产旗舰你他她它"
     "老总主靠自居公相年手电邮职生习股我"
     "成偏毕建磨属"
+    "只条个座辆念现"
 )
 
 _LATIN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*")
@@ -295,6 +294,43 @@ def _en_token_near(name: str, query: str) -> str | None:
     return None
 
 
+_VERB_PREFIXES = (
+    "守护", "看守", "打磨", "值守", "照看", "照管", "看管", "看顾", "看护",
+    "负责", "名叫", "叫做", "养了", "养着",
+)
+
+
+def verb_prefixed_name(name: str, span: str) -> bool:
+    """「守护白鹭塔」仍是白鹭塔。多出来的是谓语，不是另一个名字。"""
+    if not name or not span or span == name or not span.endswith(name):
+        return False
+    extra = span[: -len(name)]
+    if extra in _VERB_PREFIXES or extra.endswith(("的", "了", "着", "在")):
+        return True
+    return extra in {"守", "看", "管", "磨", "养", "叫", "是", "在", "有", "由"}
+
+
+def _verb_attached(name: str, span: str) -> bool:
+    """谓语贴在名字前或后，仍是同一个名字。「就读」「守护」不是另一个字号。"""
+    if verb_prefixed_name(name, span):
+        return True
+    if not span.startswith(name) or span == name:
+        return False
+    extra = span[len(name):]
+    return bool(extra) and extra[0] in set("就在上下毕守看住开读念做居成属磨养叫是有由从到往值站巡打")
+
+
+def real_near_miss(name: str, query: str) -> bool:
+    """叠字或改了一个字。谓语贴在名字上不算另一个名字。"""
+    text = query or ""
+    if not name or len(name) < 2 or name_bounded(name, text):
+        return False
+    if (name + name[-1]) in text or (name[0] + name) in text:
+        return True
+    missed = _one_off_span(name, text)
+    return bool(missed and missed != name)
+
+
 def near_miss_span(name: str, query: str) -> str | None:
     """问句里的名字和已存实体差一点：多出来的字、少一两个字、改了一个字，或后面又接了拉丁词。"""
     if not name or not query:
@@ -345,6 +381,8 @@ def entity_mentioned(name: str, query: str) -> bool:
         return _mentions_self(query)
     if name_bounded(name, query):
         return True
+    if has_cjk(name):
+        return False
     ensure_scripts_path()
     from router import entity_key
 
@@ -537,6 +575,8 @@ class FactBank:
 
 
 def build_fact_bank(facts: list[dict]) -> FactBank | None:
+    import torch
+
     ensure_scripts_path()
     from router import embed
 
@@ -573,6 +613,8 @@ def build_fact_bank(facts: list[dict]) -> FactBank | None:
 
 
 def save_fact_bank(path: Path, bank: FactBank) -> None:
+    import torch
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -587,6 +629,8 @@ def save_fact_bank(path: Path, bank: FactBank) -> None:
 
 
 def load_fact_bank(path: Path, facts: list[dict]) -> FactBank | None:
+    import torch
+
     path = Path(path)
     if not path.is_file():
         return None

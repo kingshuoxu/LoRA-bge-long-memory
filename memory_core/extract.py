@@ -6,12 +6,14 @@
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Any
 
 from memory_core.prompts import has_cjk
 
-_QUESTION_HINTS = ("什么", "哪", "谁", "吗", "多少", "几", "是否", "怎么", "如何")
+_QUESTION_HINTS = ("什么", "哪", "谁", "吗", "呢", "多少", "几", "是否", "怎么", "如何", "啥", "叫啥", "啥名")
 _EN_WH = re.compile(r"\b(what|where|who|which|when|how|whose|why)\b", re.IGNORECASE)
 _ENDINGS = "。！？.!?"
 
@@ -28,16 +30,208 @@ def _split_sentences(text: str) -> list[str]:
     parts = re.split(r"[。！？\n；;]+|(?<=[.!?])\s+", text)
     out = []
     for part in parts:
-        piece = _clean_piece(part)
-        if len(piece) >= 4:
-            out.append(piece)
+        for piece in _split_question_tail(_clean_piece(part)):
+            if len(piece) >= 4:
+                out.append(piece)
     return out
 
 
+def _split_question_tail(text: str) -> list[str]:
+    """「事实，后面在问？」逗号后面的问句单独成句，前面的事实还能留下。"""
+    if not text or "，" not in text and "," not in text:
+        return [text] if text else []
+    bits = [bit.strip() for bit in re.split(r"[，,]", text) if bit.strip()]
+    if len(bits) < 2:
+        return [text]
+    for index, bit in enumerate(bits[1:], start=1):
+        if re.search(r"什么|谁|哪|吗|呢|多少|几|啥", bit) or bit.endswith(("?", "？")):
+            head = "，".join(bits[:index]).strip()
+            tail = "，".join(bits[index:]).strip()
+            return [piece for piece in (head, tail) if piece]
+    return [text]
+
+
+_ADVICE = (
+    "有什么办法", "怎么办", "有什么方法", "有什么建议", "怎么缓解", "怎么治",
+    "如何才能", "怎样才能", "有啥办法", "怎么解决",
+)
+
+
+def _outside_titles(text: str) -> str:
+    """书名号里的「为什么」不是问句。"""
+    return re.sub(r"《[^》]*》|「[^」]*」|“[^”]*”", "", text or "")
+
+
+def _visible_question_text(text: str) -> str:
+    """书名和「为什么」里的「什么」不是在提问。"""
+    return _outside_titles(text).replace("为什么", "")
+
+
+_POLITE_REQUEST = re.compile(
+    r"^(?:请)?你?(?:能不能|可不可以|可以不可以|可以帮我|帮我|给我|写一|写首)"
+)
+
+
+def is_reported_statement(text: str) -> bool:
+    """转述别人的话。句末没有？/吗时，嵌在里面的问话不是这句自己在问。
+
+    句首的「告诉我谁」是要求，不是转述。
+    """
+    raw = (text or "").strip().rstrip("。")
+    if not raw or re.search(r"[？?]", raw) or re.search(r"(?:吗|呢)$", raw):
+        return False
+    if re.match(r"^(?:请)?告诉我", raw):
+        return False
+    if _POLITE_REQUEST.match(raw):
+        return False
+    return bool(re.search(
+        r"问过|说过|说道|说他|说她|说我|说你|问我|问他|问她|不知道|告诉过|告诉他|告诉她|他告诉|她告诉|我告诉|告诉我",
+        raw,
+    ))
+
+
+def is_declarative_fact(text: str) -> bool:
+    """陈述句。里面出现「翻译」「推荐」或书名里的「为什么」也不能当成要求句删掉。"""
+    raw = (text or "").strip().rstrip("。")
+    if not raw:
+        return False
+    if _POLITE_REQUEST.match(raw) or is_choice_question(raw):
+        return False
+    if is_reported_statement(raw):
+        return True
+    if re.search(r"[？?吗呢]", raw):
+        return False
+    if re.search(r"[，,。；;].*(?:什么|谁|哪|多少|几|吗|呢|啥)", raw):
+        return False
+    if re.match(r"^(?:我|他|她)(?:的[\u4e00-\u9fffA-Za-z0-9]{0,12})?是", raw):
+        return True
+    if re.match(r"^(?:我|他|她)喜欢", raw):
+        return True
+    if re.match(r"^[\u4e00-\u9fff·]{1,8}喜欢", raw) and not re.search(r"什么|谁|哪", _outside_titles(raw)):
+        return True
+    if re.match(r"^我在.+工作", raw) or re.match(r"^我做.+工作", raw):
+        return True
+    return False
+
+
+def is_imperative_request(text: str) -> bool:
+    """只看句首的要求。句中的「翻译」「推荐」不算。没有问号的要求也算。"""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _POLITE_REQUEST.match(raw):
+        return True
+    if is_declarative_fact(raw):
+        return False
+    if re.match(r"^(?:能不能|可不可以|可以不可以|可以帮|请你|麻烦你|麻烦|劳驾)", raw):
+        return True
+    if is_reported_statement(raw):
+        return False
+    if re.match(r"^(?:请(?!问)|帮我|给我|写一|写首)", raw):
+        return True
+    if re.match(r"^(?:请)?告诉我(?:谁|哪|什么|啥)", raw):
+        return True
+    if re.match(r"^(?:写|留)(?:一)?(?:张|个|条)?(?:留言|纸条)", raw):
+        return True
+    if re.match(r"^给[\u4e00-\u9fff]{1,8}(?:写|留)", raw):
+        return True
+    return bool(re.match(r"^(?:推荐|写|翻译|查一下|搜一下)(?:一|几|个|首|下|点)", raw))
+
+
+def is_advice_question(text: str) -> bool:
+    """要办法、建议或做法。哪怕以「我」开头，也不是在问记住的事实。"""
+    raw = text or ""
+    return any(mark in raw for mark in _ADVICE)
+
+
+def is_choice_question(text: str) -> bool:
+    """「是A还是B」才是问句。逗号并列的「我是翻译，还是作家」是陈述。"""
+    raw = without_tag_question(text or "").strip()
+    if not re.search(r"(?<![还不])是.+还是", raw):
+        return False
+    if re.search(r"[，,、；;].{0,16}还是", raw):
+        return False
+    return True
+
+
+def is_main_clause_question(text: str) -> bool:
+    """主句在问。转述里的「哪里」「为什么」不算这句自己在问。"""
+    raw = without_tag_question(text).strip().rstrip("。")
+    if not raw or is_reported_statement(raw) or is_declarative_fact(raw):
+        return False
+    visible = _visible_question_text(raw)
+    if re.search(r"[？?]", visible):
+        return True
+    clauses = [piece.strip() for piece in re.split(r"[，,、；;]+", visible) if piece.strip()]
+    for clause in clauses or [visible]:
+        if re.search(r"(?:吗|呢)$", clause):
+            return True
+        if re.search(r"(?:有多高|多高|高多少|多少米|多久|多长时间|建了多久)$", clause) and not re.search(
+            r"[0-9一二三四五六七八九十百千两]+(?:米|年)", clause
+        ):
+            return True
+        if re.search(r"(?:哪里|哪儿|什么|谁|哪个|哪所|多少|怎么|如何|啥)$", clause):
+            return True
+        if re.search(r"(?:叫|是|在|有|去|做)(?:什么|谁|哪|多少|几|啥)", clause):
+            return True
+        if "是不是" in clause or "还是" in clause and "是" in clause:
+            return True
+    if re.search(r"(?:吗|呢)$", visible):
+        return True
+    if re.match(r"^(?:什么|谁|哪|咋|啥|怎么|如何|多少)", visible):
+        return True
+    return False
+
+
+def is_question_fragment(text: str) -> bool:
+    """句首疑问词、句末语气词或问号。转述和书名里的「什么」留下。"""
+    raw = (text or "").strip()
+    if not raw:
+        return True
+    if re.search(r"[？?]", _visible_question_text(raw)):
+        return True
+    if is_declarative_fact(raw) or is_reported_statement(raw):
+        return False
+    if is_choice_question(raw) or is_imperative_request(raw) or is_main_clause_question(raw):
+        return True
+    if raw.endswith(("的名字", "啥名", "…", "...")) or raw.rstrip("。").endswith("啥名"):
+        return True
+    return False
+
+
+def is_self_fact_question(text: str) -> bool:
+    """只有在问使用者自己已经告诉过的事实时才走记忆。"""
+    raw = (text or "").strip()
+    if re.search(r"我的[\u4e00-\u9fff]{1,12}(?:是|叫|在|住|有)", raw):
+        return True
+    return any(raw.startswith(prefix) for prefix in ("我叫什么", "我是谁", "我的名字", "我住", "我的生日"))
+
+
+_TAG_PIECE = r"(?:你知道吗|你知道不|你知道|知道吗|知道不|对吧|是吗|对不对)"
+_TAG_TAIL = re.compile(rf"(?:[，,。\s]*){_TAG_PIECE}[？?。]*$")
+_TAG_HEAD = re.compile(rf"^{_TAG_PIECE}[？?。]*[，,。\s]*")
+_OPENER = re.compile(r"^(?:我)?(?:跟你说|告诉你|跟你讲|和你说)[，,：:\s]*")
+
+
+def without_tag_question(text: str) -> str:
+    """去掉句首或句尾的「你知道吗」，以及「跟你说」「告诉你」。前后的事实还在。"""
+    raw = (text or "").strip()
+    raw = _TAG_HEAD.sub("", raw)
+    raw = _TAG_TAIL.sub("", raw)
+    raw = _OPENER.sub("", raw)
+    return raw.strip("，,。 \n")
+
+
 def _looks_like_question(sentence: str) -> bool:
+    sentence = without_tag_question(sentence)
+    if is_declarative_fact(sentence):
+        return False
     if sentence.endswith("?") or sentence.endswith("？"):
         return True
-    if any(hint in sentence for hint in _QUESTION_HINTS):
+    if is_choice_question(sentence):
+        return True
+    visible = _visible_question_text(sentence)
+    if any(hint in visible for hint in _QUESTION_HINTS):
         return True
     return bool(_EN_WH.search(sentence))
 
@@ -169,7 +363,19 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
     value = re.split(r"\s+by\s+", value, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,")
     if len(entity) < 1 or len(value) < 1 or len(attr) < 1:
         return None
-    if _looks_like_question(raw):
+    if attr in {"那位", "这个", "那个", "哪位", "谁"}:
+        return None
+    if re.match(r"^(?:磨|打磨|守护|看守|值守|看管)(?:这|那)", entity):
+        return None
+    if re.fullmatch(r"(?:什么|哪里|哪儿|哪个|哪所|哪|谁|多少|几|啥|怎么|如何)", value.strip()):
+        return None
+    if _looks_like_question(raw) or is_question_fragment(raw) or is_choice_question(raw):
+        return None
+    if "还是" in value and not re.search(r"[，,、；;].{0,12}还是", raw):
+        return None
+    if not is_declarative_fact(raw) and (
+        re.search(r"啥|什么|谁|吗|呢|多少|还是", value) or is_choice_question(raw) or is_choice_question(entity)
+    ):
         return None
     entity, attr = _peel_entity(entity, attr)
     attr = _refine_attr(attr, value, how, raw)
@@ -214,6 +420,17 @@ def _make_fact(entity: str, attr: str, value: str, how: str, raw: str) -> dict[s
         question = "我叫什么？" if has_cjk(entity + value) else "What is my name?"
     elif how == "owned":
         question = f"我的{attr}叫什么？"
+    elif how == "school":
+        question = f"{entity}的学校叫什么？"
+        attr = "学校"
+    elif how == "daily":
+        question = f"{entity}每天做什么？"
+    elif how == "like":
+        question = f"{entity}喜欢什么？"
+    elif how == "role":
+        question = f"{entity}是谁的{attr}？"
+    elif how == "said":
+        question = f"{entity}说过什么？"
     else:
         question = _attr_question(entity, attr, "是什么？")
     return {
@@ -252,7 +469,8 @@ def _bind_subject(sentence: str, current: str | None) -> str:
 
 def _split_yu(sentence: str) -> tuple[str, str, str] | None:
     """「主语 + 一两字的动词 + 于 + 取值」。动词取紧挨着「于」的最短可用长度。"""
-    matched = re.match(r"^(.+)于([^，。]{1,24})$", sentence)
+    probe = sentence.replace("关于", "关○")
+    matched = re.match(r"^(.+)于([^，。]{1,24})$", probe)
     if not matched or "的" in matched.group(1):
         return None
     left, value = matched.group(1), matched.group(2)
@@ -314,7 +532,7 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
         return found
     found = None
     matched = re.match(
-        r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)是(?P<value>[^，。]{1,32})$",
+        r"^(?P<entity>[^，。,的]{1,16})的(?P<attr>[^，。]{1,16}?)(?<![还不])是(?P<value>[^，。]{1,32})$",
         sentence,
     )
     if matched:
@@ -326,6 +544,19 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
         )
         if matched:
             found = _make_fact(matched.group("entity"), matched.group("attr"), matched.group("value"), "叫", sentence)
+    if found is None:
+        found = _match_life(sentence)
+    if found is None:
+        matched = re.match(
+            r"^(?P<entity>[\u4e00-\u9fffA-Za-z0-9]{1,12})是(?P<value>[^，。？?]{1,24})$",
+            sentence,
+        )
+        value = matched.group("value") if matched else ""
+        if matched and not re.search(r"什么|谁|哪|吗|呢|啥|那位|这位", value):
+            if "色" in value:
+                found = _make_fact(matched.group("entity"), "颜色", value, "是", sentence)
+            elif re.search(r"[0-9一二三四五六七八九零〇]+年", value):
+                found = _make_fact(matched.group("entity"), "年份", value, "是", sentence)
     if found is None:
         matched = re.match(r"^(?P<entity>[^，。]{1,16})住在(?P<value>[^，。]{1,32})$", sentence)
         if matched:
@@ -464,6 +695,53 @@ def _match_sentence(sentence: str, current: str | None) -> dict[str, Any] | None
     return found
 
 
+_SCHOOL_NAME = r"[\u4e00-\u9fffA-Za-z0-9·]{2,16}"
+
+
+def _match_life(sentence: str) -> dict[str, Any] | None:
+    """上学、每天、喜欢、同事。这些不是「的学校是」也能记下来。"""
+    school = (
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})在(?P<value>{_SCHOOL_NAME})(?:上学|读书|念书)$", "school"),
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})就读于(?P<value>{_SCHOOL_NAME})$", "school"),
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})毕业于(?P<value>{_SCHOOL_NAME})$", "school"),
+        (rf"^(?P<entity>[\u4e00-\u9fff·]{{2,8}})是(?P<value>{_SCHOOL_NAME})的学生$", "school"),
+    )
+    for pattern, how in school:
+        matched = re.match(pattern, sentence)
+        if matched:
+            return _make_fact(matched.group("entity"), "学校", matched.group("value"), how, sentence)
+    matched = re.match(
+        r"^(?P<entity>我|他|她|[\u4e00-\u9fff·]{2,8})在(?P<value>[\u4e00-\u9fff]{2,16})(?:上班|工作)$",
+        sentence,
+    )
+    if matched:
+        return _make_fact(matched.group("entity"), "工作地点", matched.group("value"), "workplace", sentence)
+    matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})每天(?P<value>.{2,24})$", sentence)
+    if matched:
+        return _make_fact(matched.group("entity"), "日常", matched.group("value"), "daily", sentence)
+    matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})喜欢喝(?P<value>.{1,16})$", sentence)
+    if matched:
+        attr = "茶" if "茶" in matched.group("value") else "喜欢喝的"
+        return _make_fact(matched.group("entity"), attr, matched.group("value"), "like", sentence)
+    matched = re.match(r"^(?P<entity>[\u4e00-\u9fff·]{2,8})喜欢(?P<value>.{1,24})$", sentence)
+    if matched:
+        return _make_fact(matched.group("entity"), "喜欢", matched.group("value"), "like", sentence)
+    matched = re.match(
+        r"^(?P<value>[\u4e00-\u9fff·]{2,8})是(?P<entity>[\u4e00-\u9fff·]{2,8})的(?P<role>[\u4e00-\u9fff]{1,6})$",
+        sentence,
+    )
+    if matched and matched.group("role") != "学生":
+        return _make_fact(matched.group("entity"), matched.group("role"), matched.group("value"), "role", sentence)
+    matched = re.match(r"^(?P<entity>我|他|她|[\u4e00-\u9fff·]{2,8})(?:会|擅长)(?P<value>[\u4e00-\u9fffA-Za-z0-9]{1,16})$", sentence)
+    if matched:
+        return _make_fact(matched.group("entity"), "技能", matched.group("value"), "skill", sentence)
+    if is_reported_statement(sentence):
+        who = re.match(r"^([\u4e00-\u9fff·]{1,6})", sentence)
+        entity = who.group(1) if who else "他"
+        return _make_fact(entity, "转述", sentence.rstrip("。"), "said", sentence)
+    return None
+
+
 def _leading_name(sentence: str) -> str | None:
     if _looks_like_question(sentence):
         return None
@@ -478,12 +756,61 @@ def _leading_name(sentence: str) -> str | None:
     return None
 
 
+def drop_request_memories(home: Path) -> int:
+    """兼容旧调用。真正的清理在 migrate_0214，并且只针对 0.2.14。"""
+    from memory_core.migrate_0214 import migrate_0214_junk
+
+    return migrate_0214_junk(home)
+
+
+def _is_tag_question(sentence: str) -> bool:
+    """「你知道吗」只是追问，不把前面的事实变成问句。"""
+    compact = re.sub(r"[？?。！!\s]", "", sentence or "")
+    return compact in {"你知道吗", "你知道不", "知道吗", "知道不", "对吧", "是吗", "是不是", "对不对"}
+
+
+def _block_contains_question(text: str) -> bool:
+    """真在问的那句会带上前提。单纯的「你知道吗」不把前面的事实一起丢掉。"""
+    raw = text or ""
+    if is_declarative_fact(raw) or is_reported_statement(raw):
+        return False
+    sentences = _split_sentences(raw) or [raw.strip()]
+    for sentence in sentences:
+        if _is_tag_question(sentence):
+            continue
+        if is_choice_question(sentence) or _looks_like_question(sentence) or is_question_fragment(sentence):
+            return True
+    return False
+
+
 def pattern_extract(text: str) -> list[dict[str, Any]]:
     """按句式抽事实，不查属性词表。一段话里的 It / 它 沿用上一句的主语。"""
     facts: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     current: str | None = None
+    for block in re.split(r"\n+", text or ""):
+        block = without_tag_question(block)
+        if not block:
+            continue
+        # 同一段里的陈述句留下。只丢掉真正在问的那一句，不把前面刚说的事实一起扔掉。
+        _extract_block(block, facts, seen, current)
+    return facts
+
+
+def _extract_block(text: str, facts: list[dict[str, Any]], seen: set[tuple[str, str, str]], current: str | None) -> None:
     for sentence in _split_sentences(text):
+        sentence = without_tag_question(sentence)
+        if not sentence:
+            continue
+        if (
+            is_imperative_request(sentence)
+            or is_advice_question(sentence)
+            or is_choice_question(sentence)
+            or "是不是" in sentence
+            or _looks_like_question(sentence)
+            or is_question_fragment(sentence)
+        ):
+            continue
         found = _match_sentence(sentence, current)
         if found is None:
             named = _leading_name(sentence)
@@ -602,7 +929,7 @@ def model_extract(text: str, model, tok, device) -> list[dict[str, Any]]:
     gen = tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
     if gen.startswith("无") or gen.lower().startswith("none"):
         return []
-    return _parse_model_block(gen)
+    return [fact for fact in _parse_model_block(gen) if not is_question_fragment(str(fact.get("statement") or ""))]
 
 
 class _nullctx:
@@ -774,7 +1101,7 @@ def subject_names(text: str) -> list[str]:
     for fact in pattern_extract(text):
         add(str(fact.get("entity") or ""))
     for sentence in _split_sentences(text):
-        if _looks_like_question(sentence):
+        if _looks_like_question(sentence) or is_imperative_request(sentence) or is_advice_question(sentence):
             continue
         if not _looks_like_claim(sentence):
             continue
@@ -831,7 +1158,11 @@ def _relation_questions(entity: str, attr: str, statement: str, english: bool) -
 
 
 def extract_fact_candidates(text: str, model=None, tok=None, device=None) -> list[dict[str, Any]]:
-    facts = pattern_extract(text)
+    facts = [
+        fact for fact in pattern_extract(text)
+        if not is_imperative_request(str(fact.get("statement") or ""))
+        and not is_advice_question(str(fact.get("statement") or ""))
+    ]
     try:
         facts.extend(company_pipeline_extract(text))
     except Exception:

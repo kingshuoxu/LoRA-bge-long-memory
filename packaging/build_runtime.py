@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -58,8 +59,20 @@ def download(url: str, dest: Path) -> None:
         return
     print(f"下载 {url}", flush=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url, timeout=120) as response, tmp.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    last_error: Exception | None = None
+    attempts = 8
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=180) as response, tmp.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            print(f"下载失败，重试 {attempt + 1}/{attempts}：{exc}", flush=True)
+            time.sleep(30 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
     tmp.replace(dest)
 
 

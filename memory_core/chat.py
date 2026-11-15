@@ -1,6 +1,8 @@
 """挂上路由选中的 LoRA 再生成。没有专家或守卫拦住时用基座。"""
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import torch
@@ -21,18 +23,43 @@ class ChatEngine:
         self.model = None
         self._peft = False
         self._loaded: set[str] = set()
+        self._load_lock = threading.Lock()
+
+    def _weights_ready(self) -> bool:
+        if self.model is None:
+            return False
+        for param in self.model.parameters():
+            if getattr(param, "is_meta", False) or getattr(param.device, "type", "") == "meta":
+                return False
+        return True
 
     def ensure(self) -> None:
-        if self.model is not None:
+        if self._weights_ready():
             return
-        self.tok = AutoTokenizer.from_pretrained(self.model_path)
-        if self.tok.pad_token_id is None:
-            self.tok.pad_token = self.tok.eos_token
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_path, torch_dtype=self.dtype)
-        self.model.to(self.device)
-        self.model.eval()
-        self._peft = False
-        self._loaded = set()
+        from memory_core.model_load import LOAD_LOCK
+
+        with LOAD_LOCK, self._load_lock:
+            if self._weights_ready():
+                return
+            self.model = None
+            self.tok = AutoTokenizer.from_pretrained(self.model_path)
+            if self.tok.pad_token_id is None:
+                self.tok.pad_token = self.tok.eos_token
+            # 不用 accelerate 的 meta 空权重。升级后第一次请求和预热会同时进来，
+            # 锁住这一段，等权重真正落到 cpu 再给别人用。
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                torch_dtype=self.dtype,
+                low_cpu_mem_usage=False,
+                device_map=None,
+            )
+            self.model.to(self.device)
+            if not self._weights_ready():
+                self.model = None
+                raise RuntimeError("模型权重没有落到 cpu")
+            self.model.eval()
+            self._peft = False
+            self._loaded = set()
 
     def unload(self) -> None:
         self.model = None
@@ -65,7 +92,14 @@ class ChatEngine:
             self._loaded.add(expert.name)
         self.model.eval()
 
-    def reply(self, history: list[dict], decision: RouteDecision, max_new_tokens: int = 256, hint: str = "") -> str:
+    def reply(
+        self,
+        history: list[dict],
+        decision: RouteDecision,
+        max_new_tokens: int = 256,
+        hint: str = "",
+        max_seconds: float | None = None,
+    ) -> str:
         self.ensure()
         trimmed = history[-12:]
         last_user = ""
@@ -90,14 +124,25 @@ class ChatEngine:
         use_adapter = bool(decision.fired and decision.expert and decision.expert in self._loaded)
 
         def _generate():
+            kwargs = {
+                "max_new_tokens": max_new_tokens,
+                "do_sample": False,
+                "pad_token_id": self.tok.eos_token_id,
+                "eos_token_id": eos,
+            }
+            if max_seconds and max_seconds > 0:
+                from transformers import StoppingCriteria, StoppingCriteriaList
+
+                class _Wall(StoppingCriteria):
+                    def __init__(self, seconds: float):
+                        self.deadline = time.monotonic() + seconds
+
+                    def __call__(self, input_ids, scores, **kwargs):
+                        return bool(time.monotonic() >= self.deadline)
+
+                kwargs["stopping_criteria"] = StoppingCriteriaList([_Wall(max_seconds)])
             with torch.no_grad():
-                out = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=self.tok.eos_token_id,
-                    eos_token_id=eos,
-                )
+                out = self.model.generate(**inputs, **kwargs)
             return _finish_sentence(self.tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip())
 
         if use_adapter:

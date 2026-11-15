@@ -14,6 +14,7 @@ train_expert 用它生成路由键,eval_memory 用它决定挂哪家专家。
 """
 import json
 import re
+import threading
 from pathlib import Path
 
 import torch
@@ -23,6 +24,16 @@ from transformers import AutoModel, AutoTokenizer
 EMB_MODEL = "models/bge-small-zh-v1.5"
 _tok = None
 _model = None
+_load_lock = threading.Lock()
+
+
+def _weights_ready(model) -> bool:
+    if model is None:
+        return False
+    for param in model.parameters():
+        if getattr(param, "is_meta", False) or getattr(param.device, "type", "") == "meta":
+            return False
+    return True
 
 
 def resolve_emb_model() -> str:
@@ -41,11 +52,27 @@ def resolve_emb_model() -> str:
 
 def _load():
     global _tok, _model
-    if _model is None:
+    if _weights_ready(_model):
+        return _tok, _model
+    from memory_core.model_load import LOAD_LOCK
+
+    with LOAD_LOCK, _load_lock:
+        if _weights_ready(_model):
+            return _tok, _model
         model_path = resolve_emb_model()
         _tok = AutoTokenizer.from_pretrained(model_path)
-        _model = AutoModel.from_pretrained(model_path, torch_dtype=torch.float32)
+        # 星云和事实闸都会走这里。不能停在 accelerate 的 meta 设备上。
+        _model = AutoModel.from_pretrained(
+            model_path,
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=False,
+            device_map=None,
+        )
+        _model.to(torch.device("cpu"))
         _model.eval()
+        if not _weights_ready(_model):
+            _model = None
+            raise RuntimeError("嵌入权重没有落到 cpu")
     return _tok, _model
 
 

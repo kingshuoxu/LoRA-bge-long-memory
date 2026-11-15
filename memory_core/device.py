@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 
+from memory_core.runtime_threads import apply_torch_threads
+
 import torch
 
 
@@ -41,7 +43,7 @@ def pick_device(prefer: str | None = None) -> torch.device:
     else:
         raise RuntimeError(f"未知设备 {choice}")
     if device.type == "cpu":
-        torch.set_num_threads(max(1, os.cpu_count() or 1))
+        apply_torch_threads()
     return device
 
 

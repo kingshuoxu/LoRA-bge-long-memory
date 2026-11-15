@@ -316,5 +316,85 @@ class WugangTests(unittest.TestCase):
         self.assertEqual(short, [])
 
 
+class ThreadAndImportBoundTests(unittest.TestCase):
+    def test_thread_budget_honors_omp_and_defaults_to_two(self):
+        import os
+
+        from memory_core.runtime_threads import configure_process_threads, thread_budget
+
+        saved = {key: os.environ.get(key) for key in ("LORA_MEMORY_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")}
+        try:
+            for key in saved:
+                os.environ.pop(key, None)
+            self.assertEqual(thread_budget(), min(2, os.cpu_count() or 1))
+            os.environ["OMP_NUM_THREADS"] = "2"
+            self.assertEqual(thread_budget(), 2)
+            os.environ["MKL_NUM_THREADS"] = "8"
+            self.assertEqual(thread_budget(), 2)
+            configure_process_threads()
+            self.assertEqual(os.environ["OMP_NUM_THREADS"], "2")
+            self.assertEqual(os.environ["MKL_NUM_THREADS"], "8")
+            self.assertEqual(os.environ["OPENBLAS_NUM_THREADS"], "2")
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_point_extraction_stops_at_the_deadline_and_keeps_sentences(self):
+        import time
+
+        from memory_core.documents import DocumentTimeout, extract_key_points
+
+        called = {"n": 0}
+
+        def ask(_prompt: str) -> str:
+            called["n"] += 1
+            return ""
+
+        with self.assertRaises(DocumentTimeout) as caught:
+            extract_key_points(
+                [("第一章", "白鹭塔建于1873年。塔高四十二米。")],
+                ask=ask,
+                deadline=time.monotonic() - 1,
+            )
+        self.assertEqual(called["n"], 0)
+        blob = "\n".join(point["text"] for point in caught.exception.points)
+        self.assertIn("1873", blob)
+        self.assertEqual(caught.exception.completed, [])
+
+    def test_docx_uses_the_same_bounded_import(self):
+        import io
+        import tempfile
+        import time
+        import zipfile
+
+        from memory_core.documents import DocumentTimeout, extract_docx, extract_key_points, import_document
+
+        xml = (
+            "<?xml version=\"1.0\"?>"
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+            "<w:body><w:p><w:r><w:t>白鹭塔建于1873年。</w:t></w:r></w:p></w:body></w:document>"
+        )
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr("word/document.xml", xml)
+        text = extract_docx(buf.getvalue())
+        self.assertIn("1873", text)
+
+        def ask(_prompt: str) -> str:
+            raise AssertionError("过了时限不该再问模型")
+
+        with self.assertRaises(DocumentTimeout):
+            extract_key_points(split_chapters(text), ask=ask, deadline=time.monotonic() - 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            src = home / "tower.docx"
+            src.write_bytes(buf.getvalue())
+            result = import_document(home / "data", src, embed=None, ask=None)
+            self.assertIn("1873", " ".join(point["text"] for point in result["points"]))
+
+
 if __name__ == "__main__":
     unittest.main()
