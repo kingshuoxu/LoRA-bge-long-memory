@@ -91,6 +91,9 @@ function setView(view) {
   const labels = { chat: "nav.chat", consolidate: "nav.consolidate", nebula: "nav.nebula", memory: "nav.memory" };
   $("eyebrow").textContent = t(labels[view] || "nav.chat");
   document.body.classList.toggle("sky-on", view === "nebula");
+  if (view === "nebula" && window.sky && window.sky.poke) window.sky.poke();
+  const banner = $("recall-banner");
+  if (banner && view === "nebula") banner.hidden = true;
   const comet = $("recall-comet");
   if (comet && view !== "nebula") comet.hidden = true;
   showToast("");
@@ -612,6 +615,10 @@ function bannerText(trace) {
 
 function showRecallBanner(trace) {
   const banner = $("recall-banner");
+  if (state.view === "nebula") {
+    banner.hidden = true;
+    return;
+  }
   banner.hidden = false;
   banner.dataset.live = trace && trace.mounted ? "1" : "";
   banner.classList.toggle("idle", !trace || !trace.mounted);
@@ -940,6 +947,11 @@ async function openDocReview(docId) {
   const doc = docs.find((item) => item.id === docId);
   if (!doc) return;
   state.reviewDoc = doc;
+  const source = $("doc-review-source");
+  if (source) {
+    const kind = String(doc.format || "").toUpperCase();
+    source.textContent = kind ? `${doc.title} · ${kind}` : doc.title;
+  }
   const list = $("doc-review-list");
   list.innerHTML = (doc.points || []).map((point) => `<label class="doc-point"><input type="checkbox" data-point="${esc(point.id)}" ${point.selected === false ? "" : "checked"} /><span>${esc(point.text)}</span></label>`).join("") || `<div class="empty">${esc(t("docs.empty"))}</div>`;
   showToast("");
@@ -1223,6 +1235,7 @@ $("composer").onsubmit = async (event) => {
       method: "POST",
       body: JSON.stringify({ content: text }),
     });
+    $("typing").hidden = true;
     await loadConversations();
     await openConversation(state.currentId, true, sent.assistant && sent.assistant.id);
   } catch (error) {

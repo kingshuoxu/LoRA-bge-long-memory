@@ -140,7 +140,7 @@
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <h3 id="settings-title" data-i18n="settings.title">设置</h3>
       <p data-i18n="app.about">萤语 Yingyu。对话、记忆和模型都留在这台电脑上。</p>
-      <p class="muted" data-i18n="settings.mirrorHint">GitHub 下载慢时，填一个放了同样安装包、latest-*.yml、blockmap 和 desktop-release.json 的地址。</p>
+      <p class="muted" data-i18n="settings.mirrorHint">GitHub 下载慢时，填一个放了同样安装包的地址。</p>
       <p id="settings-gatekeeper" class="muted" hidden data-i18n="settings.gatekeeper">这个应用没有签名。第一次打开时，在访达里按住 Control 点按应用，选「打开」，再在对话框里点「打开」。直接双击会被系统拦住。</p>
       <label class="settings-field">
         <span data-i18n="settings.advanced">显示路由和分数</span>
@@ -175,6 +175,7 @@
   <div id="doc-review" class="modal" hidden>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="doc-review-title">
       <h3 id="doc-review-title" data-i18n="docs.review">选择要巩固的重点</h3>
+      <p id="doc-review-source" class="muted"></p>
       <div id="doc-review-list" class="fact-list"></div>
       <div class="sheet-actions">
         <button id="doc-review-skip" type="button" data-i18n="docs.skip">先不加入</button>

@@ -85,6 +85,24 @@ html.sky-fallback body { background: var(--canvas); }
   display: none;
 }
 body.sky-on #sky { display: block; }
+body.sky-on {
+  background:
+    radial-gradient(1.2px 1.2px at 8% 16%, rgba(255, 255, 255, 0.85) 50%, transparent 52%),
+    radial-gradient(1px 1px at 18% 72%, rgba(255, 244, 220, 0.7) 50%, transparent 52%),
+    radial-gradient(1.4px 1.4px at 28% 34%, rgba(255, 255, 255, 0.75) 50%, transparent 52%),
+    radial-gradient(1px 1px at 42% 18%, rgba(210, 226, 255, 0.8) 50%, transparent 52%),
+    radial-gradient(1.2px 1.2px at 56% 64%, rgba(255, 255, 255, 0.7) 50%, transparent 52%),
+    radial-gradient(1px 1px at 68% 22%, rgba(255, 236, 200, 0.75) 50%, transparent 52%),
+    radial-gradient(1.5px 1.5px at 78% 48%, rgba(255, 255, 255, 0.85) 50%, transparent 52%),
+    radial-gradient(1px 1px at 88% 14%, rgba(255, 255, 255, 0.65) 50%, transparent 52%),
+    radial-gradient(1px 1px at 12% 48%, rgba(255, 255, 255, 0.55) 50%, transparent 52%),
+    radial-gradient(1.2px 1.2px at 36% 82%, rgba(255, 244, 220, 0.7) 50%, transparent 52%),
+    radial-gradient(1px 1px at 62% 88%, rgba(255, 255, 255, 0.6) 50%, transparent 52%),
+    radial-gradient(1.3px 1.3px at 92% 76%, rgba(210, 226, 255, 0.75) 50%, transparent 52%),
+    radial-gradient(ellipse 40% 28% at 30% 46%, rgba(92, 36, 72, 0.35), transparent 70%),
+    radial-gradient(ellipse 32% 22% at 68% 40%, rgba(24, 72, 96, 0.32), transparent 72%),
+    #10131a;
+}
 
 button, textarea, input { font-family: var(--serif); font-size: 16px; color: inherit; }
 h1, h2, h3, .brand strong, .eyebrow, .constellation text {
@@ -320,6 +338,9 @@ main {
   height: 100vh;
 }
 .top {
+  position: relative;
+  z-index: 3;
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -493,8 +514,10 @@ main {
 .typing span:nth-child(3) { animation-delay: 0.3s; }
 .toast {
   position: fixed;
-  top: 76px;
-  left: 292px;
+  right: 28px;
+  bottom: 28px;
+  top: auto;
+  left: auto;
   z-index: 40;
   width: min(360px, 46vw);
   padding: 10px 14px;
@@ -660,10 +683,15 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 }
 .nebula-wrap.nebula-fallback {
   background:
+    radial-gradient(1.2px 1.2px at 12% 22%, rgba(255, 255, 255, 0.9) 50%, transparent 52%),
+    radial-gradient(1px 1px at 24% 68%, rgba(255, 244, 220, 0.75) 50%, transparent 52%),
+    radial-gradient(1.4px 1.4px at 40% 30%, rgba(255, 255, 255, 0.8) 50%, transparent 52%),
+    radial-gradient(1px 1px at 58% 74%, rgba(210, 226, 255, 0.8) 50%, transparent 52%),
+    radial-gradient(1.2px 1.2px at 72% 28%, rgba(255, 255, 255, 0.75) 50%, transparent 52%),
+    radial-gradient(1px 1px at 86% 58%, rgba(255, 236, 200, 0.8) 50%, transparent 52%),
     radial-gradient(ellipse 42% 28% at 32% 48%, rgba(120, 36, 48, 0.28), transparent 72%),
     radial-gradient(ellipse 36% 24% at 62% 42%, rgba(28, 92, 96, 0.26), transparent 74%),
-    radial-gradient(ellipse 30% 20% at 48% 64%, rgba(140, 104, 48, 0.2), transparent 76%),
-    transparent;
+    #12151c;
 }
 #nebula-canvas { width: 100%; height: 100%; display: block; background: transparent; }
 .nebula-labels {
@@ -720,10 +748,16 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   color: rgba(255, 228, 176, 0.98);
   animation: nebula-shimmer 3.4s ease-in-out infinite;
 }
+.nebula-label.fact,
+.nebula-label.source {
+  max-width: 168px;
+  white-space: normal;
+}
 .nebula-label.fact .name {
   font-size: 14px;
   letter-spacing: 0.04em;
   color: rgba(255, 236, 210, 0.96);
+  white-space: normal;
 }
 .nebula-label.source .name {
   font-size: 13px;
@@ -787,15 +821,18 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   z-index: 6;
 }
 .update-banner {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   gap: 16px;
   align-items: flex-start;
-  margin: 0 28px 8px;
+  margin: 0 28px 12px;
   padding: 10px 14px;
   border: 1px solid rgba(242, 210, 145, 0.35);
   border-radius: 16px;
-  background: rgba(12, 16, 28, 0.72);
+  background: #1a1c22;
 }
 .update-banner pre,
 #settings-changelog {
@@ -811,22 +848,22 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.62);
   display: grid;
   place-items: center;
   padding: 24px;
-  z-index: 5;
+  z-index: 30;
 }
 .sheet {
   width: min(640px, 100%);
   max-height: min(80vh, 760px);
   overflow: auto;
-  background: rgba(12, 16, 28, 0.72);
-  border: 1px solid var(--line);
+  background: #1a1c22;
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 24px;
   padding: 20px 20px 16px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(22px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
   animation: rise 0.28s ease;
 }
 .sheet h3 { margin: 0 0 8px; font-weight: 500; letter-spacing: 0.08em; }

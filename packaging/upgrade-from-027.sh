@@ -51,6 +51,21 @@ printf 'UPGRADE_KEEP' > "$data/conversations.sqlite"
 printf 'keep' > "$data/experts/demo/keep.txt"
 printf 'keep' > "$data/models/sentinel.txt"
 printf '%s\n' '{"locale":"zh-CN","update_url":"http://127.0.0.1:'"$port"'/"}' > "$data/settings.json"
+mkdir -p "$data/experts/expert_1000"
+printf '%s\n' '{
+  "expert": "expert_1000",
+  "display_name": "用户/徐金朔",
+  "entities": ["用户"],
+  "self": false,
+  "facts": [{
+    "id": "f1",
+    "entity": "用户",
+    "attr": "名字",
+    "value": "徐金朔",
+    "statement": "用户叫徐金朔。",
+    "qa": [{"q": "用户的名字是什么？", "a": "徐金朔"}]
+  }]
+}' > "$data/experts/expert_1000/fact_memory.json"
 
 run_dir="$work/run"
 mkdir -p "$run_dir"
@@ -101,4 +116,30 @@ stamp = json.loads((data / "upgrade-stamp.json").read_text(encoding="utf-8"))
 if stamp.get("version") != version:
     sys.exit(f"升级后的版本不是 {version}: {stamp}")
 print("UPGRADE_027_OK", version)
+PY
+PYTHONPATH="$root" python3 - "$data" <<'PY'
+import json, pathlib, sys
+from memory_core.identity import migrate_user_identity
+from memory_core.self_query import self_reply
+
+data = pathlib.Path(sys.argv[1])
+changed = migrate_user_identity(data)
+if changed < 1:
+    sys.exit("没有把「用户」并进关于你")
+memory = json.loads((data / "experts" / "expert_1000" / "fact_memory.json").read_text(encoding="utf-8"))
+if memory.get("display_name") != "关于你" or not memory.get("self"):
+    sys.exit(f"专家没有改成关于你: {memory.get('display_name')}")
+
+class Expert:
+    def __init__(self, facts):
+        self.name = "expert_1000"
+        self.display_name = "关于你"
+        self.fact_memory = {"facts": facts, "self": True}
+
+expert = Expert(memory["facts"])
+for question in ("我是谁？", "我叫什么名字？", "我的名字是什么？"):
+    answer, owner, used = self_reply(question, [expert])
+    if "徐金朔" not in (answer or "") or owner is None or not used:
+        sys.exit(f"{question} 没有带来源地答出徐金朔: {answer}")
+print("UPGRADE_027_NAME_OK")
 PY

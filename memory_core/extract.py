@@ -971,10 +971,20 @@ def expand_training_fact(fact: dict[str, Any]) -> dict[str, Any]:
 SELF_ROUTE = "self"
 SELF_DISPLAY = "关于你"
 _SPEAKER = frozenset({"我", "我们", "咱们", "咱", "i", "me", "my", "mine", "we", "our", "ours", "us"})
+# 0.2.7 把说话人存成「用户」。新的事实仍只写「我」，读的时候把旧名并进同一个人。
+_LEGACY_SELF = frozenset({"用户", "user", "关于你"})
 
 
 def speaker_pronoun(entity: str) -> bool:
     return str(entity or "").strip().casefold() in _SPEAKER
+
+
+def legacy_self_entity(entity: str) -> bool:
+    return str(entity or "").strip().casefold() in _LEGACY_SELF
+
+
+def is_self_entity(entity: str) -> bool:
+    return speaker_pronoun(entity) or legacy_self_entity(entity)
 
 
 def _label_parts(display: str) -> list[str]:
@@ -995,7 +1005,7 @@ def fact_route(fact: dict) -> str:
     没有实体名的旧事实不算使用者本人，避免把研究专家并进「关于你」。
     """
     entity = str((fact or {}).get("entity") or "").strip()
-    if speaker_pronoun(entity):
+    if is_self_entity(entity):
         return SELF_ROUTE
     return entity
 

@@ -902,15 +902,49 @@ export function createNebula(canvas, hooks) {
         }
       }
       if (!best) best = clampBox(item.cx, item.cy, item.hw, item.hh, width, height, pad);
-      placed.push({ x: best.x, y: best.y, hw: item.hw, hh: item.hh });
-      item.el.style.left = `${best.x}px`;
-      item.el.style.top = `${best.y}px`;
+      placed.push({ x: best.x, y: best.y, hw: item.hw, hh: item.hh, el: item.el, item });
       item.el.dataset.cloud = `${item.cx.toFixed(1)},${item.cy.toFixed(1)},${item.screenR.toFixed(1)}`;
       const litExpert = item.kind !== "fact" && item.kind !== "conversation"
         && recall && recall.expertName === item.group.userData.expertName;
       const litFact = item.kind === "fact" && recall && recall.nodeIds && recall.nodeIds.has(item.fact && item.fact.id);
       item.el.classList.toggle("lit", Boolean(litExpert || litFact));
-      if (svg) appendLeader(svg, item, best);
+    });
+    for (let pass = 0; pass < 28; pass += 1) {
+      let moved = false;
+      for (let i = 0; i < placed.length; i += 1) {
+        for (let j = i + 1; j < placed.length; j += 1) {
+          const a = placed[i];
+          const b = placed[j];
+          const ox = a.hw + b.hw + 14 - Math.abs(a.x - b.x);
+          const oy = a.hh + b.hh + 10 - Math.abs(a.y - b.y);
+          if (ox <= 0 || oy <= 0) continue;
+          if (ox < oy) {
+            const dir = a.x <= b.x ? -1 : 1;
+            const push = ox / 2 + 1;
+            a.x += dir * push;
+            b.x -= dir * push;
+          } else {
+            const dir = a.y <= b.y ? -1 : 1;
+            const push = oy / 2 + 1;
+            a.y += dir * push;
+            b.y -= dir * push;
+          }
+          const ca = clampBox(a.x, a.y, a.hw, a.hh, width, height, pad);
+          const cb = clampBox(b.x, b.y, b.hw, b.hh, width, height, pad);
+          a.x = ca.x;
+          a.y = ca.y;
+          b.x = cb.x;
+          b.y = cb.y;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    if (svg) svg.replaceChildren();
+    placed.forEach((spot) => {
+      spot.el.style.left = `${spot.x}px`;
+      spot.el.style.top = `${spot.y}px`;
+      if (svg) appendLeader(svg, spot.item, spot);
     });
   }
 

@@ -227,6 +227,9 @@ class MemoryService:
             from memory_core.legacy_data import migrate_legacy
 
             migrate_legacy(self.home, self.models_dir)
+        from memory_core.identity import migrate_user_identity
+
+        migrate_user_identity(self.home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
         if use_repo_experts is None:
@@ -379,12 +382,22 @@ class MemoryService:
         entity = str(fact.get("entity") or "")
         for stored in self._stored_rows():
             blob = str(stored.get("statement") or "")
+            matched = False
             if statement and is_same_memory(statement, blob):
-                return stored
-            if entity == "我" and value and is_same_memory(f"我叫{value}", blob):
-                return stored
-            if value and is_same_memory(statement, str(stored.get("value") or "")):
-                return stored
+                matched = True
+            elif entity == "我" and value and is_same_memory(f"我叫{value}", blob):
+                matched = True
+            elif value and is_same_memory(statement, str(stored.get("value") or "")):
+                matched = True
+            if not matched:
+                continue
+            expert = stored.get("_expert")
+            directory = getattr(expert, "directory", None)
+            if directory is not None:
+                from memory_core.identity import repair_identity_link
+
+                repair_identity_link(directory, value or str(stored.get("value") or ""))
+            return stored
         return None
 
     def _ack_turn(self, conv_id: str, user_msg: dict, note: str, reason: str) -> dict[str, Any]:
@@ -472,7 +485,41 @@ class MemoryService:
             return None
         return best[0], best[1], [best[2]]
 
-    def _document_reply(self, content: str) -> dict | None:
+    def _personal_unknown(self, content: str) -> str | None:
+        """没教过的个人问题不交给基座编。常识题仍走基座。"""
+        if self_ask(content) or not utterance_is_question(content):
+            return None
+        personal = bool(re.search(r"我的|我最|我比较|我非常|我喜欢", content)) or bool(re.search(r"\bmy\b", content.casefold()))
+        if not personal:
+            return None
+        if not re.search(r"什么|谁|哪|多少|几|吗|what|who|which", content, flags=re.IGNORECASE):
+            return None
+        if self._ui_locale() == "en" or not has_cjk(content):
+            return "That isn't in memory. You can tell me."
+        return "这件事不在记忆里。你可以告诉我。"
+
+    def _memory_quote(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
+        from memory_core.documents import covered_fact
+
+        rows = []
+        owners = []
+        for record in experts:
+            memory = record.fact_memory or {}
+            for fact in memory.get("facts") or []:
+                if isinstance(fact, dict) and not fact.get("superseded"):
+                    rows.append(fact)
+                    owners.append(record)
+        hit = covered_fact(content, rows)
+        if hit is None:
+            return None
+        statement = str(hit.get("statement") or "").strip()
+        if not statement:
+            return None
+        if statement[-1] not in "。.!！？?":
+            statement += "。"
+        return statement, owners[rows.index(hit)], [hit]
+
+    def _document_reply(self, content: str, allow_miss: bool = True) -> dict | None:
         from memory_core.documents import admit_no_passage, document_miss, load_indexed_docs, missed_document_title, search_documents
 
         docs = load_indexed_docs(self.home)
@@ -490,6 +537,8 @@ class MemoryService:
         if found.get("ground"):
             ground = found["ground"]
             return {"answer": ground["answer"], "chips": ground.get("chips") or [], "miss": False}
+        if not allow_miss or self._personal_unknown(content):
+            return None
         used = any(doc.get("vectors") for doc in docs) and query_vector is not None
         if admit_no_passage(found, used_vectors=used):
             title = missed_document_title(content, docs) or str(docs[0].get("title") or "")
@@ -706,29 +755,63 @@ class MemoryService:
                 fact_answer, expert, facts = covered
                 mount_memory(decision, recall, expert, facts, "entity_first")
                 grounded = True
-            if not fact_answer or (fact_answer and "不在记忆里" in fact_answer and not grounded):
-                document = self._document_reply(content)
+            def _use_document(document: dict) -> None:
+                nonlocal fact_answer, grounded
+                fact_answer = document["answer"]
+                recall["doc_chips"] = document.get("chips") or []
+                if document.get("miss"):
+                    decision.fired = False
+                    decision.reason = "document_miss"
+                    decision.label = "基座"
+                    recall["reason"] = "document_miss"
+                    recall["mounted"] = False
+                    recall["fired"] = False
+                    recall["abstain"] = True
+                    recall["reason_text"] = "文档里没有这句话"
+                else:
+                    decision.fired = True
+                    decision.reason = "document"
+                    decision.label = "文档"
+                    recall["fired"] = True
+                    recall["mounted"] = True
+                    recall["abstain"] = False
+                    recall["reason"] = "document"
+                    recall["mounted_label"] = "文档"
+                    recall["reason_text"] = "回答来自导入的文档"
+                    grounded = True
+
+            open_answer = (not fact_answer) or ("不在记忆里" in fact_answer and not grounded)
+            if open_answer:
+                document = self._document_reply(content, allow_miss=False)
                 if document:
-                    fact_answer = document["answer"]
-                    recall["doc_chips"] = document.get("chips") or []
-                    if document.get("miss"):
-                        decision.fired = False
-                        decision.reason = "document_miss"
-                        decision.label = "基座"
-                        recall["reason"] = "document_miss"
-                        recall["mounted"] = False
-                        recall["fired"] = False
-                    else:
-                        decision.fired = True
-                        decision.reason = "document"
-                        decision.label = "文档"
-                        recall["fired"] = True
-                        recall["mounted"] = True
-                        recall["abstain"] = False
-                        recall["reason"] = "document"
-                        recall["mounted_label"] = "文档"
-                        recall["reason_text"] = "回答来自导入的文档"
-                        grounded = True
+                    _use_document(document)
+            open_answer = (not fact_answer) or ("不在记忆里" in fact_answer and not grounded)
+            if open_answer:
+                quoted = self._memory_quote(content, experts)
+                if quoted:
+                    fact_answer, expert, facts = quoted
+                    mount_memory(decision, recall, expert, facts, "entity_first")
+                    grounded = True
+            if not fact_answer:
+                unknown = self._personal_unknown(content)
+                if unknown:
+                    fact_answer = unknown
+                    decision.fired = False
+                    decision.reason = "personal_unknown"
+                    decision.label = "基座"
+                    decision.expert = None
+                    recall["reason"] = "personal_unknown"
+                    recall["reason_text"] = "没记住这件事，所以不交给基座编"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["expert"] = None
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
+                else:
+                    document = self._document_reply(content, allow_miss=True)
+                    if document:
+                        _use_document(document)
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)
@@ -796,6 +879,7 @@ class MemoryService:
             rows.append({
                 "id": doc["id"],
                 "title": doc["title"],
+                "format": doc.get("format") or "",
                 "pages": doc["pages"],
                 "chunks": doc["chunks"],
                 "points": doc["points"],
@@ -1745,6 +1829,24 @@ class MemoryService:
             keys = [str(fact.get("id") or ""), str(fact.get("fact_id") or "")]
             fact["recall_hits"] = max((recall_hits.get(key, 0) for key in keys), default=0)
             fact["recalled_at"] = max((recall_last.get(key) or "" for key in keys), default="")
+        source_titles: dict[str, str] = {}
+        for record in records:
+            for fact in (record.fact_memory or {}).get("facts") or []:
+                if not isinstance(fact, dict):
+                    continue
+                for source in fact.get("source_conversations") or []:
+                    sid = str(source.get("id") or "")
+                    title = str(source.get("title") or "").strip()
+                    if sid and title and title != sid:
+                        source_titles[sid] = title
+        try:
+            from memory_core.documents import list_documents
+
+            for doc in list_documents(self.home):
+                if doc.get("id") and doc.get("title"):
+                    source_titles.setdefault(str(doc["id"]), str(doc["title"]))
+        except Exception:
+            pass
         seen_convs: list[str] = []
         conversations = []
         for link in links:
@@ -1757,10 +1859,13 @@ class MemoryService:
                 seen_convs.append(conv_id)
                 conv = self.convos.get(conv_id)
                 text = self.convos.user_text(conv_id) if conv else ""
+                title = (conv["title"] if conv else "") or source_titles.get(conv_id) or ""
+                if not title or title == conv_id:
+                    title = source_titles.get(conv_id) or "文档"
                 conversations.append({
                     "id": f"conv:{conv_id}",
                     "conversation_id": conv_id,
-                    "title": conv["title"] if conv else conv_id,
+                    "title": title,
                     "snippet": text[:240],
                 })
         return {"experts": experts, "facts": fact_nodes, "conversations": conversations, "links": links}

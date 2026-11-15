@@ -5,14 +5,17 @@ from pathlib import Path
 from memory_core.documents import (
     attribute_in_statement,
     chunk_book,
+    covered_fact,
     document_miss,
     extract_document,
     extract_key_points,
     extract_pdf_text_layer,
+    fact_from_point,
     pdf_document_title,
     search_documents,
     split_chapters,
 )
+from memory_core.identity import migrate_user_identity
 from memory_core.extract import expand_training_fact, pattern_extract
 from memory_core.same_memory import is_same_memory
 from memory_core.self_query import self_ask, self_reply
@@ -67,6 +70,47 @@ class SelfRecallTests(unittest.TestCase):
         overview, _owner, rows = self_reply("关于我你知道什么？", [expert])
         self.assertIn("徐金朔", overview)
         self.assertTrue(rows)
+
+    def test_legacy_user_answers_as_self(self):
+        fact = {
+            "entity": "用户",
+            "attr": "名字",
+            "value": "徐金朔",
+            "statement": "用户叫徐金朔。",
+        }
+        expert = _Expert("expert_1000", [fact], display="用户/徐金朔")
+        for question in ("我是谁？", "我叫什么名字？", "我的名字是什么？"):
+            answer, owner, used = self_reply(question, [expert])
+            self.assertIn("徐金朔", answer, question)
+            self.assertIs(owner, expert)
+            self.assertTrue(used)
+
+    def test_migrate_user_expert(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        root = Path(tempfile.mkdtemp())
+        folder = root / "experts" / "expert_1000"
+        folder.mkdir(parents=True)
+        (folder / "fact_memory.json").write_text(json.dumps({
+            "display_name": "用户/徐金朔",
+            "entities": ["用户"],
+            "facts": [{"entity": "用户", "attr": "名字", "value": "徐金朔", "statement": "用户叫徐金朔。"}],
+        }, ensure_ascii=False), encoding="utf-8")
+        (root / "experts" / "router.jsonl").write_text(
+            json.dumps({"expert": "expert_1000", "display_name": "用户/徐金朔"}) + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(migrate_user_identity(root), 1)
+        memory = json.loads((folder / "fact_memory.json").read_text(encoding="utf-8"))
+        self.assertEqual(memory["display_name"], "关于你")
+        self.assertTrue(memory["self"])
+        self.assertEqual(memory["facts"][0]["entity"], "我")
+        self.assertIn("徐金朔", memory["facts"][0]["statement"])
+        router = (root / "experts" / "router.jsonl").read_text(encoding="utf-8")
+        self.assertIn("关于你", router)
+        self.assertEqual(migrate_user_identity(root), 0)
 
     def test_cat_is_its_own_expert(self):
         cat = pattern_extract("我的猫叫咪咪")[0]
@@ -135,6 +179,41 @@ class WugangTests(unittest.TestCase):
         self.assertIsNone(mayor["ground"])
         self.assertTrue(mayor["missing_term"])
         self.assertIn("雾港灯塔志", document_miss("雾港灯塔志"))
+        height = search_documents("白鹭塔有多高？", [doc], None)["ground"]
+        self.assertIsNotNone(height)
+        self.assertIn("四十二米", height["answer"])
+        self.assertNotIn("\u2ee9", text)
+        self.assertIn("黄昏", text)
+
+    def test_docx_chip_names_the_chapter(self):
+        text = extract_document("wugang.docx", (ROOT / "wugang.docx").read_bytes())
+        doc = {"id": "wugang", "title": "雾港灯塔志", "chunks": chunk_book(text), "vectors": None}
+        tower = search_documents("白鹭塔建于哪一年？", [doc], None)["ground"]
+        label = tower["chips"][0]["label"]
+        self.assertIn("第一章", label)
+        self.assertNotIn("第1页", label)
+        self.assertNotIn("第2页", label)
+
+    def test_gull_recall_without_the_stored_name(self):
+        line = "柯岚的女儿柯小满养了一只三条腿的海鸥，名叫阿哨。"
+        fact = fact_from_point(line, "雾港灯塔志", "第三章 守塔人的女儿")
+        self.assertEqual(fact["entity"], "柯小满")
+        self.assertEqual(fact["value"], "阿哨")
+        legacy = dict(fact, entity="阿哨", statement=line if line.endswith("。") else line + "。")
+        hit = covered_fact("柯小满的海鸥叫什么", [legacy])
+        self.assertIsNotNone(hit)
+        self.assertIn("阿哨", hit["statement"])
+        bike = {"statement": "沈星河的自行车颜色是朱红色。", "entity": "沈星河"}
+        self.assertIsNone(covered_fact("沈星河的车是什么颜色？", [bike]))
+        self.assertIsNone(covered_fact("沈星河的狗叫什么？", [bike]))
+
+    def test_key_points_keep_facts_when_the_model_picks_scenery(self):
+        text = extract_pdf_text_layer((ROOT / "wugang_chrome.pdf").read_bytes())
+        points = extract_key_points(split_chapters(text), ask=lambda _prompt: "镇上的人习惯在黄昏时分聚到石阶上，看归港的船。")
+        blob = "\n".join(point["text"] for point in points)
+        self.assertIn("1873", blob)
+        self.assertIn("霜降", blob)
+        self.assertNotIn("\u2ee9", blob)
 
     def test_key_points_stay_whole_sentences(self):
         text = extract_pdf_text_layer((ROOT / "wugang_chrome.pdf").read_bytes())

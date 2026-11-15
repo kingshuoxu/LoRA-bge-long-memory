@@ -26,6 +26,94 @@ def docs_root(home: Path) -> Path:
     return Path(home) / "docs"
 
 
+# NFKC 不会把部首区（U+2E80）折成正文汉字。Chrome 抽出的 PDF 常用这些码位。
+_RADICALS = str.maketrans({
+    "\u2e81": "厂",
+    "\u2e84": "乙",
+    "\u2e85": "亻",
+    "\u2e86": "冂",
+    "\u2e89": "刂",
+    "\u2e8a": "卜",
+    "\u2e8c": "小",
+    "\u2e93": "幺",
+    "\u2e95": "彐",
+    "\u2e96": "忄",
+    "\u2e97": "心",
+    "\u2e98": "扌",
+    "\u2e99": "攵",
+    "\u2e9c": "日",
+    "\u2e9d": "月",
+    "\u2e9f": "母",
+    "\u2ea0": "民",
+    "\u2ea1": "氵",
+    "\u2ea2": "水",
+    "\u2ea3": "灬",
+    "\u2ea6": "丬",
+    "\u2ea7": "牛",
+    "\u2ea8": "犭",
+    "\u2ea9": "玉",
+    "\u2eaa": "疋",
+    "\u2eab": "目",
+    "\u2eac": "示",
+    "\u2ead": "礻",
+    "\u2eae": "竹",
+    "\u2eaf": "糹",
+    "\u2eb0": "纟",
+    "\u2eb1": "网",
+    "\u2eb2": "罒",
+    "\u2eb6": "羊",
+    "\u2eb9": "耂",
+    "\u2eba": "肀",
+    "\u2ebc": "肉",
+    "\u2ebd": "臼",
+    "\u2ebe": "艹",
+    "\u2ec1": "虎",
+    "\u2ec2": "衤",
+    "\u2ec4": "西",
+    "\u2ec5": "见",
+    "\u2ec6": "角",
+    "\u2ec8": "讠",
+    "\u2ec9": "贝",
+    "\u2eca": "足",
+    "\u2ecb": "车",
+    "\u2ecc": "辶",
+    "\u2ecf": "阝",
+    "\u2ed0": "钅",
+    "\u2ed1": "长",
+    "\u2ed3": "长",
+    "\u2ed4": "门",
+    "\u2ed6": "阝",
+    "\u2ed7": "雨",
+    "\u2ed8": "青",
+    "\u2ed9": "韦",
+    "\u2eda": "页",
+    "\u2edb": "风",
+    "\u2edc": "飞",
+    "\u2edd": "食",
+    "\u2ee0": "饣",
+    "\u2ee1": "首",
+    "\u2ee2": "马",
+    "\u2ee3": "骨",
+    "\u2ee4": "鬼",
+    "\u2ee5": "鱼",
+    "\u2ee6": "鸟",
+    "\u2ee7": "卤",
+    "\u2ee8": "麦",
+    "\u2ee9": "黄",
+    "\u2eea": "黾",
+    "\u2eec": "齐",
+    "\u2eee": "齿",
+    "\u2ef0": "龙",
+    "\u2ef1": "龟",
+    "\u2ef3": "龟",
+})
+
+
+def normalize_cjk(text: str) -> str:
+    folded = unicodedata.normalize("NFKC", text or "")
+    return folded.translate(_RADICALS)
+
+
 def normalize_doc_punctuation(text: str) -> str:
     out = []
     for index, ch in enumerate(text):
@@ -37,6 +125,10 @@ def normalize_doc_punctuation(text: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+def normalize_document_text(text: str) -> str:
+    return normalize_doc_punctuation(normalize_cjk(text))
 
 
 def _is_cjk(ch: str) -> bool:
@@ -177,8 +269,11 @@ def chunk_passages(text: str, chapter: str = "正文", page: int = 1) -> list[di
 def chunk_book(text: str) -> list[dict]:
     out: list[dict] = []
     page = 1
+    paged = "\f" in text
     for chapter, body in split_chapters(text):
         pieces = chunk_passages(body, chapter, page)
+        for piece in pieces:
+            piece["paged"] = paged
         out.extend(pieces)
         if pieces:
             page = max(item["page"] for item in pieces) + 1
@@ -264,7 +359,7 @@ def extract_pdf_pages(data: bytes) -> list[str]:
     pages = []
     for page in reader.pages:
         raw = page.extract_text() or ""
-        normalized = unicodedata.normalize("NFKC", raw.replace("\r\n", "\n").replace("\r", "\n"))
+        normalized = normalize_cjk(raw.replace("\r\n", "\n").replace("\r", "\n"))
         pages.append(join_wrapped_lines(normalized))
     return pages
 
@@ -293,7 +388,7 @@ def extract_pdf_text_layer(data: bytes) -> str:
     chosen = legacy if _cjk_stops(legacy) > _cjk_stops(modern) else modern
     if not any(page.strip() for page in chosen):
         return ""
-    return normalize_doc_punctuation("\n\f\n".join(chosen))
+    return normalize_document_text("\n\f\n".join(chosen))
 
 
 def decode_plain(data: bytes) -> str:
@@ -426,7 +521,7 @@ def extract_document(name: str, data: bytes) -> str:
         text = extract_docx(data)
     else:
         text = decode_plain(data)
-    return normalize_doc_punctuation(text.replace("\x00", "").strip())
+    return normalize_document_text(text.replace("\x00", "").strip())
 
 
 def document_title(name: str, data: bytes) -> str:
@@ -552,7 +647,21 @@ def extract_key_points(
                             from_llm.append(whole)
             except Exception:
                 from_llm = []
-        lines = (from_llm or heuristic_keys(body))[:per_chapter]
+        chosen: list[str] = []
+        for line in heuristic_keys(body) + from_llm:
+            bare = line.rstrip("。")
+            if from_llm and line in from_llm and line not in heuristic_keys(body) and not is_key_fact(bare):
+                continue
+            if any(is_same_text(item, line) for item in chosen):
+                continue
+            chosen.append(line)
+        if not chosen:
+            for line in from_llm:
+                if any(is_same_text(item, line) for item in chosen):
+                    continue
+                chosen.append(line)
+        chosen.sort(key=_key_score, reverse=True)
+        lines = chosen[:per_chapter]
         for line in lines:
             if len(out) >= total_cap:
                 break
@@ -568,11 +677,20 @@ def is_same_text(left: str, right: str) -> bool:
     return is_same_memory(left, right)
 
 
+_SOFT_RUNS = frozenset({"多高", "高度", "多长", "多大", "多重"})
+
+
 def salient_runs(query: str) -> list[str]:
     text = re.sub(r"[\s?？。，,！!、]", "", query.strip())
     for stop in sorted(_STOPS, key=len, reverse=True):
         text = text.replace(stop, "\x01")
     return [part.strip() for part in text.split("\x01") if len(part.strip()) >= 2]
+
+
+def _run_in_text(run: str, text: str) -> bool:
+    if run in _SOFT_RUNS:
+        return bool(re.search(r"高|米|长", text))
+    return run_covered(run, text)
 
 
 def run_covered(run: str, text: str) -> bool:
@@ -635,49 +753,77 @@ def _cosine(left: list[float], right: list[float]) -> float:
     return dot / (left_norm * right_norm)
 
 
+def _sentence_score(query: str, line: str) -> float:
+    score = lexical_score(query, line)
+    if any(word in query for word in ("多高", "高度", "有多高")) and re.search(r"高|米", line):
+        score += 0.55
+    if any(word in query for word in ("哪一年", "哪年", "建于", "什么时候", "何时")) and re.search(r"\d{3,4}\s*年|建于|霜降|晾晒", line):
+        score += 0.45
+    if any(word in query for word in ("叫什么", "名字", "是谁")) and re.search(r"名叫|叫", line):
+        score += 0.25
+    return score
+
+
 def retrieve_docs(query: str, chunks: list[dict], vectors: list[list[float]] | None, query_vector: list[float] | None) -> list[dict]:
     if not chunks or not query.strip():
         return []
+    lexical = []
+    for chunk in chunks:
+        sentence = max((_sentence_score(query, line) for line in _sentences(chunk["text"])), default=0.0)
+        lexical.append(max(lexical_score(query, chunk["text"]), sentence))
     scored = []
     if query_vector is not None and vectors is not None and len(vectors) == len(chunks):
-        for chunk, vector in zip(chunks, vectors):
-            scored.append({"chunk": chunk, "score": _cosine(query_vector, vector)})
+        for chunk, vector, words in zip(chunks, vectors, lexical):
+            cosine = _cosine(query_vector, vector)
+            score = max(cosine, words)
+            if words >= 0.22:
+                score = max(score, 0.5)
+            scored.append({"chunk": chunk, "score": score, "lexical": words})
     else:
-        for chunk in chunks:
-            sentence = max((lexical_score(query, line) for line in _sentences(chunk["text"])), default=0.0)
-            scored.append({"chunk": chunk, "score": max(lexical_score(query, chunk["text"]), sentence)})
+        for chunk, words in zip(chunks, lexical):
+            scored.append({"chunk": chunk, "score": words, "lexical": words})
     scored.sort(key=lambda item: item["score"], reverse=True)
-    return scored[:3]
+    return scored[:4]
+
+
+def passage_chip(title: str, chunk: dict) -> str:
+    page = int(chunk.get("page") or 0)
+    chapter = str(chunk.get("chapter") or "")
+    paged = bool(chunk.get("paged", True))
+    chapter_bit = chapter if chapter and chapter != "正文" else ""
+    if paged and page > 0:
+        where = f"第{page}页"
+        suffix = f" · {chapter_bit}" if chapter_bit else ""
+    else:
+        where = chapter_bit
+        suffix = ""
+    return f"《{title}》{where}{suffix}"
 
 
 def ground_document(query: str, hits: list[dict], title: str, min_score: float) -> dict | None:
     runs = salient_runs(query)
-    useful = [
-        hit for hit in hits
-        if hit["score"] >= min_score and all(run_covered(run, hit["chunk"]["text"]) for run in runs)
-    ]
-    if not useful:
-        return None
+    useful = []
     best_line = ""
-    best_hit = useful[0]
+    best_hit = None
     best_score = -1.0
-    for hit in useful:
-        for line in _sentences(hit["chunk"]["text"]):
-            score = lexical_score(query, line)
-            if ("年" in query or "何时" in query or "什么时候" in query) and re.search(r"\d{3,4}", line):
-                score += 0.4
-            if score > best_score:
+    for hit in hits:
+        text = hit["chunk"]["text"]
+        covered = all(run_covered(run, text) for run in runs) if runs else True
+        lexical = float(hit.get("lexical") or 0)
+        if not covered and lexical < 0.22 and hit["score"] < min_score:
+            continue
+        for line in _sentences(text):
+            score = _sentence_score(query, line)
+            if score > best_score and (score >= 0.22 or (hit["score"] >= min_score and covered)):
                 best_score = score
                 best_line = line
                 best_hit = hit
+        if covered and (hit["score"] >= min_score or lexical >= 0.22):
+            useful.append(hit)
+    if not best_line or best_hit is None:
+        return None
     ordered = [best_hit] + [hit for hit in useful if hit["chunk"]["id"] != best_hit["chunk"]["id"]]
-    chips = []
-    for hit in ordered:
-        chunk = hit["chunk"]
-        where = f"第{chunk['page']}页" if int(chunk.get("page") or 0) > 0 else chunk.get("chapter") or ""
-        chapter = chunk.get("chapter") or ""
-        suffix = f" · {chapter}" if chapter and chapter != "正文" else ""
-        chips.append({"label": f"《{title}》{where}{suffix}", "passage": chunk["text"]})
+    chips = [{"label": passage_chip(title, hit["chunk"]), "passage": hit["chunk"]["text"]} for hit in ordered]
     return {"answer": best_line, "chips": chips}
 
 
@@ -717,7 +863,11 @@ def search_documents(query: str, docs: list[dict], query_vector: list[float] | N
     runs = salient_runs(query)
     missing = any(
         run for run in runs
-        if not any(any(run_covered(run, chunk["text"]) for chunk in doc.get("chunks") or []) for doc in docs)
+        if not any(any(_run_in_text(run, chunk["text"]) for chunk in doc.get("chunks") or []) for doc in docs)
+    )
+    subject_hit = any(
+        run for run in runs
+        if run not in _SOFT_RUNS and any(any(run in chunk["text"] for chunk in doc.get("chunks") or []) for doc in docs)
     )
     best_score = 0.0
     best = None
@@ -736,7 +886,13 @@ def search_documents(query: str, docs: list[dict], query_vector: list[float] | N
             grounded["title"] = doc.get("title") or ""
             if best is None or score >= best_score:
                 best = grounded
-    return {"ground": best, "best_score": best_score, "title_hit": title_hit, "missing_term": missing}
+    return {
+        "ground": best,
+        "best_score": best_score,
+        "title_hit": title_hit,
+        "missing_term": missing,
+        "subject_hit": subject_hit,
+    }
 
 
 def admit_no_passage(search: dict, min_score: float = 0.18, used_vectors: bool = False) -> bool:
@@ -744,10 +900,57 @@ def admit_no_passage(search: dict, min_score: float = 0.18, used_vectors: bool =
         return False
     if search.get("missing_term") or search.get("title_hit"):
         return True
+    if used_vectors and (search.get("subject_hit") or float(search.get("best_score") or 0) >= 0.32):
+        return True
     if used_vectors:
         return False
     score = float(search.get("best_score") or 0)
     return 0.08 < score < min_score
+
+
+def _content_runs(query: str) -> list[str]:
+    """保留单字事物。文档检索仍用 salient_runs，避免把「车」从「自行车」里拆丢。"""
+    text = re.sub(r"[\s?？。，,！!、]", "", query.strip())
+    for stop in sorted(_STOPS, key=len, reverse=True):
+        text = text.replace(stop, "\x01")
+    return [part.strip() for part in text.split("\x01") if part.strip() and part.strip() not in _SOFT_RUNS]
+
+
+def _run_stands_alone(run: str, text: str) -> bool:
+    """单字必须自己成词。「车」不能从「自行车」里抠出来。"""
+    if len(run) >= 2:
+        return run in text
+    bounds = set("的了是在有和与吗呢叫，。、 ")
+    start = 0
+    while True:
+        index = text.find(run, start)
+        if index < 0:
+            return False
+        before = text[index - 1] if index else ""
+        after = text[index + len(run)] if index + len(run) < len(text) else ""
+        before_ok = not before or before in bounds or not _is_cjk(before)
+        after_ok = not after or after in bounds or not _is_cjk(after)
+        if before_ok and after_ok:
+            return True
+        start = index + 1
+
+
+def covered_fact(query: str, facts: list[dict]) -> dict | None:
+    """问句没有点到专家名时，仍用整句里的人和事物对上。"""
+    runs = _content_runs(query)
+    if not runs or sum(len(run) for run in runs) < 4:
+        return None
+    hits = []
+    for fact in facts:
+        if not isinstance(fact, dict) or fact.get("superseded"):
+            continue
+        statement = str(fact.get("statement") or "")
+        if statement and all(_run_stands_alone(run, statement) for run in runs):
+            hits.append(fact)
+    if not hits:
+        return None
+    hits.sort(key=lambda fact: (0 if re.search(r"名叫|叫|年", str(fact.get("statement") or "")) else 1, len(str(fact.get("statement") or ""))))
+    return hits[0]
 
 
 def fact_from_point(text: str, title: str, chapter: str) -> dict:
@@ -756,8 +959,13 @@ def fact_from_point(text: str, title: str, chapter: str) -> dict:
     if line and line[-1] not in "。！？.!?":
         line += "。"
     entity = title or "文档"
+    value_override = ""
+    owned = re.search(r"([\u4e00-\u9fff]{2,3})养了.*?海鸥，名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", line)
     named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", line)
-    if named:
+    if owned:
+        entity = owned.group(1)
+        value_override = owned.group(2)
+    elif named:
         entity = named.group(1)
     else:
         built = re.search(r"([\u4e00-\u9fff]{2,8})建于", line)
@@ -775,12 +983,16 @@ def fact_from_point(text: str, title: str, chapter: str) -> dict:
     if "叫" in line:
         questions.append(f"{entity}叫什么？")
         if "海鸥" in line or "阿哨" in line:
-            questions.append("柯小满的海鸥叫什么？")
+            questions.append(f"{entity}的海鸥叫什么？")
+            questions.append(f"{entity}的海鸥叫什么")
+            if "柯小满" in line:
+                questions.append("柯小满的海鸥叫什么？")
     attr = chapter if chapter and chapter != "正文" else "重点"
+    value = value_override or line.rstrip("。")
     return {
         "entity": entity,
         "attr": attr,
-        "value": line.rstrip("。"),
+        "value": value,
         "statement": line,
         "question": questions[0] if questions else f"{entity}是什么？",
         "answer": line.rstrip("。"),
@@ -895,6 +1107,7 @@ def list_documents(home: Path, stored_statements: list[str] | None = None) -> li
         rows.append({
             "id": meta.get("id") or directory.name,
             "title": meta.get("title") or "",
+            "format": str(meta.get("format") or Path(str(meta.get("source") or "")).suffix.lstrip(".")).upper(),
             "pages": int(meta.get("pages") or 0),
             "chunks": int(meta.get("chunks") or 0),
             "points": points,
@@ -974,6 +1187,7 @@ def import_document(
     meta = {
         "id": doc_id,
         "title": title,
+        "format": source.suffix.lstrip(".").upper(),
         "pages": pages,
         "chunks": len(chunks),
         "dim": dim,

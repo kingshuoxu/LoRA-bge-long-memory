@@ -42,10 +42,17 @@ export function sourceOffset(fact, expert) {
 
 export function factCaption(fact) {
   const statement = String((fact && fact.statement) || "").replace(/[。．.!]+$/u, "").trim();
-  const value = String((fact && fact.value) || "").trim();
+  let value = String((fact && fact.value) || "").trim();
   const attr = String((fact && fact.attr) || "").trim();
-  const name = value || attr || statement;
-  const meta = attr && attr !== name ? attr : "";
+  if (value.length > 18) {
+    const named = statement.match(/名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})/);
+    const year = statement.match(/[0-9]{3,4}年/);
+    if (named) value = named[1];
+    else if (year) value = year[0];
+    else value = value.slice(0, 12);
+  }
+  const name = value || attr || statement.slice(0, 12);
+  const meta = attr && attr !== name && attr.length <= 12 ? attr : "";
   return { name, meta };
 }
 
