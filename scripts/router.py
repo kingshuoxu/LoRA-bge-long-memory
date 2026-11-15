@@ -25,11 +25,26 @@ _tok = None
 _model = None
 
 
+def resolve_emb_model() -> str:
+    """研究脚本在仓库根目录运行时，相对路径 models/bge-small-zh-v1.5 是存在的。
+
+    安装包里的工作目录是 resources/app，旁边没有 models/。那里必须先 bind_bge，
+    把 EMB_MODEL 写成绝对路径。相对路径解析不到目录时直接失败，不再按当前目录猜。
+    """
+    path = Path(EMB_MODEL)
+    if path.is_dir():
+        return str(path if path.is_absolute() else path.resolve())
+    raise FileNotFoundError(
+        f"{EMB_MODEL} is not a local folder. Call bind_bge() with the models directory before embed()."
+    )
+
+
 def _load():
     global _tok, _model
     if _model is None:
-        _tok = AutoTokenizer.from_pretrained(EMB_MODEL)
-        _model = AutoModel.from_pretrained(EMB_MODEL, torch_dtype=torch.float32)
+        model_path = resolve_emb_model()
+        _tok = AutoTokenizer.from_pretrained(model_path)
+        _model = AutoModel.from_pretrained(model_path, torch_dtype=torch.float32)
         _model.eval()
     return _tok, _model
 
@@ -132,12 +147,156 @@ def _strip_affixes(span: str) -> str:
     return span
 
 
+# 个人事实里,「最喜欢 / 住在哪里」会被「的」之前的匹配吞进名字。研究公司名不以这些词结尾。
+_CJK_MODIFIERS = ("最喜欢", "比较喜欢", "非常喜欢", "喜欢", "住在哪里", "住在")
+_TITLES = ("professor", "prof", "miss", "mrs", "ms", "mr", "dr")
+_LATIN_STOP = {
+    "what", "where", "who", "which", "when", "how", "whose", "why",
+    "is", "are", "was", "were", "do", "does", "did",
+    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or",
+    "please", "tell", "me",
+}
+_LATIN_VERBS = {"lives", "live", "keeps", "keep", "has", "had", "have"}
+
+
+def _peel_cjk_modifiers(name: str) -> str:
+    core = name
+    changed = True
+    while changed and core:
+        changed = False
+        for suffix in sorted(_CJK_MODIFIERS, key=len, reverse=True):
+            if not core.endswith(suffix) or len(core) - len(suffix) < 2:
+                continue
+            rest = core[: -len(suffix)]
+            if re.fullmatch(r"[一-龥]{2,}", rest):
+                core = rest
+                changed = True
+                break
+    return core
+
+
+def _canonicalize_latin(name: str) -> str | None:
+    """拉丁名忽略大小写、称谓和结尾的所有格。没有汉字时才走这里。"""
+    text = re.sub(r"['’]s$", "", name, flags=re.IGNORECASE).strip(" .,;:!?\"'")
+    parts = [part for part in re.sub(r"\s+", " ", text).split(" ") if part]
+    while parts and parts[0].rstrip(".").lower() in _TITLES:
+        parts = parts[1:]
+    tokens = []
+    for part in parts:
+        piece = part.strip(".,")
+        if not piece or not re.fullmatch(r"[A-Za-z][A-Za-z'-]*", piece):
+            return None
+        tokens.append(piece[:1].upper() + piece[1:])
+    if not tokens or len(tokens) > 4:
+        return None
+    return " ".join(tokens)
+
+
+def _latin_tokens(query: str) -> list[str]:
+    # 所有格单独成词。否则 Chen's 会被当成一个词,人名停在所有格前面。
+    return [item.group(0) for item in re.finditer(r"['’]s|[A-Za-z]+(?:-[A-Za-z]+)*", query)]
+
+
+def _prefer_capitalized_span(tokens: list[str]) -> list[str]:
+    """「dog Elena Brooks」里的小写普通词不是人名。全小写的问句保持原样。"""
+    if sum(token[:1].isupper() for token in tokens) < 2:
+        return tokens
+    for index, token in enumerate(tokens):
+        tail = tokens[index:]
+        if token[:1].isupper() and all(item[:1].isupper() for item in tail) and len(tail) >= 2:
+            return tail
+    return tokens
+
+
+def _take_name(tokens: list[str]) -> str | None:
+    tokens = _prefer_capitalized_span(tokens)
+    if not tokens:
+        return None
+    return _canonicalize_latin(" ".join(tokens))
+
+
+def _latin_entity(query: str) -> str | None:
+    """从没有汉字的问句里找人名:多词、所有格、称谓,以及 does / lives 两边。"""
+    tokens = _latin_tokens(query)
+    found: list[str] = []
+
+    def walk_back(index: int) -> str | None:
+        grabbed: list[str] = []
+        cursor = index
+        while cursor >= 0 and len(grabbed) < 4:
+            word = tokens[cursor]
+            lowered = word.rstrip(".").lower()
+            if lowered in {"'s", "’s"} or lowered in _LATIN_STOP or lowered in _LATIN_VERBS:
+                break
+            if lowered in _TITLES:
+                cursor -= 1
+                continue
+            grabbed.append(word)
+            cursor -= 1
+        grabbed.reverse()
+        return _take_name(grabbed)
+
+    def walk_forward(index: int) -> str | None:
+        grabbed: list[str] = []
+        cursor = index
+        while cursor < len(tokens) and len(grabbed) < 4:
+            word = tokens[cursor]
+            lowered = word.rstrip(".").lower()
+            if lowered in {"'s", "’s"} or lowered in _LATIN_STOP or lowered in _LATIN_VERBS:
+                break
+            if lowered in _TITLES and not grabbed:
+                cursor += 1
+                continue
+            grabbed.append(word)
+            cursor += 1
+        return _take_name(grabbed)
+
+    for index, word in enumerate(tokens):
+        lowered = word.lower()
+        if lowered in {"'s", "’s"}:
+            name = walk_back(index - 1)
+            if name:
+                found.append(name)
+        elif lowered in {"does", "did", "of"}:
+            name = walk_forward(index + 1)
+            if name and (lowered != "of" or len(name.split()) >= 2):
+                found.append(name)
+        elif lowered in _LATIN_VERBS:
+            name = walk_back(index - 1)
+            if name:
+                found.append(name)
+    if not found:
+        return None
+    multi = [item for item in found if len(item.split()) >= 2]
+    return (multi or found)[0]
+
+
 def canonicalize_entity(span: str) -> str | None:
-    """把 key_texts 里的一段前缀收成实体名。收不干净就丢掉,不要把整句留下来。"""
-    name = _strip_affixes(span)
-    if re.fullmatch(r"[一-龥]{2,8}", name):
-        return name
+    """把一段前缀收成实体名。收不干净就丢掉,不要把整句留下来。
+
+    汉字仍先剥问句套话和机构后缀,再去掉吞进名字的「喜欢 / 住在」。
+    没有汉字时收成拉丁人名。研究公司名不以这些修饰词结尾,名单不变。
+    """
+    raw = str(span or "").strip()
+    if not raw:
+        return None
+    if not re.search(r"[一-龥]", raw):
+        return _canonicalize_latin(raw)
+    name = _strip_affixes(raw)
+    peeled = _peel_cjk_modifiers(name)
+    if re.fullmatch(r"[一-龥]{2,8}", peeled):
+        return peeled
     return None
+
+
+def entity_key(name: str) -> str | None:
+    """守卫比较用的键。拉丁名折叠大小写,中文保持剥修饰词之后的原字。"""
+    canon = canonicalize_entity(name)
+    if not canon:
+        return None
+    if re.search(r"[一-龥]", canon):
+        return canon
+    return canon.casefold()
 
 
 def extract_entities_from_key_texts(texts: list[str]) -> list[str]:
@@ -206,11 +365,47 @@ def mentioned_entities(query: str, entities: list[str] | set[str]) -> list[str]:
     return hits
 
 
-def extract_query_entity(query: str) -> str | None:
-    """从问句开头猜一个实体名(调试用)。
+def _latin_registered(expert_entities: list[str] | set[str]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw in expert_entities:
+        text = str(raw)
+        if re.search(r"[一-龥]", text):
+            continue
+        canon = _canonicalize_latin(text)
+        if not canon:
+            continue
+        key = canon.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(canon)
+    return names
 
-    准入判断不要依赖这里的返回值。句首不是实体时(「你好,塔佐巴洛公司…」)会返回 None,
-    「塔佐巴洛集团的…」会去掉机构后缀,得到「塔佐巴洛」。
+
+def _latin_query_hit(query: str, names: list[str]) -> bool:
+    if not names:
+        return False
+    found = _latin_entity(query)
+    if found and any(found.casefold() == name.casefold() for name in names):
+        return True
+    folded = query.casefold()
+    for name in names:
+        key = name.casefold()
+        if " " in key:
+            if key in folded:
+                return True
+            continue
+        if re.search(rf"(?<![a-z]){re.escape(key)}(?![a-z])", folded):
+            return True
+    return False
+
+
+def extract_query_entity(query: str) -> str | None:
+    """从问句开头猜一个实体名。
+
+    研究问句仍走句首汉字和机构后缀。那一步没抽到时,个人事实再认「喜欢 / 住在」。
+    没有汉字的问句认拉丁人名。准入判断以 verify_entity_guard 为准。
     """
     compact = re.sub(r"[\s\u3000]+", "", query.strip())
     for phrase in sorted(_LEAD_PHRASES, key=len, reverse=True):
@@ -218,27 +413,40 @@ def extract_query_entity(query: str) -> str | None:
             compact = compact[len(phrase):].lstrip(",，:：")
             break
     match = re.match(r"([一-龥]{2,16})", compact)
-    if not match:
+    if match:
+        span = match.group(1)
+        cut = re.match(r"(.+?)(?=的|是|把|这|和|与|或|吧|吗|呢|啊)", span)
+        if cut:
+            span = cut.group(1)
+        name = canonicalize_entity(span)
+        if name and re.search(r"[一-龥]", name):
+            return name
+    if re.search(r"[一-龥]", compact):
+        personal = re.match(r"^([一-龥]{2,4})(?:喜欢|住在)", compact)
+        if personal:
+            return personal.group(1)
         return None
-    span = match.group(1)
-    cut = re.match(r"(.+?)(?=的|是|把|这|和|与|或|吧|吗|呢|啊)", span)
-    if cut:
-        span = cut.group(1)
-    return canonicalize_entity(span)
+    return _latin_entity(query)
 
 
 def verify_entity_guard(query: str, expert_entities: list[str] | set[str]) -> bool:
     """实体守卫:问句是否以名字边界提到了该专家的在册实体。
 
     名单为空时放行(没有实体表就无法做二级校验,保持旧行为)。
+    汉字名仍走音节边界。拉丁名另比大小写、称谓和所有格,不改变汉字判断。
     名单非空但一个干净名字都收不出来时拒绝,避免整句短语被当成子串放行。
     """
     if not expert_entities:
         return True
     names = _registered_names(expert_entities)
-    if not names:
+    cjk_names = [name for name in names if re.search(r"[一-龥]", name)]
+    if cjk_names and mentioned_entities(query, cjk_names):
+        return True
+    if _latin_query_hit(query, _latin_registered(expert_entities)):
+        return True
+    if not cjk_names and not _latin_registered(expert_entities):
         return False
-    return bool(mentioned_entities(query, names))
+    return False
 
 
 def _compact_query(query: str) -> str:
