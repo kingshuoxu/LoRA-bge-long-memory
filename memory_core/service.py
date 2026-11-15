@@ -25,7 +25,7 @@ from memory_core.grounding import (
     statement_trace,
 )
 from memory_core.same_memory import is_same_memory
-from memory_core.self_query import self_ask, self_reply
+from memory_core.self_query import self_ask, self_facts, self_reply
 from memory_core.mentions import load_mentions, remember_statement
 from memory_core.extract import (
     SELF_DISPLAY,
@@ -496,12 +496,20 @@ class MemoryService:
             return None
         if not re.search(r"什么|谁|哪|多少|几|吗|what|who|which", content, flags=re.IGNORECASE):
             return None
-        if self._ui_locale() == "en" or not has_cjk(content):
+        from memory_core.fact_recall import possessed_name_query
+
+        owned = possessed_name_query(content)
+        english = self._ui_locale() == "en" or not has_cjk(content)
+        if owned:
+            if english:
+                return f"You haven't told me what your {owned} is called."
+            return f"你还没告诉过我你的{owned}叫什么。"
+        if english:
             return "That isn't in memory. You can tell me."
         return "这件事不在记忆里。你可以告诉我。"
 
     def _memory_quote(self, content: str, experts: list) -> tuple[str, Any, list[dict]] | None:
-        from memory_core.fact_recall import fact_blob, recall_fact, touches_memory
+        from memory_core.fact_recall import fact_blob, recall_fact, spoken_fact, touches_memory
 
         rows = []
         owners = []
@@ -529,12 +537,10 @@ class MemoryService:
             if touches_memory(content, rows) and utterance_is_question(content):
                 return ("这件事不在记忆里。", None, [])
             return None
-        statement = str(hit.get("statement") or "").strip()
-        if not statement:
+        spoken = spoken_fact(content, hit)
+        if not spoken:
             return None
-        if statement[-1] not in "。.!！？?":
-            statement += "。"
-        return statement, owners[rows.index(hit)], [hit]
+        return spoken, owners[rows.index(hit)], [hit]
 
     def _document_reply(self, content: str, allow_miss: bool = True) -> dict | None:
         from memory_core.documents import admit_no_passage, document_miss, load_indexed_docs, missed_document_title, search_documents
@@ -674,7 +680,12 @@ class MemoryService:
                         recall["reason_text"] = "问的是关于你，回答来自已记住的事实"
                         return self._finish_turn(conv_id, user_msg, text, decision, recall)
                     recall["reason"] = "self_empty"
-                    recall["reason_text"] = "还没有记下关于你的事实，所以不交给基座编"
+                    if asked == "place":
+                        recall["reason_text"] = "还没有记下你住在哪里"
+                    elif self_facts(experts):
+                        recall["reason_text"] = "还没有记下这件事"
+                    else:
+                        recall["reason_text"] = "还没有记下关于你的事实，所以不交给基座编"
                     decision = route_with_trace(content, [], None)[0]
                     decision.reason = "self_empty"
                     decision.label = "基座"
@@ -854,6 +865,29 @@ class MemoryService:
                     document = self._document_reply(content, allow_miss=True)
                     if document:
                         _use_document(document)
+            if not fact_answer and utterance_is_question(content):
+                from memory_core.fact_recall import touches_memory
+
+                remembered = []
+                for record in experts:
+                    memory = record.fact_memory or {}
+                    for fact in memory.get("facts") or []:
+                        if isinstance(fact, dict) and not fact.get("superseded"):
+                            remembered.append(fact)
+                if touches_memory(content, remembered):
+                    fact_answer = "这件事不在记忆里。" if has_cjk(content) else "That isn't in memory."
+                    decision.fired = False
+                    decision.expert = None
+                    decision.label = "基座"
+                    decision.reason = "memory_miss"
+                    recall["fired"] = False
+                    recall["mounted"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["matched_facts"] = []
+                    recall["reason_text"] = "问到了已经记住的人或事物，但这件事不在记忆里"
+                    recall["mounted_expert"] = None
+                    recall["mounted_label"] = "基座"
             prior = [{"role": item["role"], "content": item["content"]} for item in history]
             prior.append({"role": "user", "content": content})
             answer = fact_answer if fact_answer else self.chat.reply(prior, decision, hint=hint)

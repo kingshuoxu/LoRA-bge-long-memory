@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("desktop", {
   platform: process.platform,
+  bootHold: process.env.LORA_MEMORY_E2E_FAST === "1" || process.env.LORA_MEMORY_BOOT_HOLD === "1",
   updateState() {
     return ipcRenderer.invoke("update:get");
   },

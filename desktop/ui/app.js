@@ -100,11 +100,37 @@ function setView(view) {
   if (state.nebula) state.nebula.resize();
 }
 
+let bootReleased = false;
+let bootHoldTimer = 0;
+const bootStarted = performance.now();
+
+function showShell(ready) {
+  const boot = $("boot");
+  const app = $("app");
+  if (!ready) {
+    boot.hidden = false;
+    app.hidden = true;
+    return;
+  }
+  const hold = window.desktop && window.desktop.bootHold;
+  if (!hold || bootReleased) {
+    boot.hidden = true;
+    app.hidden = false;
+    return;
+  }
+  if (bootHoldTimer) return;
+  const wait = Math.max(0, 6000 - (performance.now() - bootStarted));
+  bootHoldTimer = window.setTimeout(() => {
+    bootReleased = true;
+    boot.hidden = true;
+    app.hidden = false;
+  }, wait);
+}
+
 async function refreshHealth() {
   const health = await api("/api/health");
   const ready = health.models && health.models.state === "ready";
-  $("boot").hidden = ready;
-  $("app").hidden = !ready;
+  showShell(ready);
   if (!ready) {
     const rawDetail = health.models && health.models.detail ? tx(health.models.detail) : "";
     const detail = rawDetail ? ` (${rawDetail})` : "";
@@ -574,7 +600,10 @@ function chipLabel(trace) {
   const matched = trace.matched_facts || [];
   let name = (row && row.display_name) || "";
   if (!name || name === "我" || name === "I") name = t("nebula.self");
-  const facts = matched.map((fact) => fact.value || fact.attr).filter(Boolean).slice(0, 2);
+  const facts = matched.map((fact) => {
+    const statement = String((fact && fact.statement) || "").replace(/[。．]+$/u, "").trim();
+    return statement || fact.value || fact.attr;
+  }).filter(Boolean).slice(0, 1);
   const source = matched.flatMap((fact) => fact.source_conversations || []).map((item) => item.title).find(Boolean);
   const label = facts.length ? t("chip.from", { name, facts: facts.join(t("list.sep")) }) : t("chip.whole", { name });
   return source ? `${label} · ${source}` : label;
@@ -592,7 +621,7 @@ function recallChip(msg, extra) {
   const trace = recallTrace(extra);
   if (!trace) return "";
   const text = String(msg.content || "");
-  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里")) return "";
+  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里") || text.includes("还没告诉过我")) return "";
   if (["memory_miss", "entity_grounded", "personal_unknown", "self_empty"].includes(trace.reason)) return "";
   const idle = trace.mounted ? "" : " idle";
   return `<button type="button" class="recall-chip${idle}" data-recall="${esc(msg.id)}" title="${esc(chipTitle(trace))}">${esc(chipLabel(trace))}</button>`;

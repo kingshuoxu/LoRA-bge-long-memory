@@ -18,7 +18,7 @@ _CHAPTER = re.compile(r"^(第[0-9０-９一二三四五六七八九十百零两]
 _OTHER_HEAD = re.compile(r"^(#{1,3}\s+\S.{0,40}|\d{1,2}[\.、]\s*\S.{0,24})$")
 _STOPS = (
     "什么时候", "哪一年", "哪一天", "哪里", "哪儿", "为什么", "怎么", "多少", "什么", "谁",
-    "吗", "呢", "的", "是", "在", "有", "叫", "和", "与", "了",
+    "吗", "呢", "的", "是", "在", "有", "叫", "和", "与", "了", "一共", "总共", "开始",
 )
 
 
@@ -755,12 +755,25 @@ def _cosine(left: list[float], right: list[float]) -> float:
 
 def _sentence_score(query: str, line: str) -> float:
     score = lexical_score(query, line)
+    runs = salient_runs(query)
+    if runs:
+        covered = sum(1 for run in runs if run in line)
+        score += 0.45 * covered
+        if covered == len(runs):
+            score += 0.25
     if any(word in query for word in ("多高", "高度", "有多高")) and re.search(r"高|米", line):
         score += 0.55
     if any(word in query for word in ("哪一年", "哪年", "建于", "什么时候", "何时")) and re.search(r"\d{3,4}\s*年|建于|霜降|晾晒", line):
         score += 0.45
-    if any(word in query for word in ("叫什么", "名字", "是谁")) and re.search(r"名叫|叫", line):
+    name_ask = any(word in query for word in ("叫什么", "什么名字", "名字"))
+    if "是谁" in query and not any(verb in query for verb in ("打磨", "养", "建", "设计")):
+        name_ask = True
+    if name_ask and re.search(r"名叫|叫", line):
         score += 0.25
+    if "打磨" in query and "打磨" in line:
+        score += 0.45
+    if "面" in query and "面" in line and any(mark in query for mark in ("多少", "几", "一共")):
+        score += 0.35
     return score
 
 

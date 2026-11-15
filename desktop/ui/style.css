@@ -751,13 +751,15 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 .nebula-label.fact,
 .nebula-label.source {
   max-width: 168px;
-  white-space: normal;
+  white-space: nowrap;
 }
 .nebula-label.fact .name {
   font-size: 14px;
   letter-spacing: 0.04em;
   color: rgba(255, 236, 210, 0.96);
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .nebula-label.source .name {
   font-size: 13px;

@@ -2,13 +2,14 @@
  * 用真实 Electron 窗口走一遍中文界面。
  * 训练在 LORA_MEMORY_E2E_FAST=1 时只跑一轮，事实仍写入记忆。
  */
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { _electron: electron } = require("playwright");
 
 const root = path.resolve(__dirname, "..", "..");
-const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.10");
+const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.11");
 const pdf = path.join(root, "tests", "fixtures", "wugang", "wugang_chrome.pdf");
 const report = [];
 
@@ -112,11 +113,25 @@ async function main() {
   page.on("dialog", (dialog) => dialog.accept());
   try {
     const boot = page.locator("#boot");
-    if (await boot.isVisible().catch(() => false)) {
-      await shot(page, "00-boot.png");
-    }
-    await page.locator("#app").waitFor({ state: "visible", timeout: 600000 });
+    const shell = page.locator("#app");
+    await page.waitForFunction(() => {
+      const splash = document.querySelector("#boot");
+      const app = document.querySelector("#app");
+      return splash && !splash.hidden && app && app.hidden;
+    }, null, { timeout: 8000 }).catch(() => {});
+    const bootOn = await boot.isVisible().catch(() => false);
+    const appOn = await shell.isVisible().catch(() => false);
+    if (bootOn && !appOn) await shot(page, "00-boot.png");
+    await shell.waitFor({ state: "visible", timeout: 600000 });
+    await boot.waitFor({ state: "hidden", timeout: 15000 }).catch(() => {});
     await shot(page, "01-ready.png");
+    const bootFile = path.join(shotDir, "00-boot.png");
+    const readyFile = path.join(shotDir, "01-ready.png");
+    if (fs.existsSync(bootFile) && fs.existsSync(readyFile)) {
+      const bootHash = crypto.createHash("sha256").update(fs.readFileSync(bootFile)).digest("hex");
+      const readyHash = crypto.createHash("sha256").update(fs.readFileSync(readyFile)).digest("hex");
+      if (bootHash === readyHash) throw new Error("00-boot 和 01-ready 是同一张图");
+    }
 
     await send(page, "我叫徐金朔");
     await waitText(page, "你是徐金朔");
@@ -277,7 +292,13 @@ async function main() {
     await assertAnswer(page, "1873");
     const memory = await page.locator("#messages .bubble.assistant .body").last().innerText();
     if (memory.includes("没有找到")) throw new Error("删书之后年份不该说找不到");
-    if (!memory.includes("四十二米")) throw new Error(`年份答句不完整：${memory}`);
+    if (memory.includes("1987")) throw new Error(`年份被基座编造了：${memory}`);
+    const cited = await page.locator("#messages .recall-chip").last().innerText();
+    if (!cited.includes("四十二米") && !memory.includes("四十二米")) throw new Error(`引用里没有原句：${cited} / ${memory}`);
+    const routeTitle = await page.locator("#messages .bubble.assistant .route").last().getAttribute("title");
+    if (routeTitle && /entity_first|boundary_guard|memory_miss/.test(routeTitle)) {
+      throw new Error(`路由提示还是内部编号：${routeTitle}`);
+    }
     await shot(page, "16-year-from-memory.png");
     note("删书之后仍从记忆答出 1873");
     note(`screen: ${memory.replace(/\s+/g, " ").slice(0, 180)}`);

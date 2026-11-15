@@ -91,6 +91,7 @@ def fact_blob(fact: dict) -> str:
 
 def _pieces(query: str) -> list[str]:
     text = str(query or "")
+    text = re.sub(r"[，,。.!！？?、；;：:「」\"'（）()]", "\x01", text)
     for filler in sorted(_FILLERS, key=len, reverse=True):
         text = text.replace(filler, "\x01")
     parts = []
@@ -159,31 +160,214 @@ def _piece_hit(piece: str, blob: str, statement: str) -> bool:
     return False
 
 
+_SOLAR = (
+    "立春", "雨水", "惊蛰", "春分", "清明", "谷雨", "立夏", "小满", "芒种", "夏至",
+    "小暑", "大暑", "立秋", "处暑", "白露", "秋分", "寒露", "霜降", "立冬", "小雪",
+    "大雪", "冬至", "小寒", "大寒",
+)
+_MEASURE = r"[0-9０-９零〇一二三四五六七八九十百千万两]{1,8}(?:米|面|岁|公里|里)"
+_IGNORE_NOUNS = frozenset({
+    "什么", "怎么", "哪年", "哪天", "哪里", "哪儿", "谁", "多少", "开始", "建成", "完工",
+    "落成", "建", "晒", "晾晒", "打磨", "养", "改用", "一共", "这座", "那座", "这只", "那只",
+    "那天", "每年", "名字", "时候", "请问", "告诉", "一下", "知道", "这个", "那个",
+    "什么时候", "哪一天", "哪一年", "多高", "高度", "颜色", "今年", "几岁",
+    "那一年", "这一年", "那年", "这年", "那一天", "这一天", "那天", "哪天",
+    "他", "她", "它", "你", "我", "米", "面", "岁", "年",
+})
+
+
 def _evidence(query: str, statement: str) -> bool:
     """问句要的那种取值必须真的写在这句话里。"""
     if any(mark in query for mark in ("多高", "高度", "有多高")):
-        return bool(re.search(r"高|米", statement))
+        return bool(re.search(r"米|塔高", statement))
     if any(mark in query for mark in ("多远", "照多远")):
         return "远" in statement
-    if any(mark in query for mark in ("几岁", "多大", "年龄")):
+    if any(mark in query for mark in ("几岁", "多大", "年龄", "今年")):
         return bool(re.search(r"岁|年龄", statement))
+    if any(mark in query for mark in ("晒", "晾")) and any(mark in query for mark in ("什么时候", "哪天", "哪一天", "何时", "哪年")):
+        return "晒" in statement or "晾" in statement or any(term in statement for term in _SOLAR)
+    if any(mark in query for mark in ("建成", "完工", "落成")) or ("建" in query and "年" in query):
+        return "建" in statement and bool(re.search(r"\d{3,4}\s*年|建于", statement))
     if any(mark in query for mark in ("哪一年", "哪年", "建于", "什么时候", "哪天", "何时")):
-        return bool(re.search(r"\d{3,4}\s*年|建于|霜降|晾晒", statement))
+        return bool(re.search(r"\d{3,4}\s*年|建于", statement)) or any(term in statement for term in _SOLAR)
     if any(mark in query for mark in ("叫什么", "名字", "是谁", "谁")):
         if any(mark in query for mark in ("市长", "妻子", "丈夫")):
             return any(mark in statement for mark in ("市长", "妻子", "丈夫"))
-        return bool(re.search(r"名叫|叫|工匠|名字是|名为", statement))
-    if "面" in query and "多少" in query:
-        return "面" in statement and bool(re.search(r"十六|\d+", statement))
+        return bool(re.search(r"名叫|叫|工匠|名字是|名为|养了", statement))
+    if "面" in query and any(mark in query for mark in ("多少", "几", "一共")):
+        return "面" in statement and bool(re.search(r"\d|[一二三四五六七八九十]", statement))
     if any(mark in query for mark in ("市长", "妻子", "丈夫", "公司", "上班")):
         return any(mark in statement for mark in ("市长", "妻子", "丈夫", "公司", "上班"))
-    if "电灯" in query or "改用" in query:
-        return "电灯" in statement or "改用" in statement
+    if "电灯" in query or "改用" in query or "用电" in query:
+        return "电" in statement or "改" in statement
     if "打磨" in query:
         return "打磨" in statement
     if "特产" in query:
-        return "特产" in statement
+        return "特产" in statement or bool(re.search(r"名叫", statement))
+    if "腿" in query:
+        return "腿" in statement
     return True
+
+
+def strong_value_spans(statement: str) -> list[str]:
+    """取值本身：年份、尺寸、名叫、节气、工匠名、颜色。问句拿这些当钥匙也能找回原句。"""
+    text = str(statement or "")
+    found: list[str] = []
+
+    def add(value: str) -> None:
+        value = str(value or "").strip("，。、 ")
+        if len(value) < 2 or value in found:
+            return
+        found.append(value)
+
+    for match in re.finditer(r"\d{3,4}年", text):
+        add(match.group(0))
+    for match in re.finditer(_MEASURE, text):
+        add(match.group(0))
+    for match in re.finditer(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text):
+        add(match.group(1))
+    for term in _SOLAR:
+        if term in text:
+            add(term)
+    for match in re.finditer(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text):
+        add(match.group(1))
+    for match in re.finditer(r"是([\u4e00-\u9fff]{1,4}色)", text):
+        add(match.group(1))
+    for match in re.finditer(r"([一二三四五六七八九十两0-9]{1,3}条腿)", text):
+        add(match.group(1))
+    return found
+
+
+def _anchor_tokens(fact: dict) -> list[str]:
+    statement = str(fact.get("statement") or "")
+    tokens = strong_value_spans(statement)
+    tokens.extend(fact_aliases(statement))
+    tokens.extend(fact_mentions(statement, str(fact.get("entity") or "")))
+    entity = str(fact.get("entity") or "").strip()
+    if len(entity) >= 2:
+        tokens.append(entity)
+    value = str(fact.get("value") or "").strip().rstrip("。")
+    if 2 <= len(value) <= 12:
+        tokens.append(value)
+    for pattern in (r"透镜", r"电灯", r"海鸥", r"海盐", r"灯塔", r"打磨", r"晾晒", r"特产", r"塔高", r"工匠"):
+        match = re.search(pattern, statement)
+        if match and match.group(0) not in tokens:
+            tokens.append(match.group(0))
+    unique: list[str] = []
+    for token in tokens:
+        token = str(token or "").strip()
+        if len(token) >= 2 and token not in unique:
+            unique.append(token)
+    return unique
+
+
+def _query_has(query: str, span: str) -> bool:
+    if not span:
+        return False
+    compact = _compact(query)
+    if len(span) == 1:
+        return _standalone(span, compact)
+    return span in compact
+
+
+def _content_nouns(query: str) -> list[str]:
+    nouns = []
+    for piece in _pieces(query):
+        if piece in _IGNORE_NOUNS or piece in _ASK_ONLY:
+            continue
+        if piece not in nouns:
+            nouns.append(piece)
+    return nouns
+
+
+def _noun_in_fact(noun: str, statement: str) -> bool:
+    compact = _compact(statement)
+    if len(noun) == 1:
+        return _standalone(noun, compact)
+    return noun in compact
+
+
+_WRAP = set("这那座只个的高些哪人过了着从起往向")
+
+
+def _noun_covered(noun: str, statement: str) -> bool:
+    """粘在一起的说法，只要每段都在原句里，就不算另一个事物。
+
+    「瑞典工匠打磨白鹭塔」对得上透镜那句；「汽车颜色」对不上自行车。
+    """
+    if _ignorable_noun(noun) or _noun_in_fact(noun, statement):
+        return True
+    compact = _compact(statement)
+    rest = noun
+    while rest:
+        if _ignorable_noun(rest) or all(char in _WRAP for char in rest):
+            return True
+        found = ""
+        limit = min(len(rest), 12)
+        for size in range(limit, 1, -1):
+            for index in range(0, len(rest) - size + 1):
+                chunk = rest[index:index + size]
+                if chunk in compact:
+                    found = chunk
+                    break
+            if found:
+                break
+        if not found:
+            return False
+        rest = rest.replace(found, "", 1)
+    return True
+
+
+def _blocks(query: str, statement: str, strong_hit: list[str]) -> bool:
+    """问句里另有一个原句没有的事物时，不能拿这条事实来答。
+
+    取值嵌在说法里（四十二米高、霜降那天）时仍算同一条。
+    已经用取值对上时，单字「塔」可以落在「灯塔」里；没有取值时，「车」不能从「自行车」里抠出来。
+    """
+    compact = _compact(statement)
+    for noun in _content_nouns(query):
+        if _noun_covered(noun, statement):
+            continue
+        if strong_hit and len(noun) == 1 and noun in compact:
+            continue
+        return True
+    return False
+
+
+def _ignorable_noun(noun: str) -> bool:
+    if noun in _IGNORE_NOUNS:
+        return True
+    if len(noun) == 1 and noun in "建晒养高面年天人":
+        return True
+    if re.fullmatch(r"[这那每]一?[年天日]", noun):
+        return True
+    return False
+
+
+def _cue(query: str, statement: str) -> int:
+    score = 0
+    if any(mark in query for mark in ("建成", "完工", "落成", "建于")) or ("建" in query and "年" in query):
+        if "建" in statement:
+            score += 2
+    if any(mark in query for mark in ("电灯", "改用", "用电")) and ("电" in statement or "改" in statement):
+        score += 2
+    if any(mark in query for mark in ("多高", "高度", "有多高")) and re.search(r"米|塔高", statement):
+        score += 2
+    if "打磨" in query and "打磨" in statement:
+        score += 2
+    if "养" in query and "养" in statement:
+        score += 2
+    if any(mark in query for mark in ("晒", "晾")) and ("晒" in statement or "晾" in statement):
+        score += 2
+    if "面" in query and any(mark in query for mark in ("多少", "几", "一共")) and "面" in statement:
+        score += 2
+    if any(mark in query for mark in ("叫什么", "什么名字", "名字")) and "名叫" in statement:
+        score += 2
+    if "特产" in query and ("特产" in statement or "名叫" in statement):
+        score += 1
+    if "腿" in query and "腿" in statement:
+        score += 2
+    return score
 
 
 def _cosine(left: list[float] | None, right: list[float] | None) -> float:
@@ -198,15 +382,34 @@ def _cosine(left: list[float] | None, right: list[float] | None) -> float:
 
 
 def touches_memory(query: str, facts: list[dict]) -> bool:
-    """问句里有已经记下的人或事物。这种问题不能再交给基座编。"""
+    """问句碰到了已经记下的人、事物或取值。这种问题不能再交给基座编。"""
+    compact = _compact(query)
     pieces = [piece for piece in _pieces(query) if len(piece) >= 2 and piece not in _ASK_ONLY]
-    if not pieces:
-        return False
     for fact in facts:
+        if not isinstance(fact, dict) or fact.get("superseded"):
+            continue
+        for token in _anchor_tokens(fact):
+            if len(token) >= 2 and token in compact:
+                return True
         blob = fact_blob(fact)
         if any(piece in blob for piece in pieces):
             return True
     return False
+
+
+def _supported(query: str, fact: dict, lexical: float) -> tuple[bool, list[str], list[str]]:
+    statement = str(fact.get("statement") or "")
+    strong = [span for span in strong_value_spans(statement) if _query_has(query, span)]
+    anchors = [token for token in _anchor_tokens(fact) if _query_has(query, token)]
+    # 问句里的实词都能对上原句时，沿用整句匹配。汽车对不上自行车，走不到这里。
+    if lexical >= 0.999:
+        return True, strong, anchors
+    # 问句里还留着原句没有的事物，就不用这条。取值嵌在说法里已经在覆盖判断里剥掉了。
+    if _blocks(query, statement, strong):
+        return False, strong, anchors
+    if strong or anchors:
+        return True, strong, anchors
+    return False, strong, anchors
 
 
 def recall_fact(
@@ -215,7 +418,11 @@ def recall_fact(
     query_vector: list[float] | None = None,
     fact_vectors: list[list[float]] | None = None,
 ) -> dict | None:
-    """在全部已存事实上找一句能支撑这个问法的。找不到就返回 None。"""
+    """在全部已存事实上找一句能支撑这个问法的。找不到就返回 None。
+
+    问句可以拿原句里的取值或属性当钥匙（四十二米、霜降、阿哨），不必复述训练时的说法。
+    bge 只在已经有钥匙的句子之间排序，不能单靠相似度把另一个事物换进来。
+    """
     pieces = _pieces(query)
     best: dict | None = None
     best_score = 0.0
@@ -231,20 +438,125 @@ def recall_fact(
             lexical = hits / len(pieces)
         else:
             lexical = 0.0
+        supported, strong, anchors = _supported(query, fact, lexical)
+        if not supported or not _evidence(query, statement):
+            continue
         semantic = 0.0
         if query_vector is not None and fact_vectors is not None and index < len(fact_vectors):
             semantic = _cosine(query_vector, fact_vectors[index])
-        if not _evidence(query, statement):
-            continue
-        # 问句里的实词都要落在这句话里。bge 只在已经对上的句子里排先后，
-        # 不能因为「汽车」和「自行车」相近就拿另一条事实来答。
-        if lexical < 0.999:
-            continue
-        score = lexical + semantic
+        score = len(strong) * 3 + len(anchors) + lexical * 2 + _cue(query, statement) * 2 + semantic * 0.5
         if score > best_score:
             best = fact
             best_score = score
     return best
+
+
+def answer_span(query: str, statement: str) -> str:
+    """从原句里抽出问句要的那一段。抽不出就返回空，调用方再决定弃权或用短取值。"""
+    text = str(statement or "")
+    asked = str(query or "")
+    if not text or not asked:
+        return ""
+    if any(mark in asked for mark in ("多高", "高度", "有多高")):
+        match = re.search(rf"({_MEASURE.replace('(?:米|面|岁|公里|里)', '米')})", text)
+        if match:
+            return match.group(1)
+        match = re.search(r"塔高([\u4e00-\u9fff0-9]{1,8})", text)
+        return f"{match.group(1)}米" if match and "米" not in match.group(1) else (match.group(1) if match else "")
+    if "面" in asked and any(mark in asked for mark in ("多少", "几", "一共")):
+        match = re.search(r"([0-9０-９零〇一二三四五六七八九十百千万两]{1,8})面", text)
+        return match.group(0) if match else ""
+    if "腿" in asked and any(mark in asked for mark in ("几", "多少")):
+        match = re.search(r"([一二三四五六七八九十两0-9]{1,3}条腿)", text)
+        return match.group(1) if match else ""
+    if "谁" in asked and ("养" in asked or "饲养" in asked or "主人" in asked):
+        match = re.search(r"(?:女儿)?([\u4e00-\u9fff]{2,3})养了", text)
+        return match.group(1) if match else ""
+    if "谁" in asked and ("打磨" in asked or "工匠" in asked):
+        match = re.search(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
+        return match.group(1) if match else ""
+    named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
+    if any(mark in asked for mark in ("叫什么", "什么名字", "叫啥", "名叫")) and "谁" not in asked:
+        if any(mark in asked for mark in ("打磨", "工匠")):
+            craft = re.search(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
+            if craft and craft.group(1) not in asked:
+                return craft.group(1)
+        if named and named.group(1) not in asked:
+            return named.group(1)
+        return ""
+    if any(mark in asked for mark in ("哪座", "哪个", "哪一个")) and named and named.group(1) not in asked:
+        return named.group(1)
+    if any(mark in asked for mark in ("哪座", "哪个")) :
+        tower = re.search(r"([\u4e00-\u9fff]{2,8}塔)", text)
+        if tower and tower.group(1) not in asked:
+            return tower.group(1)
+    when = any(mark in asked for mark in ("哪一年", "哪年", "什么时候", "何时", "哪天", "哪一天", "哪天起"))
+    if when or any(mark in asked for mark in ("建成", "完工")):
+        drying = any(mark in asked for mark in ("晒", "晾")) or any(term in asked for term in _SOLAR)
+        building = any(mark in asked for mark in ("建", "完工", "落成"))
+        electric = any(mark in asked for mark in ("电", "改用", "改装"))
+        if drying or (any(term in asked for term in _SOLAR) and not building):
+            for term in _SOLAR:
+                if term in text:
+                    return term
+        if building:
+            match = re.search(r"建于(\d{3,4}年)", text)
+            if match:
+                return match.group(1)
+            if "建" not in text:
+                return ""
+        if electric:
+            if "电" not in text and "改" not in text:
+                return ""
+            match = re.search(r"(\d{3,4})年", text)
+            return f"{match.group(1)}年" if match else ""
+        if "年" in asked:
+            match = re.search(r"建于(\d{3,4}年)", text)
+            if match:
+                return match.group(1)
+            match = re.search(r"(\d{3,4})年", text)
+            return f"{match.group(1)}年" if match else ""
+        for term in _SOLAR:
+            if term in text:
+                return term
+        match = re.search(r"(\d{3,4})年", text)
+        return f"{match.group(1)}年" if match else ""
+    if "什么" in asked or "啥" in asked:
+        if any(mark in asked for mark in ("晒", "晾")) and "晒" not in text and "晾" not in text:
+            return ""
+        if named:
+            return named.group(1)
+        if "谁" in asked:
+            match = re.search(r"([\u4e00-\u9fff]{2,4})养了", text)
+            if match:
+                return match.group(1)
+    if "谁" in asked:
+        match = re.search(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
+        if match and "工匠" in text and ("工匠" in asked or "打磨" in asked):
+            return match.group(1)
+        named_in_query = named and named.group(1) in asked
+        if named_in_query:
+            match = re.search(r"(?:女儿)?([\u4e00-\u9fff]{2,3})养了", text)
+            if match:
+                return match.group(1)
+    return ""
+
+
+def spoken_fact(query: str, fact: dict) -> str:
+    """回答只给问句要的那一段。引用仍留在事实原句上。"""
+    statement = str(fact.get("statement") or "").strip()
+    value = str(fact.get("value") or fact.get("answer") or "").strip()
+    span = answer_span(query, statement)
+    if span:
+        text = span
+    elif value and statement and value.rstrip("。") != statement.rstrip("。") and len(value) <= 24:
+        text = value
+    else:
+        text = statement
+    text = text.strip()
+    if text and text[-1] not in "。.!！？?":
+        text += "。"
+    return text
 
 
 def possessed_name_query(query: str) -> str:

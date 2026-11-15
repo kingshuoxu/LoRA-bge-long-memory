@@ -47,6 +47,9 @@ _REASON = {
     "entity_overview": "问句点了已存的实体，但没有问具体属性，所以列出这个实体的全部记忆",
     "entity_grounded": "问的是已存实体，这个属性没有记住，所以只回答已存事实",
     "statement_ack": "这句话是在陈述，先确认，还没有写入记忆",
+    "entity_first": "问句点到了已经记住的事实，回答用的是那一句里的取值",
+    "legacy_retrain": "这是旧版本留下的专家，问法对不上已保存的事实",
+    "entity_clarify": "这句话点到了相近的名字，先澄清，不交给基座编",
 }
 
 
@@ -293,8 +296,15 @@ def _topic_piece(text: str, entity: str) -> str:
 
 def abstain_reply(entity: str, text: str) -> str:
     """没记住的属性只说不在记忆里，不把别的取值写进回答。"""
-    topic = _topic_piece(text, entity)
+    from memory_core.fact_recall import possessed_name_query
+
+    owned = possessed_name_query(text)
     english = not has_cjk(text)
+    if owned:
+        if english:
+            return f"You haven't told me what your {owned} is called."
+        return f"你还没告诉过我你的{owned}叫什么。"
+    topic = _topic_piece(text, entity)
     label = _label(entity, english)
     if english:
         if topic:
@@ -620,12 +630,14 @@ def resolve_stored_reply(
         if not reply:
             return _unmatched(name, content, expert)
         return reply, expert, [fact], "entity_first"
-    if fact is not None:
-        value = str(fact.get("value") or fact.get("answer") or "").strip()
-        if value:
-            return value, expert, [fact], "entity_first"
-    from memory_core.fact_recall import recall_fact
+    from memory_core.fact_recall import answer_span, recall_fact, spoken_fact
 
+    if fact is not None:
+        statement = str(fact.get("statement") or "")
+        value = str(fact.get("value") or fact.get("answer") or "").strip()
+        short = bool(value) and value.rstrip("。") != statement.rstrip("。") and len(value) <= 24
+        if answer_span(content, statement) or short:
+            return spoken_fact(content, fact), expert, [fact], "entity_first"
     pool = list(facts)
     for expert_item in experts:
         memory = getattr(expert_item, "fact_memory", None) or {}
@@ -638,10 +650,7 @@ def resolve_stored_reply(
 
         hit = covered_fact(content, facts)
     if hit is not None:
-        statement = str(hit.get("statement") or hit.get("value") or "").strip()
-        if statement and statement[-1] not in "。.!！？?":
-            statement += "。"
-        return statement, expert, [hit], "entity_first"
+        return spoken_fact(content, hit), expert, [hit], "entity_first"
     return _unmatched(name, content, expert)
 
 
