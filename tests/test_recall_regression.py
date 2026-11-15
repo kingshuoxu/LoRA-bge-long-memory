@@ -221,3 +221,5 @@ class RecallRegressionTests(unittest.TestCase):
         self.assertNotIn("团团", _text("江小满养的鸟叫什么？", pet))
         self.assertEqual(clean_refusal("塔不在记忆里。", "塔叫什么？"), "这件事不在记忆里。")
         self.assertEqual(clean_refusal("色的不在记忆里", "什么颜色？"), "这件事不在记忆里。")
+        overview = "About Soren Keene, what I have stored is: city is Ashgrove. The rest is not in memory."
+        self.assertEqual(clean_refusal(overview, "Tell me everything about Soren Keene"), overview)

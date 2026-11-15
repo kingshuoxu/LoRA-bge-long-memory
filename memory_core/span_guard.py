@@ -464,7 +464,10 @@ def clean_refusal(answer: str, query: str = "") -> str:
     if "不在记忆里" not in text and "not in memory" not in text.casefold():
         return answer
     if not has_cjk(text):
-        if text.casefold().startswith("that is not in memory") or text.casefold().startswith("that isn't in memory"):
+        folded = text.casefold()
+        if folded.startswith("about ") or "what i have stored" in folded:
+            return text
+        if folded.startswith("that is not in memory") or folded.startswith("that isn't in memory"):
             return text if text.endswith(".") else "That is not in memory."
         return "That is not in memory."
     if text.startswith("这件事不在记忆里") or text.startswith("你还没告诉过我"):
