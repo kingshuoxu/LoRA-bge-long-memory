@@ -2129,6 +2129,9 @@ def _described_name(query: str, rows: list[dict]) -> tuple[str, dict] | None:
         named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", text)
         if not named:
             continue
+        keeper = re.search(r"([\u4e00-\u9fff]{2,8})养", query or "")
+        if keeper and keeper.group(1) not in {"她", "他", "它", "我"} and keeper.group(1) not in text:
+            continue
         asked_owners = [
             str(other.get("entity") or "")
             for other in rows
