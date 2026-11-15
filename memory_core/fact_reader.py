@@ -20,6 +20,7 @@ from memory_core.prompts import has_cjk
 from memory_core.span_guard import (
     accept_aligned,
     fixed_refusal,
+    is_open_task,
     mentions_stored,
     predicate_covered,
     relation_answer,
@@ -458,6 +459,8 @@ def read_memory(
     """
     if not facts or not str(query or "").strip():
         return None
+    if is_open_task(query):
+        return None
     from memory_core.fact_span import entity_mentioned, near_miss_span
     from memory_core.grounding import open_entity_question
     from memory_core.paraphrase import is_polar
@@ -475,17 +478,24 @@ def read_memory(
         # 「禾昭闻兰」「工坊公司 Inc」「工坊集团」是另一个名字，交给原来的澄清。
         if entity_mentioned(entity, query):
             continue
-        if near_miss_span(entity, query):
+        missed = near_miss_span(entity, query)
+        if missed:
+            # 「守护白鹭塔」前面是动词，名字本身还在。后面多出来的字才是另一个名字。
+            if missed.endswith(entity) and not missed.startswith(entity):
+                continue
             return None
     pool, best = retrieve(query, facts, query_vector, fact_vectors)
     if not memory_question(query, facts, best, pool):
         return None
     linked = relation_answer(query, facts)
+    if linked is not None and not linked[0]:
+        return {"text": natural_refusal(query, facts), "fact": facts[0], "miss": True}
     if linked:
         span, fact = linked
         checked = accept_aligned(query, span, fact, require_predicate=False)
         if checked:
             return {"text": _finish(checked), "fact": fact, "miss": False}
+        return {"text": natural_refusal(query, facts), "fact": fact, "miss": True}
     hosts = [fact for fact in _hosts(query, pool) if predicate_covered(query, _statement(fact), fact)]
     if not hosts:
         return {"text": natural_refusal(query, pool), "fact": pool[0] if pool else None, "miss": True}

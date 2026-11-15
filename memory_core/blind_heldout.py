@@ -1,6 +1,6 @@
 """用固定种子从事实模板生成没参与调参的题。
 
-CI 读 tests/fixtures/blind_heldout_v0213.json，不在这里现抽，避免每次运行换题。
+CI 读 tests/fixtures/blind_heldout_v0214.json，不在这里现抽，避免每次运行换题。
 """
 from __future__ import annotations
 
@@ -9,6 +9,21 @@ import random
 from pathlib import Path
 
 SEED = 20261113
+
+# 多跳关系。生成时接在洗过的题后面，不重新打乱已经落盘的句子。
+_CHAINS = [
+    ("阿哨的主人的爸爸是谁？", "柯岚"),
+    ("养阿哨的小姑娘她爸是谁？", "柯岚"),
+    ("阿哨的小主人的父亲是谁？", "柯岚"),
+    ("养阿哨的人她父亲守的塔有多高？", "四十二"),
+    ("阿哨主人的爸爸守护的灯塔有多高？", "四十二"),
+    ("白鹭塔磨透镜的师傅是哪国人？", "瑞典"),
+    ("星砂盐产自哪儿？", "雾港"),
+]
+_CHAIN_NEVER = [
+    "阿哨的主人的妈妈是谁？",
+    "阿哨的主人的爸爸的妻子是谁？",
+]
 
 # 雾港书里实际记下的取值。模板只换问法，不把答案写进问句。
 _TAUGHT = [
@@ -60,10 +75,13 @@ def generate(seed: int = SEED) -> dict:
     never = list(_NEVER)
     rng.shuffle(taught)
     rng.shuffle(never)
+    taught.extend(_CHAINS)
+    questions = [question for question, _gold in never]
+    questions.extend(_CHAIN_NEVER)
     return {
         "seed": seed,
         "taught": [{"q": question, "gold": gold} for question, gold in taught],
-        "never": [question for question, _gold in never],
+        "never": questions,
     }
 
 
@@ -74,4 +92,4 @@ def dump(path: Path, seed: int = SEED) -> None:
 
 if __name__ == "__main__":
     root = Path(__file__).resolve().parents[1]
-    dump(root / "tests" / "fixtures" / "blind_heldout_v0213.json")
+    dump(root / "tests" / "fixtures" / "blind_heldout_v0214.json")

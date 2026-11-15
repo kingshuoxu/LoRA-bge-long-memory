@@ -308,6 +308,7 @@ def _learning(service: MemoryService) -> None:
         _fail(f"没见过的改写只答对 {held_hits}/{len(held)}")
     if held_never_hits != len(held_never):
         _fail(f"没教过的改写没有全部弃权 {held_never_hits}/{len(held_never)}")
+    _open_chat(service)
     _blind(service)
     print("FULL_LEARNING_OK", flush=True)
 
@@ -338,9 +339,46 @@ def _hard_fail(answer: str, gold: str | None, abstain: bool) -> bool:
     return False
 
 
+_OPEN_CHAT = (
+    "帮我写一句生日祝福",
+    "帮我写一句给朋友的生日祝福",
+    "帮我写一句新年祝福",
+    "帮我写一封简短的感谢信",
+    "把「早上好」翻译成英文",
+    "帮我把这句话润色一下：今天来晚了",
+    "给我讲个笑话",
+    "给点学习建议",
+    "你好",
+    "今天心情不太好，随便聊聊",
+    "水的化学式是什么？",
+    "法国的首都是哪里？",
+    "1加1等于几？",
+    "英语里谢谢怎么说？",
+    "推荐一本适合睡前看的书",
+    "怎么煮一碗清汤面？",
+    "中国的首都是哪里？",
+)
+
+
+def _open_chat(service: MemoryService) -> None:
+    """写、译、聊和常识必须走基座。不能因为句子里有「我」或「生日」就弃权。"""
+    gated = {"memory_miss", "entity_clarify", "entity_grounded", "personal_unknown", "document_miss", "self_empty"}
+    refused = ("不在记忆里", "没提到", "没记过", "还没告诉过我", "不记得", "边界守卫没有通过")
+    if len(_OPEN_CHAT) < 15:
+        _fail("日常对话回归题太少")
+    for prompt in _OPEN_CHAT:
+        conv = service.create_conversation("日常")["id"]
+        result = service.send_message(conv, prompt)
+        answer = result["assistant"]["content"]
+        reason = str(result["route"].get("reason") or "")
+        if reason in gated or result["route"].get("fired") or any(mark in answer for mark in refused):
+            _fail(f"日常对话被记忆拦住了：{prompt} -> {answer} reason={reason} fired={result['route'].get('fired')}")
+    print(f"OPEN_CHAT {len(_OPEN_CHAT)}/{len(_OPEN_CHAT)}", flush=True)
+
+
 def _blind(service: MemoryService) -> None:
     """固定种子生成、已经落盘的题。开发时不靠改这些句子过关。"""
-    path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "blind_heldout_v0213.json"
+    path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "blind_heldout_v0214.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     taught = [(item["q"], item["gold"]) for item in data["taught"]]
     never = list(data["never"])

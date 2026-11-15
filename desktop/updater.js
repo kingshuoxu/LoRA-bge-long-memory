@@ -28,6 +28,14 @@ let state = {
 };
 let checking = null;
 let suppressUpdaterError = false;
+let rateLimitTimer = null;
+
+function isRateLimit(err) {
+  if (!err) return false;
+  if (err.rateLimit) return true;
+  const message = String(err.message || err);
+  return /rate-limit|rate limit|访问限制|403|429/i.test(message);
+}
 
 function dataHome() {
   return app.getPath("userData");
@@ -83,13 +91,14 @@ function requestJson(url, attempt = 0) {
       res.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
         if (res.statusCode === 403 || res.statusCode === 429) {
-          if (attempt < 3) {
+          const delays = [2000, 5000, 15000, 30000];
+          if (attempt < delays.length) {
             setTimeout(() => {
               requestJson(url, attempt + 1).then(resolve, reject);
-            }, 1500 * (attempt + 1));
+            }, delays[attempt]);
             return;
           }
-          reject(new Error("更新检查暂时碰到了访问限制，过一会儿再试。"));
+          reject(Object.assign(new Error("rate-limit"), { rateLimit: true }));
           return;
         }
         if (res.statusCode !== 200) {
@@ -322,7 +331,17 @@ async function checkForUpdates() {
         await checkManual(mirror);
       }
     } catch (err) {
-      publish({ status: "error", error: String(err && err.message ? err.message : err) });
+      if (isRateLimit(err)) {
+        publish({ status: "idle", error: "" });
+        if (!rateLimitTimer) {
+          rateLimitTimer = setTimeout(() => {
+            rateLimitTimer = null;
+            checkForUpdates().catch(() => {});
+          }, 60000);
+        }
+      } else {
+        publish({ status: "error", error: String(err && err.message ? err.message : err) });
+      }
     }
     return state;
   })().finally(() => {

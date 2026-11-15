@@ -470,11 +470,17 @@ def answer_span(query: str, statement: str) -> str:
         match = re.search(r"([一二三四五六七八九十两0-9]{1,3}条腿)", text)
         return match.group(1) if match else ""
     if "谁" in asked and ("养" in asked or "饲养" in asked or "主人" in asked):
+        if any(mark in asked for mark in ("父亲", "爸爸", "她爸", "他爸", "母亲", "妈妈", "她妈", "他妈")):
+            return ""
         match = re.search(r"(?:女儿)?([\u4e00-\u9fff]{2,3})养了", text)
         return match.group(1) if match else ""
     if "谁" in asked and ("打磨" in asked or "工匠" in asked):
         match = re.search(r"工匠([\u4e00-\u9fff]{1,8}?)(?=打磨|，|。|$)", text)
         return match.group(1) if match else ""
+    if any(mark in asked for mark in ("哪里", "哪儿", "什么地方", "哪个地方", "产自", "产地")):
+        origin = re.search(r"([\u4e00-\u9fff]{2,6})的特产", text)
+        if origin and origin.group(1) not in asked:
+            return origin.group(1)
     named = re.search(r"名叫([\u4e00-\u9fffA-Za-z0-9·]{1,12})", text)
     if any(mark in asked for mark in ("叫什么", "什么名字", "叫啥", "名叫")) and "谁" not in asked:
         if any(mark in asked for mark in ("打磨", "工匠")):

@@ -1443,7 +1443,9 @@ function renderUpdate() {
     else if (info.file) button.textContent = t("settings.openFile");
     else button.textContent = t("settings.download");
   }
+  const rateLimited = /rate-limit|rate limit|访问限制|403|429/i.test(info.error || "");
   const showBanner = ["available", "downloading", "downloaded", "manual", "error"].includes(info.status)
+    && !rateLimited
     && state.updateDismissed !== `${info.status}:${info.version || ""}:${info.error || ""}`;
   const banner = $("update-banner");
   if (banner) banner.hidden = !showBanner;

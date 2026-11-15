@@ -424,6 +424,8 @@
     "问句点名了这个专家登记过的实体": "The question names an entity registered on this expert",
     "问句点到了已经记住的事实，回答用的是那一句里的取值": "The question matches a stored fact, and the answer is the span from that sentence",
     "回答是从已记住的句子里摘出来的": "The answer is a span copied from a stored sentence",
+    "回答是顺着关系从已记住的句子里摘出来的": "The answer follows the relation chain in the stored sentences",
+    "关系没有走到最后一问，所以不把中间的人交出去": "The relation chain did not reach the last question, so the middle person is not cited",
     "还没有记下你住在哪里": "I have not stored where you live",
     "你还没告诉过我你的狗叫什么。": "You haven't told me what your dog is called.",
     "在参与比较的专家里，路由键相似度最高": "Highest router-key similarity among the experts compared",
