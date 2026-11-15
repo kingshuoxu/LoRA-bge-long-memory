@@ -821,8 +821,24 @@ def read_memory(
     facts = [fact for fact in facts if isinstance(fact, dict) and not is_question_fragment(str(fact.get("statement") or ""))]
     if not facts or not str(query or "").strip():
         return None
+    from memory_core.answer_type import memory_near_miss
+
+    from memory_core.answer_type import false_guard_subject
+
+    if memory_near_miss(query, facts) or false_guard_subject(query, facts):
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     if is_open_task(query):
         return None
+    from memory_core.answer_type import _asked_clause
+
+    clause = _asked_clause(query)
+    if (
+        re.search(r"接班|巡夜|张罗|操持|轮值|留守|当值|照应|照拂|值夜|守夜|站岗", clause)
+        and re.search(r"谁|哪位|叫什么|叫啥", clause)
+        and not re.search(r"磨|师傅|工匠", clause)
+        and not re.search(r"塔叫|灯塔叫|塔名叫", clause)
+    ):
+        return {"text": fixed_refusal(query, facts), "fact": None, "miss": True}
     from memory_core.span_guard import general_knowledge_question
 
     if general_knowledge_question(query):

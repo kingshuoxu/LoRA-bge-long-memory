@@ -1513,6 +1513,56 @@ class MemoryService:
             from memory_core.fact_reader import direct_memory_reply, settle_reply, spoken_facts
 
             spoken = spoken_facts(experts, history, content)
+            if utterance_is_question(content) and not open_task and re.search(r"是.+还是", content or ""):
+                from memory_core.answer_type import stored_choice
+                from memory_core.world_facts import world_reply
+
+                picked = stored_choice(content, spoken)
+                if picked:
+                    span = picked[0]
+                    fact_answer = span if str(span).endswith(("。", ".")) else f"{span}。"
+                    recall["abstain"] = False
+                    recall["fired"] = False
+                    recall["reason_text"] = "是A还是B里只有一边写在记忆里"
+                else:
+                    current = fact_answer or ""
+                    sides = re.search(r"是(.+?)还是(.+?)(?:[？?。]|$)", content or "")
+                    both = bool(sides and sides.group(1).strip() in current and sides.group(2).strip("？?。 ") in current)
+                    if not current or _refusal_answer(current) or both:
+                        world = world_reply(content, [str(fact.get("entity") or "") for fact in spoken if isinstance(fact, dict)])
+                        if world and not str(world).startswith("我不知道"):
+                            fact_answer = world
+                            recall["abstain"] = False
+                            recall["reason_text"] = "常识二选一只回答核对过的那一边"
+                        else:
+                            from memory_core.span_guard import fixed_refusal
+
+                            fact_answer = fixed_refusal(content) if spoken else "我不知道。"
+                            decision.fired = False
+                            recall["fired"] = False
+                            recall["abstain"] = True
+                            recall["reason"] = "memory_miss"
+                            recall["reason_text"] = "是A还是B不能选没有记下的一边，也不能两边都说"
+            if (
+                utterance_is_question(content)
+                and not open_task
+                and not fact_answer
+                and re.search(r"什么人|何许人|介绍一下|这个人", content or "")
+            ):
+                known = [
+                    str(fact.get("entity") or "")
+                    for fact in spoken
+                    if isinstance(fact, dict) and len(str(fact.get("entity") or "")) >= 2 and str(fact.get("entity")) in content
+                ]
+                if known:
+                    from memory_core.span_guard import fixed_refusal
+
+                    fact_answer = fixed_refusal(content)
+                    decision.fired = False
+                    recall["fired"] = False
+                    recall["abstain"] = True
+                    recall["reason"] = "memory_miss"
+                    recall["reason_text"] = "没有记下这个人的公开身份，不交给基座编"
             if utterance_is_question(content) and not open_task and (not fact_answer or _refusal_answer(fact_answer)):
                 guided = direct_memory_reply(content, spoken)
                 if guided:

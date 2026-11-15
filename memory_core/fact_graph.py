@@ -628,7 +628,7 @@ def _unique_maker(query: str, edges: list[tuple[str, str, str, str, dict]]) -> d
         return None
     if not re.search(r"谁|叫什么|叫啥|哪位|什么名字", query or ""):
         return None
-    if re.search(r"女儿|闺女|父亲|爸爸|看守|守护|爱人|妻子|老婆|守塔|值守|值班|巡查|轮值|归谁|看顾|照看|照管|看管", query or ""):
+    if re.search(r"女儿|闺女|父亲|爸爸|看守|守护|爱人|妻子|老婆|守塔|值守|值班|归谁|看顾|照看|照管|看管", query or ""):
         return None
     made = [(dst, host) for _src, rel, dst, _obj, host in edges if rel == "maker"]
     names = list(dict.fromkeys(dst for dst, _host in made))
@@ -730,7 +730,7 @@ def _duty_keeper(query: str, edges: list[tuple[str, str, str, str, dict]]) -> di
         return None
     if re.search(r"灯塔[^叫]{0,8}叫|的塔[^叫]{0,8}名称|塔的名称", tail):
         return None
-    if not re.search(r"值守|看顾|照管|照看|站岗|执勤|接班|当值|守夜|轮值|看护|照应|照拂|看管", tail):
+    if not re.search(r"值守|看顾|照管|照看|站岗|执勤|看护|看管|守望|守着", tail):
         return None
     if not re.search(r"叫什么|是谁|叫啥|哪位|那位", tail):
         return None

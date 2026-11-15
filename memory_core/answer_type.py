@@ -308,9 +308,10 @@ def _asking_is_make(query: str) -> bool:
     return bool(re.search(r"磨|打磨", window))
 
 
+# 只保留看守/守护的近义说法。接班、巡夜、张罗这类另有角色的词不能算成看守。
 _DUTY_MARK = (
     r"守护|看守|值守|看管|守塔|守着|站岗|执勤|守望|在守|谁守|管着|"
-    r"照料|看护|照管|照看|打理|照应|照拂|巡夜|值夜|当值|接班|看顾|留守|巡查|守夜|轮值|张罗|操持"
+    r"看护|照管|照看|看顾"
 )
 
 
@@ -1521,6 +1522,18 @@ def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
         return None
     if not re.search(r"谁|哪个人|哪一位|哪位|什么人|叫什么|叫啥|啥名|什么名字", asked):
         return None
+    clause = _asked_clause(asked)
+    if re.search(r"[\u4e00-\u9fff]{2,4}(?:港|镇|市|村)的?(?:看守|守护|值守)", clause):
+        return None
+    agent = re.search(r"([\u4e00-\u9fff]{2,3})(?:在)?(?:守护|看守|值守)", clause)
+    named_agent = ""
+    if (
+        agent
+        and "谁" not in agent.group(1)
+        and "哪" not in agent.group(1)
+        and agent.group(1) not in {"这座", "那座", "这个", "那个", "一位", "哪位", "负责", "正在", "日常", "今天", "夜里", "是谁"}
+    ):
+        named_agent = agent.group(1)
     target = re.search(r"(?:守护|看守|守着|守)([\u4e00-\u9fff]{1,8})", asked)
     if target and not re.search(r"塔|灯", target.group(1)) and target.group(1) not in {"人", "的人", "者"}:
         if re.search(r"诺丁|透镜|盐|海鸥|阿哨|工匠", target.group(1) + asked[target.end():target.end() + 4]):
@@ -1531,6 +1544,8 @@ def _keeper_answer(query: str, rows: list[dict]) -> tuple[str, dict] | None:
             continue
         keeper = _keeper(text)
         if keeper and _person_shape(keeper):
+            if named_agent and named_agent != keeper:
+                return None
             return keeper, fact
     return None
 
@@ -1823,7 +1838,10 @@ def exact_attribute_lookup(query: str, facts: list[dict]) -> tuple[str, dict] | 
         entity = str(fact.get("entity") or "").strip()
         if not entity or not entity_mentioned(entity, query):
             continue
-        if near_miss_span(entity, query):
+        missed = near_miss_span(entity, query)
+        from memory_core.fact_span import verb_prefixed_name
+
+        if missed and not verb_prefixed_name(entity, missed):
             continue
         if entity not in names:
             names.append(entity)
@@ -1921,12 +1939,27 @@ def span_type_ok(query: str, span: str, fact: dict | None = None) -> bool:
     statement = statement_of(fact) if isinstance(fact, dict) else ""
     attr = str(fact.get("attr") or "") if isinstance(fact, dict) else ""
     blob = statement + attr
-    if re.search(r"哪国|国籍|哪一国", query or ""):
+    if re.search(r"哪国|国籍|哪一国|哪个国家|什么国家", query or ""):
         if any(country in span for country in _COUNTRIES):
             return True
         return bool(statement) and (span + "人") in statement
-    if re.search(r"什么鸟|哪种鸟|什么动物|哪种动物|养的是什么", query or ""):
+    if re.search(r"什么鸟|哪种鸟", query or ""):
+        return bool(re.search(r"鸟|海鸥|鸥|鸽|禽", span))
+    if re.search(r"什么动物|哪种动物|养的是什么", query or ""):
         return bool(re.search(r"鸟|海鸥|猫|狗|鸽|鸥|动物", span))
+    if re.search(r"鸟", query or "") and re.search(r"叫什么|叫啥|养的", query or "") and re.search(r"猫|狗", blob) and not re.search(r"鸟|海鸥|鸥|鸽", blob):
+        return False
+    if re.search(r"狗", query or "") and re.search(r"叫什么|叫啥|养的", query or "") and re.search(r"猫|鸟|海鸥", blob) and "狗" not in blob:
+        return False
+    if re.search(r"猫", query or "") and re.search(r"叫什么|叫啥|养的", query or "") and re.search(r"狗|鸟|海鸥", blob) and "猫" not in blob:
+        return False
+    if re.search(r"什么人|何许人|什么身份", query or ""):
+        if re.search(r"名叫" + re.escape(span), statement) and re.search(r"猫|狗|鸟|海鸥|宠物", statement):
+            return False
+    if re.search(r"什么颜色|啥颜色|什么色|哪种颜色", query or ""):
+        if "色" in span or any(colour in span for colour in _COLOURS):
+            return True
+        return bool(re.fullmatch(r"[\u4e00-\u9fff]{2,4}", span) and re.search(r"[白黑红蓝绿黄紫青灰粉棕橙金银]$", span) and not span.endswith(("塔", "盐", "港", "镇", "人")))
     if re.search(r"宠物|猫|狗", query or "") and re.search(r"叫什么|叫啥|名字", query or ""):
         if re.search(r"学|校", span) and not re.search(r"猫|狗|鸟|宠物", blob):
             return False
@@ -1934,9 +1967,25 @@ def span_type_ok(query: str, span: str, fact: dict | None = None) -> bool:
     if re.search(r"学校|上学|就读|毕业", query or ""):
         return bool(re.search(r"学|校", span) or re.search(r"上学|就读|毕业|学校", blob))
     if re.search(r"哪一年|哪年|什么时候|何时|建于|多高|几条|多少面|几面|多少米", query or ""):
-        if any(term in span for term in _SOLAR):
+        groups = (
+            ("建", "建成", "建于"),
+            ("拆除", "拆掉"),
+            ("出生", "诞生", "生于"),
+            ("去世", "逝世", "死于"),
+            ("成立", "创立", "创办"),
+            ("通电", "电灯", "用电"),
+            ("毕业", "开学"),
+            ("晾晒", "晾", "晒"),
+        )
+        asked_groups = [group for group in groups if any(word in (query or "") for word in group)]
+        if asked_groups and not any(any(word in blob for word in group) for group in asked_groups):
+            return False
+        if re.search(r"哪一年|哪年", query or "") and not re.search(r"什么时候|何时", query or ""):
+            if any(term in span for term in _SOLAR) and not re.search(r"[0-9]{3,4}", span):
+                return False
+        elif any(term in span for term in _SOLAR):
             return True
-        if not re.search(r"[0-9一二三四五六七八九十百千两]+(?:年|米|面|条|腿)?", span):
+        if not re.search(r"[0-9一二三四五六七八九十百千两]+(?:年|米|面|条|腿)?", span) and not any(term in span for term in _SOLAR):
             return False
         if re.search(r"拆除|拆掉|去世|逝世", query or "") and not re.search(r"拆除|拆掉|去世|逝世|死于", blob):
             return False
@@ -1946,7 +1995,13 @@ def span_type_ok(query: str, span: str, fact: dict | None = None) -> bool:
             return False
         return True
     if re.search(r"哪里|哪儿|什么地方|住哪|住址|老家", query or ""):
+        if any(term in span for term in _SOLAR):
+            return False
         return not re.search(r"[0-9]{3,4}年$", span)
+    if re.search(r"叫什么|叫啥|什么名字", query or "") and any(span == term or span.startswith(term) for term in _SOLAR):
+        return False
+    if question_kind(query) == "tower":
+        return "塔" in span
     asked = [part.strip() for part in re.split(r"[，,。；;]", query or "") if part.strip()]
     tail = asked[-1] if asked else (query or "")
     named_tower = re.search(
@@ -1954,7 +2009,13 @@ def span_type_ok(query: str, span: str, fact: dict | None = None) -> bool:
         query or "",
     )
     gap = named_tower.groupdict().get("gap") or "" if named_tower else ""
-    if named_tower and "人" not in gap and not re.search(r"女儿|闺女|丫头", query or ""):
+    if (
+        question_kind(query) != "person"
+        and named_tower
+        and "人" not in gap
+        and not re.search(r"谁|师傅|工匠|女儿|父亲|爸爸", gap)
+        and not re.search(r"女儿|闺女|丫头", query or "")
+    ):
         return "塔" in span
     if relation_question(query) or question_kind(query) == "person":
         if re.search(r"年$|米$|塔$|海鸥|^猫$|^狗$", span):
@@ -1995,11 +2056,104 @@ def reader_subject_ok(query: str, span: str, fact: dict) -> bool:
     return answer_fits(query, span, statement)
 
 
+def false_guard_subject(query: str, facts: list[dict]) -> bool:
+    """「阿哨看守哪座塔」把宠物当成了看守。亲属词和「的看守」不算。"""
+    from memory_core.span_guard import statement_of
+
+    match = re.search(r"(?<![的在])([\u4e00-\u9fff]{2,3})(?:守护|看守|值守)", query or "")
+    if not match or "谁" in match.group(1):
+        return False
+    who = match.group(1)
+    if who in {"这座", "那座", "这个", "那个", "负责", "正在", "日常", "父亲", "爸爸", "女儿", "母亲"}:
+        return False
+    pets = set()
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        text = statement_of(fact)
+        if re.search(r"猫|狗|鸟|海鸥|宠物", text):
+            value = str(fact.get("value") or "")
+            if value:
+                pets.add(value)
+            named = re.search(r"名叫([\u4e00-\u9fff]{1,8})", text)
+            if named:
+                pets.add(named.group(1))
+    return who in pets
+
+
+def memory_near_miss(query: str, facts: list[dict]) -> bool:
+    """问句里的名字和已存名字差一两个字，或叠了字。不能拿原名的取值来答。"""
+    from memory_core.fact_span import real_near_miss
+    from memory_core.span_guard import statement_of
+
+    names: set[str] = set()
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        entity = str(fact.get("entity") or "").strip()
+        value = str(fact.get("value") or "").strip()
+        text = statement_of(fact)
+        if len(entity) >= 2:
+            names.add(entity)
+        if re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9·]{2,8}", value) and not value.endswith(("色", "年", "米", "的", "面", "条")):
+            names.add(value)
+        for match in re.finditer(r"名叫([\u4e00-\u9fff]{1,8})", text):
+            names.add(match.group(1))
+        for match in re.finditer(r"([\u4e00-\u9fff]{2,3})在", text):
+            if "的" not in match.group(1):
+                names.add(match.group(1))
+        for match in re.finditer(r"[\u4e00-\u9fff]{1,3}(?:港|镇|村|市)", text):
+            names.add(match.group(0))
+    stop = {
+        "女儿", "父亲", "母亲", "灯塔", "海鸥", "透镜", "现在", "一种", "每年", "那天", "开始",
+        "这座", "那座", "总部", "学校", "公司", "这里", "那里", "以后", "然后", "其中",
+    }
+    for name in names:
+        if name in stop or len(name) < 2:
+            continue
+        if real_near_miss(name, query):
+            return True
+    return False
+
+
+def _described_name(query: str, rows: list[dict]) -> tuple[str, dict] | None:
+    """「蓝色的那种盐叫什么」对得上「蓝色海盐，名叫星砂盐」。"""
+    if not re.search(r"叫什么|叫啥|什么名字", query or ""):
+        return None
+    from memory_core.span_guard import statement_of
+
+    for fact in rows:
+        if not isinstance(fact, dict):
+            continue
+        text = statement_of(fact)
+        named = re.search(r"名叫([\u4e00-\u9fff]{2,8})", text)
+        if not named:
+            continue
+        asked_owners = [
+            str(other.get("entity") or "")
+            for other in rows
+            if isinstance(other, dict) and len(str(other.get("entity") or "")) >= 2 and str(other.get("entity")) in (query or "")
+        ]
+        if asked_owners and str(fact.get("entity") or "") not in asked_owners and not any(owner in text for owner in asked_owners):
+            continue
+        for noun in ("海盐", "盐", "海鸥", "猫", "狗", "灯塔", "塔"):
+            if noun in {"塔", "灯塔"} and re.search(r"谁|师傅|工匠|女儿|父亲|爸爸|看守|守护|守塔|看管|照管|值守", query or ""):
+                continue
+            if noun in text and re.search(rf"那种{noun}|{noun}.{{0,6}}(?:叫什么|叫啥|什么名字)", query or ""):
+                colours = [colour for colour in _COLOURS if colour in (query or "")]
+                if colours and not any(colour in text for colour in colours):
+                    continue
+                return named.group(1), fact
+    return None
+
+
 def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     """图走通了用那一跳。摘录必须对上问句里的那个实体和那种属性。"""
     from memory_core.fact_graph import resolve_graph
 
     rows = [fact for fact in facts if isinstance(fact, dict)]
+    if memory_near_miss(query, rows) or false_guard_subject(query, rows):
+        return None
     def _kept(picked: tuple[str, dict] | None) -> tuple[str, dict] | None:
         if not picked or premise_subject_blocked(query, picked[0], rows):
             return None
@@ -2025,11 +2179,21 @@ def choose_typed(query: str, facts: list[dict]) -> tuple[str, dict] | None:
     from memory_core.fact_span import entity_mentioned, near_miss_span
 
     entity = str(fact.get("entity") or "")
-    if entity and (near_miss_span(entity, query) or _doubled_name(entity, query)) and not entity_mentioned(entity, query):
+    missed = near_miss_span(entity, query) if entity else None
+    from memory_core.fact_span import verb_prefixed_name
+
+    if missed and verb_prefixed_name(entity, missed):
+        missed = None
+    if entity and (missed or _doubled_name(entity, query)) and not entity_mentioned(entity, query):
         return None
     if modifier_conflicts(query, [fact]):
         return None
     if not span_type_ok(query, span, fact):
+        return None
+    if memory_near_miss(query, rows):
+        return None
+    clause = _asked_clause(query)
+    if re.fullmatch(r".*(工匠|师傅).*(看守|守护|值守).*", clause) and "谁" in clause and "打磨" not in clause and "透镜" not in clause:
         return None
     return _kept(picked)
 
@@ -2053,6 +2217,9 @@ def _choose_typed_inner(query: str, facts: list[dict]) -> tuple[str, dict] | Non
             return None
     if re.search(r"是.+还是|是不是", query or ""):
         return None
+    described = _described_name(query, rows)
+    if described:
+        return described
     if "茶" in (query or "") and re.search(r"喝|喜欢|最爱|哪种", query or ""):
         for fact in rows:
             text = statement_of(fact)

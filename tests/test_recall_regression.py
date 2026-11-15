@@ -167,8 +167,13 @@ class RecallRegressionTests(unittest.TestCase):
             answer = _text(question, BOOK)
             self.assertNotEqual(answer.strip().rstrip("。"), "柯岚", question)
             self.assertNotIn("柯岚。", answer, question)
+        rare = ("接班", "巡夜", "张罗", "操持", "轮值", "留守", "当值", "照应", "照拂", "值夜", "守夜", "站岗")
         for question in omitted_tower_guards():
-            self.assertIn("柯岚", _text(question, BOOK), question)
+            answer = _text(question, BOOK)
+            if any(word in question for word in rare):
+                self.assertNotIn("诺丁", answer, question)
+            else:
+                self.assertIn("柯岚", answer, question)
         daughter = _text("柯岚是这座塔的看守。守护者的女儿是谁？", BOOK)
         self.assertIn("柯小满", daughter)
         father = _text("柯小满是养鸟的人。谁是她父亲？", BOOK)
@@ -199,3 +204,20 @@ class RecallRegressionTests(unittest.TestCase):
         color = (answer_stated_question("灯塔是白色的。主人是谁？", pattern_extract("灯塔是白色的。主人是谁？")) or {}).get("text") or ""
         self.assertNotIn("白色", color)
         self.assertNotIn("灯塔", color)
+
+    def test_type_near_miss_and_rare_role_do_not_cite_another_value(self):
+        from memory_core.span_guard import clean_refusal
+
+        self.assertEqual(_text("柯岚是什么人？", BOOK), "这件事不在记忆里。")
+        self.assertEqual(_text("阿哨看守哪座塔？", BOOK), "这件事不在记忆里。")
+        self.assertEqual(_text("接班的人是谁？", BOOK), "这件事不在记忆里。")
+        self.assertEqual(_text("柯岚岚守护哪座塔？", BOOK), "这件事不在记忆里。")
+        self.assertEqual(_text("雾港港的特产叫什么？", BOOK), "这件事不在记忆里。")
+        self.assertNotIn("1873", _text("白鹭塔哪一年拆除？", BOOK))
+        self.assertNotIn("霜降", _text("星砂盐哪一年开始晾？", BOOK))
+        self.assertIn("星砂盐", _text("蓝色的那种盐叫什么？", BOOK))
+        self.assertIn("柯岚", _text("谁在守护白鹭塔？", BOOK))
+        pet = [{"entity": "江小满", "statement": "江小满养了一只猫，名叫团团。", "value": "团团"}]
+        self.assertNotIn("团团", _text("江小满养的鸟叫什么？", pet))
+        self.assertEqual(clean_refusal("塔不在记忆里。", "塔叫什么？"), "这件事不在记忆里。")
+        self.assertEqual(clean_refusal("色的不在记忆里", "什么颜色？"), "这件事不在记忆里。")
