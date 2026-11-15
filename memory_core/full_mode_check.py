@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -159,7 +160,7 @@ def _wait_job(service: MemoryService, job_id: str, timeout: float = 1800) -> dic
 
 def _declined(answer: str) -> bool:
     text = answer or ""
-    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "还没告诉过我", "没提到", "不记得", "还没告诉")):
+    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "没有存过", "还没告诉过我", "没提到", "不记得", "还没告诉", "没记过")):
         return True
     return False
 
@@ -282,6 +283,8 @@ def _learning(service: MemoryService) -> None:
         conv = service.create_conversation("改写")["id"]
         answer = _ask(service, conv, question)
         short = len(answer) <= 16
+        if _hard_fail(answer, gold, False):
+            _fail(f"硬错误 {question} -> {answer}")
         if gold in answer and short and not any(mark in answer for mark in ("1987", "稻谷", "陈国强", "李明")):
             held_hits += 1
         else:
@@ -290,7 +293,9 @@ def _learning(service: MemoryService) -> None:
     for question in held_never:
         conv = service.create_conversation("改写弃权")["id"]
         answer = _ask(service, conv, question)
-        leaked = any(mark in answer for mark in ("陈国强", "李世民", "1987", "三脚", "李明", "4200"))
+        leaked = any(mark in answer for mark in ("陈国强", "李世民", "1987", "三脚", "李明", "4200", "福州", "福建"))
+        if _hard_fail(answer, None, True) or leaked:
+            _fail(f"硬错误 {question} -> {answer}")
         if _declined(answer) and not leaked:
             held_never_hits += 1
         else:
@@ -303,7 +308,74 @@ def _learning(service: MemoryService) -> None:
         _fail(f"没见过的改写只答对 {held_hits}/{len(held)}")
     if held_never_hits != len(held_never):
         _fail(f"没教过的改写没有全部弃权 {held_never_hits}/{len(held_never)}")
+    _blind(service)
     print("FULL_LEARNING_OK", flush=True)
+
+
+_STORED_VALUES = (
+    "1873", "1931", "四十二", "十六", "阿哨", "柯小满", "柯岚", "白鹭塔",
+    "星砂盐", "诺丁", "瑞典", "霜降", "雾港", "徐金朔", "福州", "福建",
+)
+
+
+def _hard_fail(answer: str, gold: str | None, abstain: bool) -> bool:
+    """答错还带着取值，或该弃权却给了答案。漏答不算。"""
+    text = answer or ""
+    if abstain:
+        return not _declined(text)
+    if _declined(text) or not gold:
+        return False
+    if re.search(r"年[\u4e00-\u9fff]", text):
+        return True
+    if gold not in text:
+        for value in _STORED_VALUES:
+            if value in text and value not in gold and gold not in value:
+                return True
+        return False
+    for value in _STORED_VALUES:
+        if value in text and value not in gold and gold not in value:
+            return True
+    return False
+
+
+def _blind(service: MemoryService) -> None:
+    """固定种子生成、已经落盘的题。开发时不靠改这些句子过关。"""
+    path = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "blind_heldout_v0213.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    taught = [(item["q"], item["gold"]) for item in data["taught"]]
+    never = list(data["never"])
+    if len(taught) < 20 or len(never) < 8:
+        _fail("盲测题太少")
+    hits = 0
+    hard = 0
+    for question, gold in taught:
+        conv = service.create_conversation("盲测")["id"]
+        answer = _ask(service, conv, question)
+        if _hard_fail(answer, gold, False):
+            hard += 1
+            print(f"HARD {question} -> {answer}", flush=True)
+        elif gold in answer and len(answer) <= 16:
+            hits += 1
+        else:
+            print(f"BLIND_MISS {question} -> {answer}", flush=True)
+    abstain = 0
+    for question in never:
+        conv = service.create_conversation("盲测弃权")["id"]
+        answer = _ask(service, conv, question)
+        if _hard_fail(answer, None, True):
+            hard += 1
+            print(f"HARD_ABSTAIN {question} -> {answer}", flush=True)
+        elif _declined(answer):
+            abstain += 1
+        else:
+            print(f"BLIND_ABSTAIN_MISS {question} -> {answer}", flush=True)
+    print(f"BLIND taught {hits}/{len(taught)} abstain {abstain}/{len(never)} hard {hard}", flush=True)
+    if hard:
+        _fail(f"盲测出现 {hard} 次硬错误")
+    if hits * 100 < 85 * len(taught):
+        _fail(f"盲测教过的只答对 {hits}/{len(taught)}")
+    if abstain != len(never):
+        _fail(f"盲测没教过的没有全部弃权 {abstain}/{len(never)}")
 
 
 def main() -> None:

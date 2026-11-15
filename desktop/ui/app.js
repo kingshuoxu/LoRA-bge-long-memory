@@ -627,7 +627,7 @@ function recallChip(msg, extra) {
   const trace = recallTrace(extra);
   if (!trace) return "";
   const text = String(msg.content || "");
-  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里") || text.includes("还没告诉过我") || text.includes("没提到") || text.includes("不记得")) return "";
+  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里") || text.includes("还没告诉过我") || text.includes("没提到") || text.includes("不记得") || text.includes("没记过")) return "";
   if (["memory_miss", "entity_grounded", "personal_unknown", "self_empty"].includes(trace.reason)) return "";
   const idle = trace.mounted ? "" : " idle";
   return `<button type="button" class="recall-chip${idle}" data-recall="${esc(msg.id)}" title="${esc(chipTitle(trace))}">${esc(chipLabel(trace))}</button>`;
