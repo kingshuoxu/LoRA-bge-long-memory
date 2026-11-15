@@ -159,7 +159,7 @@ def _wait_job(service: MemoryService, job_id: str, timeout: float = 1800) -> dic
 
 def _declined(answer: str) -> bool:
     text = answer or ""
-    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "还没告诉过我")):
+    if any(mark in text for mark in ("不在记忆里", "还不知道", "没有找到", "还没告诉过我", "没提到", "不记得", "还没告诉")):
         return True
     return False
 
@@ -232,35 +232,77 @@ def _learning(service: MemoryService) -> None:
         _fail(f"教过的事实只答对 {taught_hits}/11")
     if declined < 4:
         _fail(f"没教过的问题只弃权 {declined}/4")
+    # 比固定 15 题更宽：倒查、口语和关系词、跨句、用属性当钥匙。答案必须是短摘录。
     held = [
-        ("那座四十二米高的塔是哪年建成的？", "1873"),
-        ("霜降那天雾港人开始晒什么？", "星砂盐"),
+        ("1873年建成的那座塔叫什么？", "白鹭塔"),
         ("阿哨是谁养的？", "柯小满"),
-        ("四十二米高的灯塔叫什么名字？", "白鹭塔"),
+        ("十六面的透镜是谁磨出来的？", "诺丁"),
+        ("名叫星砂盐的东西哪天开始晒？", "霜降"),
+        ("四十二米高的是哪一座？", "白鹭塔"),
         ("谁养了名叫阿哨的海鸥？", "柯小满"),
-        ("每年霜降开始晾晒的是什么？", "星砂盐"),
-        ("诺丁打磨过的透镜有多少面？", "十六"),
-        ("改用电灯的那一年是哪年？", "1931"),
+        ("那座四十二米高的塔是哪年建成的？", "1873"),
+        ("柯岚的闺女养的那只鸟叫什么？", "阿哨"),
+        ("那只鸟是谁养的？", "柯小满"),
+        ("塔有多高？", "四十二"),
+        ("海盐是什么时候晒的？", "霜降"),
+        ("谁把透镜磨出来的？", "诺丁"),
+        ("三条腿的那只海鸟名叫什么？", "阿哨"),
+        ("雾港人从霜降起晾什么？", "星砂盐"),
+        ("第一座灯塔叫什么名字？", "白鹭塔"),
+        ("养阿哨的人的父亲守的塔叫什么？", "白鹭塔"),
+        ("柯岚女儿养的海鸥有几条腿？", "三"),
+        ("守护白鹭塔的人的闺女叫什么？", "柯小满"),
+        ("柯小满养的鸟叫什么？", "阿哨"),
         ("建于1873年的塔有多高？", "四十二"),
-        ("三条腿的海鸥名叫什么？", "阿哨"),
-        ("蓝色海盐是在哪一天开始晒的？", "霜降"),
-        ("瑞典工匠打磨白鹭塔的透镜，他叫什么？", "诺丁"),
-        ("十六面的透镜是谁打磨的？", "诺丁"),
-        ("柯小满养的那只海鸥叫什么？", "阿哨"),
-        ("雾港特产从哪天起晾晒？", "霜降"),
-        ("第一座灯塔的高度是多少米？", "四十二"),
+        ("诺丁打磨过的透镜有多少面？", "十六"),
+        ("霜降开始晾的特产叫什么？", "星砂盐"),
+        ("改成电灯是哪一年的事？", "1931"),
+        ("瑞典工匠打磨的是谁？", "诺丁"),
+        ("高四十二米的塔叫什么？", "白鹭塔"),
+        ("电灯是哪一年换上的？", "1931"),
+        ("透镜有几面？", "十六"),
+        ("蓝色海盐叫什么？", "星砂盐"),
+        ("白鹭塔的闺女叫什么？", "柯小满"),
+        ("三条腿的海鸥是谁养的？", "柯小满"),
+        ("1873年那座塔有多高？", "四十二"),
+        ("星砂盐从哪天开始晾？", "霜降"),
+    ]
+    held_never = [
+        "雾港的市长姓什么？",
+        "柯岚的妻子叫什么？",
+        "白鹭塔能照多远？",
+        "柯小满今年几岁？",
+        "我的狗叫什么名字？",
+        "柯岚的生日是什么时候？",
+        "星砂盐多少钱一斤？",
+        "阿哨今年几岁？",
     ]
     held_hits = 0
     for question, gold in held:
         conv = service.create_conversation("改写")["id"]
         answer = _ask(service, conv, question)
-        if gold in answer and not any(mark in answer for mark in ("1987", "稻谷", "陈国强")):
+        short = len(answer) <= 16
+        if gold in answer and short and not any(mark in answer for mark in ("1987", "稻谷", "陈国强", "李明")):
             held_hits += 1
         else:
             print(f"HELD_MISS {question} -> {answer}", flush=True)
-    print(f"HELD_OUT {held_hits}/{len(held)}", flush=True)
-    if held_hits * 10 < 9 * len(held):
+    held_never_hits = 0
+    for question in held_never:
+        conv = service.create_conversation("改写弃权")["id"]
+        answer = _ask(service, conv, question)
+        leaked = any(mark in answer for mark in ("陈国强", "李世民", "1987", "三脚", "李明", "4200"))
+        if _declined(answer) and not leaked:
+            held_never_hits += 1
+        else:
+            print(f"HELD_ABSTAIN_MISS {question} -> {answer}", flush=True)
+    print(
+        f"HELD_OUT {held_hits}/{len(held)} abstain {held_never_hits}/{len(held_never)}",
+        flush=True,
+    )
+    if held_hits * 100 < 85 * len(held):
         _fail(f"没见过的改写只答对 {held_hits}/{len(held)}")
+    if held_never_hits != len(held_never):
+        _fail(f"没教过的改写没有全部弃权 {held_never_hits}/{len(held_never)}")
     print("FULL_LEARNING_OK", flush=True)
 
 

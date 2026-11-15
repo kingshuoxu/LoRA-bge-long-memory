@@ -306,6 +306,11 @@ def abstain_reply(entity: str, text: str) -> str:
         return f"你还没告诉过我你的{owned}叫什么。"
     topic = _topic_piece(text, entity)
     label = _label(entity, english)
+    if "生日" in text and not english:
+        who = label if entity and entity not in {"我", "用户", "关于你"} else ""
+        if who:
+            return f"我不记得你告诉过我{who}的生日。"
+        return "我不记得你告诉过我生日。"
     if english:
         if topic:
             return f"{topic} is not in memory."
@@ -560,8 +565,8 @@ def _legacy_reply(entity: str, text: str) -> str:
 def _clarify_reply(stored: str, span: str, text: str) -> str:
     english = not has_cjk(text)
     if english:
-        return f"I have {stored} stored, not {span}."
-    return f"记忆里有「{stored}」，没有「{span}」。"
+        return f"I remember {stored}, but not the rest of that."
+    return f"我记得{stored}，但没提到你说的这件事。"
 
 
 def forget_fact_hit(decision: Any, recall: dict) -> None:

@@ -117,7 +117,7 @@ class ReplyPolicyTests(unittest.TestCase):
 
     def test_birthday_stays_an_abstain(self):
         reply = self.answer("柏若岚的生日是什么时候？")
-        self.assertIn("不在记忆里", reply)
+        self.assertTrue("不记得" in reply or "不在记忆里" in reply, reply)
         self.assertNotIn("团子", reply)
 
     def test_acknowledgement_grammar(self):
@@ -178,7 +178,10 @@ class ReplyPolicyTests(unittest.TestCase):
         ):
             resolved = resolve_stored_reply(question, [expert], [])
             self.assertIsNotNone(resolved, question)
-            self.assertIn("不在记忆里", resolved[0], (question, resolved[0]))
+            self.assertTrue(
+                any(mark in resolved[0] for mark in ("不在记忆里", "不记得", "没提到")),
+                (question, resolved[0]),
+            )
             self.assertNotIn("云朵", resolved[0])
             self.assertNotIn("桂花乌龙", resolved[0])
             self.assertNotIn("朱红色", resolved[0])
