@@ -64,7 +64,7 @@ function publish(partial) {
   return state;
 }
 
-function requestJson(url) {
+function requestJson(url, attempt = 0) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith("http:") ? http : https;
     const req = lib.get(url, {
@@ -82,6 +82,16 @@ function requestJson(url) {
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
+        if (res.statusCode === 403 || res.statusCode === 429) {
+          if (attempt < 3) {
+            setTimeout(() => {
+              requestJson(url, attempt + 1).then(resolve, reject);
+            }, 1500 * (attempt + 1));
+            return;
+          }
+          reject(new Error("更新检查暂时碰到了访问限制，过一会儿再试。"));
+          return;
+        }
         if (res.statusCode !== 200) {
           reject(new Error(`HTTP ${res.statusCode}`));
           return;

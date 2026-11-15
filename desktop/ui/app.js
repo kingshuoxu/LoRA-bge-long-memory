@@ -561,7 +561,14 @@ function recallTrace(extra) {
 
 function chipLabel(trace) {
   const docChips = trace && trace.doc_chips;
-  if (docChips && docChips.length) return docChips.map((chip) => chip.label).filter(Boolean).join("  ");
+  if (docChips && docChips.length) {
+    const labels = [];
+    docChips.forEach((chip) => {
+      const label = chip && chip.label;
+      if (label && !labels.includes(label)) labels.push(label);
+    });
+    return labels.join("  ");
+  }
   if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("chip.ack") : t("chip.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const matched = trace.matched_facts || [];
@@ -584,6 +591,9 @@ function chipTitle(trace) {
 function recallChip(msg, extra) {
   const trace = recallTrace(extra);
   if (!trace) return "";
+  const text = String(msg.content || "");
+  if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里")) return "";
+  if (["memory_miss", "entity_grounded", "personal_unknown", "self_empty"].includes(trace.reason)) return "";
   const idle = trace.mounted ? "" : " idle";
   return `<button type="button" class="recall-chip${idle}" data-recall="${esc(msg.id)}" title="${esc(chipTitle(trace))}">${esc(chipLabel(trace))}</button>`;
 }
@@ -699,7 +709,8 @@ async function openConversation(id, switchView, revealId) {
       const shown = msg.role === "assistant" ? tx(msg.content) : msg.content;
       const card = extra && extra.kind === "correction_proposal" ? proposalCard(extra) : "";
       const chip = recallChip(msg, extra);
-      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><div class="body">${esc(shown)}</div>${card}${chip}<div class="route ${memory}" title="${esc(tx(msg.reason || ""))}">${esc(label)}${esc(sim)}</div></div>`;
+      const hover = extra && extra.trace && extra.trace.reason_text ? tx(extra.trace.reason_text) : "";
+      return `<div class="bubble assistant" data-msg="${esc(msg.id)}"><div class="body">${esc(shown)}</div>${card}${chip}<div class="route ${memory}" title="${esc(hover)}">${esc(label)}${esc(sim)}</div></div>`;
     }).join("");
   }
   box.querySelectorAll("[data-confirm-correction]").forEach((button) => {

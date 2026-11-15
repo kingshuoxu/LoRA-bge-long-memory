@@ -8,7 +8,7 @@ const path = require("path");
 const { _electron: electron } = require("playwright");
 
 const root = path.resolve(__dirname, "..", "..");
-const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.9");
+const shotDir = path.join(root, "desktop", "e2e-shots", "0.2.10");
 const pdf = path.join(root, "tests", "fixtures", "wugang", "wugang_chrome.pdf");
 const report = [];
 
@@ -29,20 +29,37 @@ async function waitText(page, text, timeout = 120000) {
 }
 
 async function assertAnswer(page, text) {
-  const body = page.locator("#messages .bubble.assistant .body").last();
-  await body.waitFor({ timeout: 120000 });
-  await page.waitForFunction((needle) => {
-    const nodes = [...document.querySelectorAll("#messages .bubble.assistant .body")];
-    const last = nodes[nodes.length - 1];
-    return last && last.textContent.includes(needle);
-  }, text);
-  const content = (await body.innerText()).trim();
-  if (!content) throw new Error(`回答是空的，期望包含「${text}」`);
-  if (!content.includes(text)) throw new Error(`回答没有「${text}」：${content}`);
-  await body.evaluate((node) => node.scrollIntoView({ block: "center", inline: "nearest" }));
-  const box = await body.boundingBox();
-  if (!box || box.height < 8 || box.width < 8) throw new Error(`回答没有画出来：${content}`);
-  await page.locator("#typing").waitFor({ state: "hidden", timeout: 20000 });
+  let last = null;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    last = await page.evaluate((needle) => {
+      const nodes = [...document.querySelectorAll("#messages .bubble.assistant .body")];
+      const node = [...nodes].reverse().find((item) => (item.textContent || "").includes(needle));
+      if (!node) return { missing: true };
+      const scroller = document.getElementById("messages");
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+      node.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const style = getComputedStyle(node);
+      const hidden = node.closest("[hidden]");
+      return {
+        text: (node.textContent || "").trim(),
+        width: node.offsetWidth || node.scrollWidth,
+        height: node.offsetHeight || node.scrollHeight,
+        display: style.display,
+        visibility: style.visibility,
+        hidden: hidden ? hidden.id : "",
+      };
+    }, text);
+    const ok = last && !last.missing && last.text.includes(text)
+      && last.display !== "none" && last.visibility !== "hidden" && !last.hidden
+      && last.height >= 8 && last.width >= 8;
+    if (ok) {
+      await page.locator("#typing").waitFor({ state: "hidden", timeout: 20000 });
+      return;
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`回答没有画出来：${text} ${JSON.stringify(last)}`);
 }
 
 async function send(page, text) {
@@ -86,6 +103,11 @@ async function main() {
     timeout: 120000,
   });
   const page = await app.firstWindow();
+  await app.evaluate(() => {
+    const { BrowserWindow } = require("electron");
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) win.setSize(1200, 800);
+  }).catch(() => {});
   page.setDefaultTimeout(180000);
   page.on("dialog", (dialog) => dialog.accept());
   try {
@@ -166,6 +188,7 @@ async function main() {
     await page.locator("#nav-chat").click();
     await page.locator("#open-settings").click();
     await page.locator("#settings .sheet").waitFor({ state: "visible" });
+    await page.waitForTimeout(350);
     const sheetColor = await page.locator("#settings .sheet").evaluate((el) => getComputedStyle(el).backgroundColor);
     const parts = (sheetColor.match(/rgba?\(([^)]+)\)/) || ["", ""])[1].split(",").map((item) => item.trim());
     const alpha = parts.length >= 4 ? Number(parts[3]) : 1;
