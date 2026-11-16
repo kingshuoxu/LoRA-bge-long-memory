@@ -9,6 +9,7 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")"/../.. && pwd)
 COMMIT=b73e75af5f2ab69c0e8984637c743c6a50ebc98d
 PATCH=$ROOT/android/qvac/wpm-cased.patch
 MALI_PATCH=$ROOT/android/qvac/mali-vulkan.patch
+SHADER_PATCH=$ROOT/android/qvac/shader-generation.patch
 MALI_HEADER=$ROOT/android/qvac/mali_vulkan_policy.h
 SRC=${QVAC_SRC:-/tmp/qvac-android}
 DEST=$ROOT/android/apk/app/src/main/jniLibs/arm64-v8a
@@ -36,23 +37,41 @@ git -C "$SRC" apply --check "$PATCH"
 git -C "$SRC" apply "$PATCH"
 git -C "$SRC" apply --check "$MALI_PATCH"
 git -C "$SRC" apply "$MALI_PATCH"
+git -C "$SRC" apply --check "$SHADER_PATCH"
+git -C "$SRC" apply "$SHADER_PATCH"
+python3 "$ROOT/android/qvac/test_shader_generation.py" "$SRC/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp"
 cp "$MALI_HEADER" "$SRC/ggml/src/ggml-vulkan/mali_vulkan_policy.h"
-if ! command -v glslc >/dev/null 2>&1 || [ ! -f /usr/include/vulkan/vulkan.hpp ]; then
+if ! command -v glslc >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq && apt-get install -y -qq glslc libvulkan-dev || true
+    apt-get update -qq && apt-get install -y -qq glslc || true
   fi
 fi
-# NDK 只有 vulkan.h。Vulkan-Hpp 放在 idirafter,这样 vulkan.h 仍用安卓那份。
-HPP=/tmp/vulkan-hpp
-if [ -f /usr/include/vulkan/vulkan.hpp ]; then
-  rm -rf "$HPP"
-  mkdir -p "$HPP"
-  cp -a /usr/include/vulkan "$HPP/vulkan"
+# NDK 27.2 ships Vulkan C headers 1.3.275. Never mix them with the runner's
+# rolling libvulkan-dev Hpp (Ubuntu 26.04 currently ships header version 341).
+# Official KhronosGroup/Vulkan-Hpp v1.3.275, pinned by immutable commit:
+# https://github.com/KhronosGroup/Vulkan-Hpp/tree/1a24b015830c116632a0723f3ccfd1f06009ce12
+VULKAN_HEADER_VERSION=275
+VULKAN_HPP_COMMIT=1a24b015830c116632a0723f3ccfd1f06009ce12
+CORE=$(find "$NDK/toolchains/llvm/prebuilt" -path '*/sysroot/usr/include/vulkan/vulkan_core.h' | head -1)
+test -n "$CORE"
+NDK_HEADER_VERSION=$(awk '$1 == "#define" && $2 == "VK_HEADER_VERSION" { print $3; exit }' "$CORE")
+if [ "$NDK_HEADER_VERSION" != "$VULKAN_HEADER_VERSION" ]; then
+  echo "Expected NDK Vulkan header $VULKAN_HEADER_VERSION, found $NDK_HEADER_VERSION. Update the NDK and Vulkan-Hpp pins together." >&2
+  exit 1
 fi
-HPP_FLAG=""
-if [ -d "$HPP/vulkan" ]; then
-  HPP_FLAG="-idirafter $HPP"
+HPP="$ROOT/android/out/build-deps/vulkan-hpp-$VULKAN_HPP_COMMIT"
+if [ ! -d "$HPP/.git" ]; then
+  git init "$HPP"
+  git -C "$HPP" remote add origin https://github.com/KhronosGroup/Vulkan-Hpp.git
 fi
+git -C "$HPP" fetch --depth 1 origin "$VULKAN_HPP_COMMIT"
+git -C "$HPP" checkout --force --detach "$VULKAN_HPP_COMMIT"
+test "$(git -C "$HPP" rev-parse HEAD)" = "$VULKAN_HPP_COMMIT"
+# Hpp contains only C++ wrappers. idirafter leaves the NDK's C headers first.
+HPP_FLAG="-idirafter $HPP"
+NDK_PREBUILT=${CORE%/sysroot/usr/include/vulkan/vulkan_core.h}
+printf '#include <vulkan/vulkan.hpp>\nstatic_assert(VK_HEADER_VERSION == 275, "Unexpected Vulkan headers");\n' |
+  "$NDK_PREBUILT/bin/aarch64-linux-android29-clang++" -std=c++17 -idirafter "$HPP" -x c++ -fsyntax-only -
 STRIP=$(find "$NDK/toolchains/llvm/prebuilt" -name llvm-strip | head -1)
 build_one() {
   vulkan=$1
