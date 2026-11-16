@@ -39,6 +39,12 @@ trap cleanup EXIT
 Xvfb :99 -screen 0 1280x2800x24 -ac > "$STAGE/xvfb.log" 2>&1 &
 XVFB_PID=$!
 export DISPLAY=:99
+i=0
+until xdpyinfo >/dev/null 2>&1; do
+  kill -0 "$XVFB_PID"
+  i=$((i + 1)); test "$i" -lt 50
+  sleep 0.2
+done
 "$SDK/emulator/emulator" -avd candidate-update -port 5584 -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 3072 -accel on -no-metrics > "$STAGE/emulator.log" 2>&1 &
 EMU_PID=$!
 i=0

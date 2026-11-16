@@ -1,5 +1,6 @@
 package com.lorabge.memory
 
+import android.content.Intent
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
 import org.json.JSONObject
@@ -47,6 +48,12 @@ class CandidateUpdateTest {
         })
         assertEquals(offer.sha256, sha256File(downloaded))
         assertTrue(!UpdateInstaller.needsUnknownSources(context))
+        // Keep the caller visible when Android requests installer confirmation.
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.startActivitySync(Intent(context, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+        instrumentation.waitForIdleSync()
         File(fixture, "submitted").writeText(offer.sha256)
         UpdateInstaller.install(context, downloaded)
         // The host, not JUnit's exit status, decides success after package replacement.

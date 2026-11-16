@@ -125,9 +125,18 @@ def verify(meta, stage):
         actual = adb("exec-out", "run-as", PACKAGE, "cat", path).stdout.decode()
         if actual != expected:
             raise RuntimeError(f"Update did not preserve {path}")
+    adb("shell", "am", "force-stop", PACKAGE)
     launch = adb("shell", "am", "start", "-W", "-n", PACKAGE + "/.MainActivity").stdout.decode()
     if "Status: ok" not in launch:
         raise RuntimeError(f"Candidate did not launch: {launch}")
+    # am start can report success even if startup immediately crashes or corrupts data.
+    time.sleep(5)
+    if not adb("shell", "pidof", PACKAGE, check=False).stdout.strip():
+        raise RuntimeError("Candidate exited after launch")
+    for path, expected in SENTINELS.items():
+        actual = adb("exec-out", "run-as", PACKAGE, "cat", path).stdout.decode()
+        if actual != expected:
+            raise RuntimeError(f"Candidate startup did not preserve {path}")
     report = {"result": "PASS", "versionName": name, "versionCode": code, "sha256": digest,
               "size": size, "preserved": list(SENTINELS),
               "scope": "current-source synthetic baseline; fixture transport; production lookup/download/installer; exact candidate APK"}
