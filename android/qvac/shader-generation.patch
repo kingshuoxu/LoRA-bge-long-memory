@@ -1,0 +1,201 @@
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -131,51 +131,45 @@
+     CloseHandle(pi.hProcess);
+     CloseHandle(pi.hThread);
+ #else
+-    int stdout_pipe[2];
+-    int stderr_pipe[2];
+-
+-    if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+-        throw std::runtime_error("Failed to create pipes");
+-    }
+-
++    // Merge diagnostics into one pipe so a full stderr pipe cannot deadlock
++    // while the parent waits for stdout EOF.
++    int output_pipe[2];
++    if (pipe(output_pipe) != 0) {
++        throw std::runtime_error("Failed to create compiler output pipe");
++    }
++    std::vector<char*> argv;
++    for (std::string& part : command) { argv.push_back(part.data()); }
++    argv.push_back(nullptr);
+     pid_t pid = fork();
+     if (pid < 0) {
+-        throw std::runtime_error("Failed to fork process");
+-    }
+-
+-    std::vector<char*> argv;
+-    for (std::string& part : command) {
+-        argv.push_back(part.data());
+-    }
+-    argv.push_back(nullptr);
+-
++        close(output_pipe[0]);
++        close(output_pipe[1]);
++        throw std::runtime_error("Failed to fork shader compiler");
++    }
+     if (pid == 0) {
+-        close(stdout_pipe[0]);
+-        close(stderr_pipe[0]);
+-        dup2(stdout_pipe[1], STDOUT_FILENO);
+-        dup2(stderr_pipe[1], STDERR_FILENO);
+-        close(stdout_pipe[1]);
+-        close(stderr_pipe[1]);
++        close(output_pipe[0]);
++        dup2(output_pipe[1], STDOUT_FILENO);
++        dup2(output_pipe[1], STDERR_FILENO);
++        close(output_pipe[1]);
+         execvp(argv[0], argv.data());
+         _exit(EXIT_FAILURE);
+-    } else {
+-        close(stdout_pipe[1]);
+-        close(stderr_pipe[1]);
+-
+-        std::array<char, 128> buffer;
+-        ssize_t bytes_read;
+-
+-        while ((bytes_read = read(stdout_pipe[0], buffer.data(), buffer.size())) > 0) {
+-            stdout_str.append(buffer.data(), bytes_read);
+-        }
+-
+-        while ((bytes_read = read(stderr_pipe[0], buffer.data(), buffer.size())) > 0) {
+-            stderr_str.append(buffer.data(), bytes_read);
+-        }
+-
+-        close(stdout_pipe[0]);
+-        close(stderr_pipe[0]);
+-        waitpid(pid, nullptr, 0);
++    }
++    close(output_pipe[1]);
++    std::array<char, 4096> buffer;
++    ssize_t bytes_read;
++    while ((bytes_read = read(output_pipe[0], buffer.data(), buffer.size())) != 0) {
++        if (bytes_read < 0) {
++            if (errno == EINTR) { continue; }
++            break;
++        }
++        stderr_str.append(buffer.data(), bytes_read);
++    }
++    close(output_pipe[0]);
++    int status = 0;
++    pid_t waited;
++    do { waited = waitpid(pid, &status, 0); } while (waited < 0 && errno == EINTR);
++    if (bytes_read < 0 || waited < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
++        throw std::runtime_error("Shader compiler failed: " + stderr_str);
+     }
+ #endif
+ }
+@@ -297,34 +291,9 @@
+ }
+ 
+ 
+-// variables to track number of compiles in progress
+-static uint32_t compile_count = 0;
+-static std::mutex compile_count_mutex;
+-static std::condition_variable compile_count_cond;
+ static bool generate_dep_file = true;
+ 
+-void decrement_compile_count(uint32_t * count) {
+-    if (count) {
+-        std::lock_guard<std::mutex> guard(compile_count_mutex);
+-        assert(compile_count > 0);
+-        compile_count--;
+-        compile_count_cond.notify_all();
+-    }
+-}
+-
+-using compile_count_guard = std::unique_ptr<uint32_t, decltype(&decrement_compile_count)>;
+-
+-compile_count_guard acquire_compile_slot() {
+-    // wait until fewer than N compiles are in progress.
+-    // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
+-    uint32_t N = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+-    std::unique_lock<std::mutex> guard(compile_count_mutex);
+-    compile_count_cond.wait(guard, [N] { return compile_count < N; });
+-    compile_count++;
+-    return compile_count_guard(&compile_count, &decrement_compile_count);
+-}
+-
+-void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
++void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file) {
+     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+ 
+     #ifdef _WIN32
+@@ -371,14 +340,18 @@
+         // }
+         // std::cout << std::endl;
+ 
++        std::filesystem::remove(out_path);
+         execute_command(cmd, stdout_str, stderr_str);
+         if (!stderr_str.empty()) {
+-            std::cerr << "cannot compile " << name << "\n\n";
++            std::cerr << "Shader compiler diagnostics for " << name << "\n\n";
+             for (const auto& part : cmd) {
+                 std::cerr << part << " ";
+             }
+             std::cerr << "\n\n" << stderr_str << std::endl;
+-            return;
++        }
++
++        if (read_binary_file(out_path, true).empty()) {
++            throw std::runtime_error("Shader compiler produced no SPIR-V");
+         }
+ 
+         if (dep_file) {
+@@ -397,6 +370,7 @@
+         shader_fnames.push_back(std::make_pair(name, out_path));
+     } catch (const std::exception& e) {
+         std::cerr << "Error executing command for " << name << ": " << e.what() << std::endl;
++        throw;
+     }
+ }
+ 
+@@ -406,7 +380,6 @@
+     return result;
+ }
+ 
+-static std::vector<std::future<void>> compiles;
+ void string_to_spv(std::string name, const std::string& source, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
+     name = name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
+     std::string out_path = join_paths(output_dir, name + ".spv");
+@@ -420,9 +393,9 @@
+         return;
+     }
+ 
+-    compile_count_guard slot = acquire_compile_slot();
+-    compiles.push_back(std::async(
+-        string_to_spv_func, name, input_filepath, out_path, defines, coopmat, generate_dep_file, std::move(slot)));
++    // CMake already schedules shader sources in parallel. Do not retain one
++    // async thread/future per variant (thousands for matmul on constrained CI).
++    string_to_spv_func(name, input_filepath, out_path, defines, coopmat, generate_dep_file);
+     // Don't write the same dep file from multiple processes
+     generate_dep_file = false;
+ }
+@@ -1093,9 +1066,6 @@
+     }
+ #endif
+ 
+-    for (auto &c : compiles) {
+-        c.wait();
+-    }
+ }
+ 
+ void write_output_files() {
+@@ -1325,9 +1295,13 @@
+         }
+     }
+ 
+-    process_shaders();
+-
+-    write_output_files();
++    try {
++        process_shaders();
++        write_output_files();
++    } catch (const std::exception& e) {
++        std::cerr << "Shader generation failed: " << e.what() << std::endl;
++        return EXIT_FAILURE;
++    }
+ 
+     return EXIT_SUCCESS;
+ }

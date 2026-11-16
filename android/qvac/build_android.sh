@@ -9,6 +9,7 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")"/../.. && pwd)
 COMMIT=b73e75af5f2ab69c0e8984637c743c6a50ebc98d
 PATCH=$ROOT/android/qvac/wpm-cased.patch
 MALI_PATCH=$ROOT/android/qvac/mali-vulkan.patch
+SHADER_PATCH=$ROOT/android/qvac/shader-generation.patch
 MALI_HEADER=$ROOT/android/qvac/mali_vulkan_policy.h
 SRC=${QVAC_SRC:-/tmp/qvac-android}
 DEST=$ROOT/android/apk/app/src/main/jniLibs/arm64-v8a
@@ -36,6 +37,9 @@ git -C "$SRC" apply --check "$PATCH"
 git -C "$SRC" apply "$PATCH"
 git -C "$SRC" apply --check "$MALI_PATCH"
 git -C "$SRC" apply "$MALI_PATCH"
+git -C "$SRC" apply --check "$SHADER_PATCH"
+git -C "$SRC" apply "$SHADER_PATCH"
+python3 "$ROOT/android/qvac/test_shader_generation.py" "$SRC/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp"
 cp "$MALI_HEADER" "$SRC/ggml/src/ggml-vulkan/mali_vulkan_policy.h"
 if ! command -v glslc >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then

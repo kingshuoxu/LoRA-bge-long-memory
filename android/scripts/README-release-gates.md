@@ -40,3 +40,14 @@ actionlint -shellcheck= .github/workflows/android-release.yml
 
 The complete candidate test requires an Android SDK, Java 17, KVM, Xvfb and the
 release artifact directory. CI supplies those prerequisites.
+
+## Native shader build regression
+
+`android/qvac/build_android.sh` applies `shader-generation.patch` to the pinned
+QVAC source and runs `test_shader_generation.py` against the actual patched host
+generator. On Linux, shader variants run serially within each source while CMake
+still builds sources in parallel. Compiler failures, missing/empty SPIR-V, and
+launch failures stop generation rather than leaving incomplete link inputs.
+The fake-compiler regression covers Adreno variants, warnings, silent failures,
+large diagnostics, partial progress, and a missing compiler. It does not replace
+the full NDK/Vulkan build or emulator update gate.
