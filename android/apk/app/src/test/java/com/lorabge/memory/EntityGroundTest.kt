@@ -1,0 +1,221 @@
+package com.lorabge.memory
+
+import org.json.JSONArray
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+class EntityGroundTest {
+    @Test
+    fun openQuestionsUseEveryImportedExpert() {
+        val facts = loadImported()
+        assertTrue(facts.size >= 5)
+        val byEntity = facts.groupBy { it.entity }
+        val numbers = Regex("\\d+")
+        for ((entity, own) in byEntity) {
+            val reply = EntityGround.reply("告诉我${entity}公司相关信息", facts, "zh")
+            assertNotNull("open question missed $entity", reply)
+            assertEquals("entity", reply!!.reason)
+            assertEquals(entity, reply.entity)
+            for (fact in own) {
+                if (fact.value.isNotBlank()) assertTrue(reply.answer.contains(fact.value))
+            }
+            fun nums(text: String) = numbers.findAll(text).map { it.value }.toList()
+            val ownNumbers = own.flatMap { nums(it.value) + nums(it.statement) }.toSet()
+            val foreign = facts.filter { it.entity != entity }
+                .flatMap { nums(it.value) }
+                .filter { it.length >= 2 && it !in ownNumbers }
+                .toSet()
+            for (found in numbers.findAll(reply.answer).map { it.value }) {
+                assertFalse("$entity answer invented $found", found in foreign)
+            }
+        }
+    }
+
+    @Test
+    fun zoreOpenQuestionReturns1979AndDoesNotInvent1998() {
+        val facts = loadImported()
+        val reply = EntityGround.reply("告诉我佐雷公司相关信息", facts, "zh")
+        assertNotNull(reply)
+        assertTrue(reply!!.answer.contains("1979"))
+        assertFalse(reply.answer.contains("1998"))
+        assertFalse(reply.answer.contains("圣迭戈"))
+        assertEquals("entity", reply.reason)
+    }
+
+    @Test
+    fun unknownSlotStaysInsideStoredFacts() {
+        val facts = loadImported()
+        val reply = EntityGround.reply("佐雷公司的首席执行官是谁", facts, "zh")
+        assertNotNull(reply)
+        assertEquals("entity_partial", reply!!.reason)
+        assertTrue(reply.answer.contains("1979"))
+        assertTrue(reply.answer.contains("其余不在记忆里"))
+        assertFalse(reply.answer.contains("1998"))
+        assertFalse(reply.answer.contains("圣迭戈"))
+    }
+
+    @Test
+    fun whereILiveAnswersFromTheStoredPlace() {
+        val home = StoredFact("expert_self", "我", "我住在上海。", "上海", listOf("我住在哪里？"), "居住地")
+        val reply = EntityGround.reply("我住在哪里？", listOf(home), "zh")
+        assertNotNull(reply)
+        assertTrue(reply!!.answer.contains("上海"))
+        assertTrue(reply.answer.contains("你住"))
+        assertFalse(reply.answer.contains("我住"))
+        assertFalse(reply.answer.contains("其余不在记忆里"))
+        assertEquals("entity", reply.reason)
+    }
+
+    @Test
+    fun myNameAnswersFromTheStoredFact() {
+        val me = StoredFact("expert_self", "我", "我是徐金朔。", "徐金朔", listOf("我叫什么？"), "名字")
+        val reply = EntityGround.reply("我叫什么名字？", listOf(me), "zh")
+        assertNotNull(reply)
+        assertTrue(reply!!.answer.contains("徐金朔"))
+        assertTrue(reply.answer.contains("你是"))
+        assertFalse(reply.answer.contains("我是"))
+        assertEquals("我", reply.entity)
+    }
+
+    @Test
+    fun catQuestionUsesTheStoredName() {
+        val cat = StoredFact("expert_cat", "我", "我的猫猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？"), "猫的名字")
+        val reply = EntityGround.reply("我的猫叫什么名字？", listOf(cat), "zh")
+        assertNotNull(reply)
+        assertTrue(reply!!.answer.contains("咪咪"))
+        assertTrue(reply.answer.contains("你的猫"))
+        assertFalse(reply.answer.contains("我的"))
+        assertEquals("entity", reply.reason)
+        val shot = EntityGround.reply("我的猫猫是什么", listOf(cat), "zh")
+        assertEquals("你的猫猫叫咪咪。", shot?.answer)
+        assertEquals("Your cat is called Mimi.", EntityGround.assistantVoice("My cat is called Mimi.", "我"))
+        assertEquals("You are Xu.", EntityGround.assistantVoice("I am Xu.", "我"))
+        assertEquals("佐雷公司成立于1979年。", EntityGround.assistantVoice("佐雷公司成立于1979年。", "佐雷"))
+        val company = StoredFact("expert_0", "佐雷", "佐雷公司成立于1979年。", "1979", emptyList(), "成立年份")
+        assertEquals("佐雷公司成立于1979年。", EntityGround.reply("佐雷公司是哪一年成立的?", listOf(company), "zh")?.answer)
+    }
+
+    @Test
+    fun routeRecordKeepsTheNativeMiss() {
+        val json = lastRouteJson(
+            "告诉我佐雷公司相关信息",
+            RouteHit(null, false, "abstain_fact", 0.41),
+            GroundedReply("expert_0", "佐雷", "佐雷公司成立于1979年。", "entity"),
+        )
+        assertTrue(json.contains("\"nativeFired\":false"))
+        assertTrue(json.contains("abstain_fact"))
+        assertTrue(json.contains("\"grounded\":true"))
+        assertTrue(json.contains("佐雷"))
+    }
+
+    @Test
+    fun teachRouteRecordsTheSelfIntro() {
+        val draft = FactNotice.draft("你好 我是徐金朔")
+        assertEquals("我", draft?.entity)
+        val reply = FactNotice.acknowledge(draft!!, "zh")
+        val json = teachRouteJson("你好 我是徐金朔", draft.entity, "expert_self", reply)
+        assertTrue(json.contains("\"reason\":\"teach\""))
+        assertTrue(json.contains("\"nativeReason\":\"teach\""))
+        assertTrue(json.contains("\"entity\":\"我\""))
+        assertTrue(json.contains("expert_self"))
+        assertTrue(json.contains("好的，记住了，你是徐金朔。"))
+        assertFalse(json.contains("bge_block"))
+        assertFalse(json.contains("\"nativeFired\":true"))
+    }
+
+    @Test
+    fun whoAmIUsesTheAboutYouExpertAndDoesNotSpeakAsTheAssistant() {
+        val facts = listOf(
+            StoredFact("expert_self", "我", "我叫徐金朔", "徐金朔", listOf("我叫什么？"), "名字"),
+            StoredFact("expert_self", "我", "我的猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？"), "猫的名字"),
+        )
+        val who = EntityGround.reply("我是谁", facts, "zh")
+        assertNotNull(who)
+        assertEquals("expert_self", who!!.expert)
+        assertEquals("我", who.entity)
+        assertEquals("entity", who.reason)
+        assertEquals("你是徐金朔。", who.answer)
+        assertFalse(who.answer.contains("助手"))
+        assertFalse(who.answer.contains("我是"))
+        assertFalse(who.answer.contains("咪咪"))
+        val name = EntityGround.reply("我叫什么", facts, "zh")
+        assertTrue(name!!.answer.contains("徐金朔"))
+        val home = EntityGround.reply(
+            "我住哪",
+            listOf(StoredFact("expert_self", "我", "我住在上海。", "上海", listOf("我住在哪里？"), "居住地")),
+            "zh",
+        )
+        assertTrue(home!!.answer.contains("上海"))
+        assertTrue(home.answer.contains("你住"))
+        val overview = EntityGround.reply("你知道我什么", facts, "zh")
+        assertTrue(overview!!.answer.contains("徐金朔"))
+        assertTrue(overview.answer.contains("咪咪"))
+        assertTrue(EntityGround.reply("关于我", facts, "zh")!!.answer.contains("徐金朔"))
+        val english = EntityGround.reply("who am I", facts, "en")
+        assertTrue(english!!.answer.contains("徐金朔") || english.answer.contains("you"))
+        assertEquals("expert_self", english.expert)
+        val named = EntityGround.reply("what's my name", facts, "en")
+        assertNotNull(named)
+        assertNull(EntityGround.reply("你是谁", facts, "zh"))
+        assertNull(EntityGround.reply("who are you", facts, "en"))
+        assertEquals(RouteHit(SELF_EXPERT, true, "self", 1.0), EntityGround.selfRoute("我是谁", true))
+        assertEquals(RouteHit(null, false, "self_empty", 0.0), EntityGround.selfRoute("who am I", false))
+        assertNull(EntityGround.selfRoute("你是谁", true))
+        val empty = EntityGround.reply("我是谁", emptyList(), "zh")
+        assertEquals("self_empty", empty!!.reason)
+        assertEquals("", empty.expert)
+        assertTrue(empty.answer.contains("还不知道"))
+        assertFalse(empty.answer.contains("助手"))
+        assertTrue(empty.answer.contains("告诉"))
+    }
+
+    @Test
+    fun bothSelfFactsAreRecalledFromTheSameExpert() {
+        val facts = listOf(
+            StoredFact("expert_self", "我", "我的猫叫咪咪", "咪咪", listOf("我的猫叫什么名字？"), "猫的名字"),
+            StoredFact("expert_self", "我", "我叫徐金朔", "徐金朔", listOf("我叫什么？"), "名字"),
+        )
+        val cat = EntityGround.reply("我的猫叫什么名字？", facts)
+        val name = EntityGround.reply("我叫什么？", facts)
+        assertNotNull(cat)
+        assertNotNull(name)
+        assertTrue(cat!!.answer.contains("你的猫") && cat.answer.contains("咪咪"))
+        assertTrue(name!!.answer.contains("徐金朔"))
+        assertFalse(name.answer.contains("我叫"))
+    }
+
+    private fun loadImported(): List<StoredFact> {
+        val root = File("../../../experts")
+        val dirs = root.listFiles()?.filter { it.isDirectory && it.name.startsWith("expert_") }?.sortedBy { it.name }.orEmpty()
+        assertEquals(5, dirs.size)
+        val facts = ArrayList<StoredFact>()
+        for (dir in dirs) {
+            val file = File(dir, "fact_memory.json")
+            val text = file.readText().trim()
+            assertTrue("${file.path} is not JSON", text.startsWith("["))
+            val arr = JSONArray(text)
+            for (i in 0 until arr.length()) {
+                val row = arr.getJSONObject(i)
+                val questions = ArrayList<String>()
+                val raw = row.optJSONArray("questions")
+                if (raw != null) for (q in 0 until raw.length()) questions.add(raw.optString(q))
+                facts.add(
+                    StoredFact(
+                        dir.name,
+                        row.getString("entity"),
+                        row.getString("statement"),
+                        row.optString("value"),
+                        questions,
+                        row.optString("attr"),
+                    ),
+                )
+            }
+        }
+        return facts
+    }
+}

@@ -1,0 +1,184 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index b718fb8cc..e363689c3 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -101,6 +101,8 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
+ #define VK_VENDOR_ID_INTEL 0x8086
+ #define VK_VENDOR_ID_NVIDIA 0x10de
+ #define VK_VENDOR_ID_QUALCOMM 0x5143
++#define VK_VENDOR_ID_ARM 0x13B5
++#include "mali_vulkan_policy.h"
+ 
+ #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
+ 
+@@ -265,6 +267,7 @@ enum vk_device_architecture {
+     INTEL_XE2,
+     NVIDIA_PRE_TURING,
+     QUALCOMM_ADRENO,
++    ARM_MALI,
+ };
+ 
+ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
+@@ -361,6 +364,8 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice&
+         }
+     } else if (props.vendorID == VK_VENDOR_ID_QUALCOMM) {
+         return vk_device_architecture::QUALCOMM_ADRENO;
++    } else if (props.vendorID == VK_VENDOR_ID_ARM) {
++        return vk_device_architecture::ARM_MALI;
+     }
+     return vk_device_architecture::OTHER;
+ }
+@@ -3022,6 +3027,45 @@ static void ggml_vk_load_shaders(vk_device& device) {
+         m_align =  64;
+         s_align =  32;
+ 
++        // Mali's subgroup is 16. max(subgroup, 32) makes the small tile one
++        // subgroup too wide, and coopmat is left off so these scalar tiles are
++        // the ones that actually run. Adreno does not enter this block.
++        if (device->vendor_id == VK_VENDOR_ID_ARM) {
++            auto lorabge_fix = [&](std::vector<uint32_t> & tile) {
++                lorabge_mali_retile(tile.data(), static_cast<uint32_t>(tile.size()), device->subgroup_size);
++            };
++            lorabge_fix(l_warptile);
++            lorabge_fix(m_warptile);
++            lorabge_fix(s_warptile);
++            lorabge_fix(l_warptile_mmq);
++            lorabge_fix(m_warptile_mmq);
++            lorabge_fix(s_warptile_mmq);
++            lorabge_fix(l_warptile_mmq_int);
++            lorabge_fix(m_warptile_mmq_int);
++            lorabge_fix(s_warptile_mmq_int);
++            lorabge_fix(l_warptile_mmq_int_k);
++            lorabge_fix(m_warptile_mmq_int_k);
++            lorabge_fix(s_warptile_mmq_int_k);
++            lorabge_fix(l_warptile_id);
++            lorabge_fix(m_warptile_id);
++            lorabge_fix(s_warptile_id);
++            lorabge_fix(l_warptile_mmqid);
++            lorabge_fix(m_warptile_mmqid);
++            lorabge_fix(s_warptile_mmqid);
++            lorabge_fix(l_warptile_mmqid_int);
++            lorabge_fix(m_warptile_mmqid_int);
++            lorabge_fix(s_warptile_mmqid_int);
++            lorabge_fix(l_warptile_mmqid_int_k);
++            lorabge_fix(m_warptile_mmqid_int_k);
++            lorabge_fix(s_warptile_mmqid_int_k);
++            uint32_t medium_x = 64, medium_y = 64;
++            lorabge_mali_workgroup(device->subgroup_size, &medium_x, &medium_y);
++            if (m_warptile.size() > 2 && m_warptile[1] == medium_x && m_warptile[2] == medium_y) {
++                m_wg_denoms = { medium_x, medium_y, 1 };
++                m_mmq_wg_denoms = m_wg_denoms;
++            }
++        }
++
+         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
+             ggml_type t = (ggml_type)i;
+             // Disable medium and large matrix multiplication if not enough shared memory is available
+@@ -4641,6 +4685,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
+         device->properties = props2.properties;
+         device->vendor_id = device->properties.vendorID;
+         device->driver_id = driver_props.driverID;
++        const bool lorabge_mali = lorabge_vk_is_arm_vendor(device->vendor_id);
++        if (lorabge_mali) {
++            // Do not enable the coopmat / bf16 device extensions. fp16 is decided later.
++            device->coopmat_support = false;
++            bfloat16_support = false;
++            coopmat2_support = false;
++        }
+ 
+         // Implementing the async backend interfaces seems broken on older Intel HW,
+         // see https://github.com/ggml-org/llama.cpp/issues/17302.
+@@ -4681,6 +4732,16 @@ static vk_device ggml_vk_get_device(size_t idx) {
+             device->suballocation_block_size = 1024*1024*1024;
+         }
+         device->suballocation_block_size = std::min(device->suballocation_block_size, device->max_memory_allocation_size);
++        if (lorabge_mali) {
++            device->suballocation_block_size = lorabge_mali_suballocation_bytes(
++                device->suballocation_block_size, device->max_memory_allocation_size, device->max_buffer_size);
++            if (!lorabge_mali_descriptor_limit_ok(device->properties.limits.maxPerStageDescriptorStorageBuffers, MAX_PARAMETER_COUNT)) {
++                std::cerr << "ggml_vulkan: Mali maxPerStageDescriptorStorageBuffers "
++                          << device->properties.limits.maxPerStageDescriptorStorageBuffers
++                          << " is below " << MAX_PARAMETER_COUNT << std::endl;
++                throw std::runtime_error("Mali descriptor limit");
++            }
++        }
+ 
+         device->subgroup_size = subgroup_props.subgroupSize;
+         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
+@@ -4861,6 +4922,14 @@ static vk_device ggml_vk_get_device(size_t idx) {
+ #else
+         device->bf16 = false;
+ #endif
++        if (lorabge_mali) {
++            device->fp16 = lorabge_mali_enable_fp16(fp16_storage, fp16_compute, vk12_features.shaderFloat16) &&
++                           getenv("GGML_VK_DISABLE_F16") == nullptr;
++            device->bf16 = lorabge_mali_enable_bf16(device->bf16);
++            device->coopmat_support = lorabge_mali_enable_coopmat(device->coopmat_support);
++            device->coopmat2 = lorabge_mali_enable_coopmat2(false);
++            device->coopmat_bf16_support = false;
++        }
+ 
+         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
+ 
+@@ -5141,6 +5210,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
+             case VK_VENDOR_ID_AMD:
+             case VK_VENDOR_ID_INTEL:
+             case VK_VENDOR_ID_QUALCOMM:
++            case VK_VENDOR_ID_ARM:
+                 device->mul_mat_l[i] = false;
+                 device->mul_mat_m[i] = true;
+                 device->mul_mat_s[i] = true;
+@@ -5221,6 +5291,35 @@ static vk_device ggml_vk_get_device(size_t idx) {
+             device->mmvq_mode = 1;
+         }
+ 
++        {
++            uint32_t medium_x = 64, medium_y = 64;
++            if (lorabge_mali) {
++                lorabge_mali_workgroup(device->subgroup_size, &medium_x, &medium_y);
++            }
++            std::ostringstream caps;
++            caps << LORABGE_VK_CAPS_PREFIX
++                 << "name=\"" << lorabge_quote_vk(device->properties.deviceName.data()) << "\" "
++                 << "driver=\"" << lorabge_quote_vk(driver_props.driverName.data()) << "\" "
++                 << "driver_info=\"" << lorabge_quote_vk(driver_props.driverInfo.data()) << "\" "
++                 << "driver_version=" << device->properties.driverVersion << " "
++                 << "vendor=0x" << std::hex << device->vendor_id << std::dec << " "
++                 << "subgroup=" << device->subgroup_size << " "
++                 << "fp16=" << (device->fp16 ? 1 : 0) << " "
++                 << "bf16=" << (device->bf16 ? 1 : 0) << " "
++                 << "coopmat=" << (device->coopmat_support ? 1 : 0) << " "
++                 << "coopmat2=" << (device->coopmat2 ? 1 : 0) << " "
++                 << "int_dot=" << (device->integer_dot_product ? 1 : 0) << " "
++                 << "uma=" << (device->uma ? 1 : 0) << " "
++                 << "max_alloc=" << static_cast<unsigned long long>(device->max_memory_allocation_size) << " "
++                 << "max_buffer=" << static_cast<unsigned long long>(device->max_buffer_size) << " "
++                 << "suballoc=" << static_cast<unsigned long long>(device->suballocation_block_size) << " "
++                 << "storage_buffers=" << device->properties.limits.maxPerStageDescriptorStorageBuffers << " "
++                 << "wg_invocations=" << device->properties.limits.maxComputeWorkGroupInvocations << " "
++                 << "wg=" << medium_x << "x" << medium_y << " "
++                 << "mali=" << (lorabge_mali ? 1 : 0);
++            GGML_LOG_INFO("%s\n", caps.str().c_str());
++        }
++
+         return device;
+     }
+ 
+@@ -15056,8 +15155,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
+             }
+         case GGML_OP_SSM_CONV:
+             return op->src[0]->type == GGML_TYPE_F32;
+-        case GGML_OP_CONV_TRANSPOSE_1D:
++        case GGML_OP_CONV_TRANSPOSE_1D: {
++            // Mali's 1D transpose convolution disagrees with the CPU scheduler.
++            // Qwen chat does not use it; other vendors keep the GPU op.
++            ggml_backend_vk_device_context * conv_ctx = (ggml_backend_vk_device_context *)dev->context;
++            const vk_device& conv_device = ggml_vk_get_device(conv_ctx->device);
++            if (lorabge_vk_is_arm_vendor(conv_device->vendor_id)) {
++                return false;
++            }
+             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
++        }
+         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+         case GGML_OP_CONV_2D:
