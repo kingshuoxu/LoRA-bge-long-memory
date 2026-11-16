@@ -9,9 +9,12 @@ export ANDROID_HOME="$SDK" ANDROID_SDK_ROOT="$SDK"
 STAGE="$ROOT/android/out/inapp-candidate"
 RELEASE="$ROOT/android/out/release"
 mkdir -p "$STAGE"
+python3 "$ROOT/android/scripts/verify_apk_signers.py" --self-test
 export ADB="$SDK/platform-tools/adb" ANDROID_SERIAL=emulator-5584
-AAPT=$(find "$SDK/build-tools" -path '*/aapt' | sort | tail -1)
-SIGNER=$(find "$SDK/build-tools" -path '*/apksigner' | sort | tail -1)
+# Use the build-tools version installed by this job, not a rolling runner version.
+AAPT="$SDK/build-tools/35.0.0/aapt"
+SIGNER="$SDK/build-tools/35.0.0/apksigner"
+test -x "$AAPT" && test -x "$SIGNER"
 AVDMANAGER=$(find "$SDK/cmdline-tools" -path '*/bin/avdmanager' | head -1)
 test -r /dev/kvm && test -w /dev/kvm
 # Validate the candidate bytes before deriving a strictly lower synthetic version.
@@ -21,9 +24,7 @@ chmod +x ./gradlew
 ./gradlew assembleDebug assembleDebugAndroidTest -Plorabge.skipNative=true "-Plorabge.versionName=$BASE" --no-daemon
 cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/baseline.apk"
 cp app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk "$STAGE/test.apk"
-CERT_A=$("$SIGNER" verify --print-certs "$STAGE/baseline.apk" | grep 'Signer #1 certificate SHA-256 digest:')
-CERT_B=$("$SIGNER" verify --print-certs "$RELEASE/app-debug.apk" | grep 'Signer #1 certificate SHA-256 digest:')
-test -n "$CERT_A" && test "$CERT_A" = "$CERT_B"
+python3 "$ROOT/android/scripts/verify_apk_signers.py" "$SIGNER" "$STAGE/baseline.apk" "$RELEASE/app-debug.apk" "$STAGE"
 "$AAPT" dump badging "$RELEASE/app-debug.apk" > "$STAGE/candidate-badging.txt"
 export ANDROID_AVD_HOME="$STAGE/avd-home"
 mkdir -p "$ANDROID_AVD_HOME"
