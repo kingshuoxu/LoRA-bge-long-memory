@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - cursor/android-milestone-1-d325
     paths:
       - "android/**"
@@ -11,8 +12,16 @@ on:
       - "scripts/**"
       - ".github/workflows/android-release.yml"
 
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/**"
+      - "experts/**"
+      - "scripts/**"
+      - ".github/workflows/android-release.yml"
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -20,6 +29,9 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      - name: Release gate regression tests
+        run: python3 -m unittest discover -s android/scripts -p 'test_release_gate.py' -v
 
       - name: Update check over the real network
         run: python3 android/scripts/check_update_net.py
@@ -172,13 +184,23 @@ jobs:
           if-no-files-found: ignore
 
   inapp-update:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # Lumi 已核对运行 40342688527：已发布的 0.1.4 在应用里升到 0.1.5。
-    # 0.1.4 仍会访问没有 DNS 的 mirror.ghproxy.com，重跑可能再次失败。这不应挡住 0.1.9。
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-release-apk
+          path: android/out/release
 
       - name: Install emulator pieces
         run: |
@@ -196,23 +218,29 @@ jobs:
           "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
           if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; else echo "没有 /dev/kvm" >&2; exit 1; fi
 
-      - name: Published 0.1.4 checks for updates and installs 0.1.5
-        run: sh android/scripts/inapp_update_014_to_015.sh
+      - name: Candidate installs through the production update path and preserves data
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+        run: sh android/scripts/inapp_update_candidate.sh
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: inapp-update-014
+          name: inapp-update-candidate
           path: |
-            android/out/inapp-update/shots
-            android/out/inapp-update/*.txt
-            android/out/inapp-update/emulator.log
+            android/out/inapp-candidate/*.json
+            android/out/inapp-candidate/*.xml
+            android/out/inapp-candidate/*.txt
+            android/out/inapp-candidate/*.log
           if-no-files-found: ignore
 
   publish:
     needs: [build, upgrade, inapp-update]
-    # inapp-update 是 continue-on-error。它失败不能挡住发布；升级任务失败才挡住。
-    if: ${{ always() && needs.build.result == 'success' && needs.upgrade.result == 'success' }}
+    # PRs only validate. Every gate must succeed; failures/skips/cancellations block publishing.
+    if: ${{ success() && github.event_name != 'pull_request' && needs.build.result == 'success' && needs.upgrade.result == 'success' && needs.inapp-update.result == 'success' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -339,6 +367,10 @@ jobs:
           这是预发布,不合并到 main。签名是仓库里的测试钥匙,不是上架密钥。
           EOF
           )
-          gh release delete "$TAG" --yes --cleanup-tag || true
+          # Never replace an already published APK/tag when a main push reruns this version.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; bump the version for a new release." >&2
+            exit 1
+          fi
           gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "Android 0.1.33" --notes "$NOTES"
-          gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS" --clobber
+          gh release upload "$TAG" "$STAGE/app-debug.apk" "$STAGE/manifest.json" "$STAGE/update.json" "$STAGE/SHA256SUMS"
