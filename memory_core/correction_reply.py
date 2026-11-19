@@ -18,7 +18,7 @@ def correction_kind(source: str, old: str, new: str) -> str:
     if old in source and new in source and (
         re.search(r"(?:以前|过去|原来).*(?:现在|如今|搬到)", source)
         or re.search(r"\b(?:used to|previously|formerly)\b.*\bnow\b", source, re.I)
-    ) and not re.search(r"记错|从未|从来没|never|incorrect|mistake", source, re.I):
+    ) and not re.search(r"错|纠正|更正|不对|从未|从来没|从没|从不|never|incorrect|mistak|wrong|correct(?:ed|ion)|\bnot\b", source, re.I):
         return "state_change"
     return "correction"
 

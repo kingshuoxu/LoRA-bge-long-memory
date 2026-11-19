@@ -167,6 +167,17 @@ class ImmediateCorrectionTests(unittest.TestCase):
         self.assertNotIn('Qinglan',answer)
         self.assertIn('Qinglan',json.dumps(load_indexed_docs(self.home)))
 
+    def test_history_of_wrong_record_is_not_history_of_true_fact(self):
+        from memory_core.correction_reply import correction_kind
+        for source in (
+            '以前记录为青岚镇，现在纠正为星港。',
+            '以前错误地说住青岚镇，现在住址是星港。',
+            'Previously the wrong record said Qinglan; now corrected to Starport.',
+            'Previously I did not live in Qinglan; now I live in Starport.',
+        ):
+            old, new = ('青岚镇', '星港') if '青岚镇' in source else ('Qinglan','Starport')
+            self.assertEqual(correction_kind(source, old, new), 'correction', source)
+
     def test_false_conversation_provenance_rejected(self):
         with self.assertRaises(ServiceError):
             self.service.commit_correction(self.proposal, self.original['id'])
