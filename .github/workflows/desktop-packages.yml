@@ -160,6 +160,10 @@ jobs:
           done
           test "$ok" = 1
 
+      - name: Packaged immediate correction and restart contract
+        shell: bash
+        run: python packaging/correction_install_check.py
+
       - name: Cache embedding and base models
         uses: actions/cache@v4
         with:

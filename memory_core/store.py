@@ -365,7 +365,7 @@ def register_expert(
     for index, fact in enumerate(facts):
         item = dict(fact)
         item["id"] = _scoped_fact_id(name, str(item.get("id") or ""), index)
-        if not item.get("source_conversations"):
+        if not item.get("source_conversations") and item.get("correction_source") != "memory_editor":
             item["source_conversations"] = sources
         stored.append(item)
     active = [fact for fact in stored if not fact.get("superseded")]

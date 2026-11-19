@@ -323,7 +323,7 @@ class MemoryService:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.convos = ConversationStore(self.home / "conversations.sqlite")
         self.chat = ChatEngine(qwen_path(self.models_dir), device)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._proc: subprocess.Popen | None = None
         self._proc_job: str | None = None
         self._download_thread: threading.Thread | None = None
@@ -424,7 +424,9 @@ class MemoryService:
         merged: dict[str, ExpertRecord] = {}
         for record in records:
             merged[record.name] = record
-        return list(merged.values())
+        from memory_core.correction_store import apply_corrections
+
+        return apply_corrections(self.home, list(merged.values()))
 
     def list_experts(self) -> list[dict]:
         return [record.public_dict() for record in self.expert_records()]
@@ -706,6 +708,26 @@ class MemoryService:
             raise ServiceError("这句话太长了")
         if self.convos.get(conv_id) is None:
             raise ServiceError("找不到这则对话")
+        from memory_core.correction_reply import confirmed_reply
+        from memory_core.routing import RouteDecision
+        from memory_core.grounding import matched_rows
+
+        # This path is independent of both model availability and a running worker.
+        with self._lock:
+            confirmed = confirmed_reply(self.home, content, self.expert_records)
+            if confirmed is not None:
+                user_msg = self.convos.add_message(conv_id, "user", content)
+                decision = RouteDecision(bool(confirmed["facts"]), confirmed["expert"], 1.0, "纠正", confirmed["reason"], True, bool(confirmed["facts"]))
+                recall = statement_trace()
+                recall.update({
+                    "reason": confirmed["reason"], "expert": confirmed["expert"],
+                    "fired": bool(confirmed["facts"]), "abstain": not bool(confirmed["facts"]), "mounted": False,
+                    "authority": "confirmed_fact",
+                    "matched_facts": matched_rows(confirmed["facts"]),
+                    "reason_text": "回答采用已确认的当前事实，不使用旧适配器或旧检索结果",
+                    "wording": "确认纠正后立即生效，训练不决定事实是否有效。",
+                })
+                return self._finish_turn(conv_id, user_msg, confirmed["text"], decision, recall)
         if self.job_running() or self._preview_running():
             raise ServiceError("正在巩固记忆，请等这一轮结束再继续对话")
         self.ensure_ready()
@@ -2022,7 +2044,10 @@ class MemoryService:
         groups = []
         for route, items in group_facts(expanded):
             matches = self._experts_for_route(route)
+            from memory_core.correction_store import active_corrections
+            corrected_names = {row["expert"] for row in active_corrections(self.home)}
             matches.sort(key=lambda record: (
+                record.name not in corrected_names,
                 -sum(1 for fact in (record.fact_memory or {}).get("facts") or [] if isinstance(fact, dict) and not fact.get("superseded")),
                 record.name,
             ))
@@ -2072,7 +2097,7 @@ class MemoryService:
                 "memory_facts": merged,
                 "replace_name": primary.name if primary is not None else "",
                 "replace_batch": batch,
-                "retire": [record.name for record in extras],
+                "retire": [record.name for record in extras if record.name not in corrected_names],
                 "sources": group_sources,
             })
         return groups
@@ -2348,6 +2373,10 @@ class MemoryService:
         )
 
     def commit_correction(self, proposal: dict, conversation_id: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            return self._commit_correction(proposal, conversation_id)
+
+    def _commit_correction(self, proposal: dict, conversation_id: str | None = None) -> dict[str, Any]:
         if self.job_running() or self._preview_running():
             raise ServiceError(self._err("正在巩固记忆，请等这一轮结束", "Consolidation is running. Wait for it to finish."))
         expert_name = str(proposal.get("expert") or "")
@@ -2380,7 +2409,15 @@ class MemoryService:
         old_value = str(target.get("value") or target.get("answer") or "")
         if new_value == old_value:
             raise ServiceError(self._err("新取值和原来一样", "The new value is the same as the old one"))
-        new_id = "c" + uuid.uuid4().hex[:8]
+        correction_conversation = self.convos.get(conversation_id) if conversation_id else None
+        if conversation_id and correction_conversation is None:
+            raise ServiceError("找不到纠正来源对话")
+        if correction_conversation and (not source_text or not any(
+            msg["role"] == "user" and source_text in msg["content"]
+            for msg in self.convos.messages(conversation_id)
+        )):
+            raise ServiceError("纠正原话不在指定来源对话中")
+        new_id = record.name + "-c" + uuid.uuid4().hex[:8]
         target["superseded"] = True
         target["superseded_by"] = new_id
         statement = str(target.get("statement") or "")
@@ -2394,13 +2431,21 @@ class MemoryService:
             statement = f"{entity}的{attr}是{new_value}。" if attr else f"{entity}是{new_value}。"
         if statement and statement[-1:] not in "。！？.!?":
             statement += "。" if has_cjk(statement) else "."
-        sources = list(target.get("source_conversations") or record.sources or [])
+        original_sources = list(target.get("source_conversations") or record.sources or [])
+        sources = ([{"id": correction_conversation["id"], "title": correction_conversation["title"]}]
+                   if correction_conversation else [])
         from memory_core.correct import reissue_training_fact
+        from memory_core.correction_reply import correction_kind
+        from memory_core.correction_store import save_correction
 
         fresh = {
             "id": new_id,
             "corrects": fact_id,
             "source_conversations": sources,
+            "original_source_conversations": original_sources,
+            "correction_source": "conversation" if correction_conversation else "memory_editor",
+            "correction_kind": correction_kind(source_text, old_value, new_value),
+            "confirmed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "raw": source_text,
             "selected": True,
             "gate": "write",
@@ -2444,7 +2489,7 @@ class MemoryService:
         request = {
             "facts": training,
             "memory_facts": memory_facts,
-            "sources": record.sources or sources,
+            "sources": list({s["id"]: s for s in list(record.sources or []) + sources}.values()),
             "display_name": record.display_name,
             "models_dir": str(self.models_dir),
             "device": self.device_pref or "auto",
@@ -2484,12 +2529,14 @@ class MemoryService:
                 "kind": "correction",
             },
         )
+        # Durability is the confirmation boundary, not successful adapter training.
+        save_correction(self.home, record.name, target, new_item)
         atomic_write_json(self.jobs_dir / "current.json", {"id": job_id})
         if conversation_id and self.convos.get(conversation_id) is not None:
             self.convos.add_message(
                 conversation_id,
                 "assistant",
-                f"已确认。正在重新训练「{record.display_name}」，旧取值 {old_value} 会暗下去。",
+                self._err(f"纠正已保存并立即生效。正在重新训练「{record.display_name}」。", f"Correction saved and effective immediately. Retraining {record.display_name}."),
                 expert=record.name,
                 expert_label="纠正",
                 fired=False,
@@ -2497,7 +2544,13 @@ class MemoryService:
             )
         with self._lock:
             self.chat.unload()
-        self._spawn(job_id)
+        try:
+            self._spawn(job_id)
+        except Exception as exc:
+            status = read_json(job_dir / "status.json")
+            status.update(status="failed", phase="failed", error=str(exc),
+                          message="纠正已保存，训练启动失败；确认的事实仍然生效")
+            atomic_write_json(job_dir / "status.json", status)
         return self.job_status(job_id)
 
     def _fact_recall_stats(self) -> tuple[dict[str, int], dict[str, str]]:
@@ -2567,7 +2620,7 @@ class MemoryService:
             for index, fact in enumerate(raw_facts):
                 fact_id = str(fact.get("id") or f"{record.name}#{index}")
                 node_id = f"fact:{fact_id}"
-                sources = list(fact.get("source_conversations") or record.sources or [])
+                sources = list(fact.get("source_conversations", record.sources) or [])
                 snippets = []
                 for source in sources:
                     conv = self.convos.get(source.get("id", ""))
@@ -2734,14 +2787,32 @@ class MemoryService:
         return {"experts": experts, "facts": fact_nodes, "conversations": conversations, "links": links}
 
     def delete_expert(self, name: str) -> dict:
+        with self._lock:
+            return self._delete_expert(name)
+
+    def _delete_expert(self, name: str) -> dict:
+        if self.job_running() or self._preview_running():
+            raise ServiceError("正在巩固记忆，请先取消任务再删除")
+        from memory_core.correction_store import active_corrections, discard_corrections
         records = {record.name: record for record in self.expert_records()}
         if name not in records:
-            raise ServiceError("找不到这个记忆")
+            rows = [row for row in active_corrections(self.home) if row["expert"] == name]
+            if not rows:
+                raise ServiceError("找不到这个记忆")
+            try:
+                delete_writable_expert(self.experts_dir, name)
+            except KeyError:
+                pass
+            discard_corrections(self.home, name)
+            self.chat.unload()
+            return {"deleted": name, "display_name": rows[-1]["new_fact"].get("entity") or name}
         record = records[name]
         if record.writable:
             delete_writable_expert(self.experts_dir, name)
         else:
             add_tombstone(self.home, name)
+        from memory_core.correction_store import discard_corrections
         with self._lock:
+            discard_corrections(self.home, name)
             self.chat.unload()
         return {"deleted": name, "display_name": record.display_name}
