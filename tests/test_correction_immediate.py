@@ -190,7 +190,9 @@ c=s.create_conversation('process restart')
 print(s.send_message(c['id'],'Where does Mira Chen live?')['assistant']['content'])
 s.convos.close()
 """
-        result=subprocess.run([sys.executable,'-c',code,str(self.home),str(self.models)],capture_output=True,text=True,check=True)
+        import os, memory_core
+        env=dict(os.environ, PYTHONPATH=str(Path(memory_core.__file__).resolve().parent.parent))
+        result=subprocess.run([sys.executable,'-c',code,str(self.home),str(self.models)],capture_output=True,text=True,check=True,cwd=self.temp.name,env=env)
         self.assertIn('Starport',result.stdout)
         self.assertNotIn('Qinglan',result.stdout)
 
