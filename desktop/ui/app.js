@@ -1172,7 +1172,7 @@ async function commitStar() {
   }
   const data = await api("/api/corrections/commit", {
     method: "POST",
-    body: JSON.stringify({ proposal: state.proposal, conversation_id: state.currentId }),
+    body: JSON.stringify({ proposal: state.proposal }),
   });
   state.job = data.job;
   state.proposal = null;

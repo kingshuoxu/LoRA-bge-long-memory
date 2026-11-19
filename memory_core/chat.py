@@ -23,6 +23,7 @@ class ChatEngine:
         self.model = None
         self._peft = False
         self._loaded: set[str] = set()
+        self._stale_corrections: set[str] = set()
         self._load_lock = threading.Lock()
 
     def _weights_ready(self) -> bool:
@@ -70,11 +71,19 @@ class ChatEngine:
             torch.cuda.empty_cache()
 
     def sync_adapters(self, experts: list[ExpertRecord]) -> None:
+        pending = {e.name for e in experts if getattr(e, "correction_pending", False)}
+        self._stale_corrections.update(pending)
+        wanted = [
+            expert for expert in experts
+            if expert.name not in pending and weights_ready(expert.directory)
+        ]
+        ready = {expert.name for expert in wanted}
+        # An adapter can be cached under the same name from before correction.
+        # Recreate the base/PEFT wrapper rather than re-enable the old cached weights.
+        if ready & self._stale_corrections & self._loaded:
+            self.unload()
         self.ensure()
-        wanted = []
-        for expert in experts:
-            if weights_ready(expert.directory):
-                wanted.append(expert)
+        self._stale_corrections.difference_update(ready)
         if not wanted:
             return
         from peft import PeftModel
@@ -121,7 +130,8 @@ class ChatEngine:
         eos = [self.tok.eos_token_id]
         if isinstance(im_end, int) and im_end >= 0:
             eos.append(im_end)
-        use_adapter = bool(decision.fired and decision.expert and decision.expert in self._loaded)
+        use_adapter = bool(decision.fired and decision.expert and decision.expert in self._loaded
+                           and decision.expert not in self._stale_corrections)
 
         def _generate():
             kwargs = {

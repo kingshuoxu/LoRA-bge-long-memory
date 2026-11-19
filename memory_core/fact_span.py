@@ -681,7 +681,7 @@ def ensure_fact_bank(expert) -> FactBank | None:
         facts = [fact for fact in (expert.fact_memory.get("facts") or []) if not fact.get("superseded")]
     bank = None
     span_path = Path(expert.directory) / "fact_spans.pt"
-    if span_path.is_file():
+    if span_path.is_file() and not getattr(expert, "correction_pending", False):
         bank = load_fact_bank(span_path, facts)
     if bank is None and facts:
         bank = build_fact_bank(facts)

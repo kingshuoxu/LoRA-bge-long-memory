@@ -1,0 +1,23 @@
+name: Correction regression
+on:
+  pull_request:
+  push:
+    branches: [fix/immediate-corrections]
+permissions:
+  contents: read
+jobs:
+  corrections:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -r requirements-desktop.txt
+      - run: python -m unittest tests.test_correction_store tests.test_correction_immediate tests.test_correction_adapter tests.test_legacy_wal tests.test_extract tests.test_self_and_docs tests.test_migrate_0214 tests.test_recall_regression
+      - run: python -m compileall -q memory_core backend
+      - run: node --check desktop/ui/app.js
