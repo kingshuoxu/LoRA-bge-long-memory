@@ -585,7 +585,24 @@ function recallTrace(extra) {
   return extra && extra.trace ? extra.trace : null;
 }
 
+function confirmedMemoryUsed(trace) {
+  return Boolean(trace && trace.authority === "confirmed_fact" && trace.fired);
+}
+
+function memoryUsed(trace) {
+  return Boolean(trace && (trace.mounted || confirmedMemoryUsed(trace)));
+}
+
+function confirmedMemoryLabel(trace) {
+  const facts = trace.matched_facts || [];
+  const fact = facts.map((item) => item.statement || item.value || item.attr).find(Boolean);
+  const sources = [...new Set(facts.flatMap((item) => item.source_conversations || []).map((item) => item.title).filter(Boolean))];
+  const label = fact ? t("chip.confirmedFact", { fact }) : t("chip.confirmed");
+  return sources.length ? `${label} · ${sources.join(t("list.sep"))}` : label;
+}
+
 function chipLabel(trace) {
+  if (confirmedMemoryUsed(trace)) return confirmedMemoryLabel(trace);
   const docChips = trace && trace.doc_chips;
   if (docChips && docChips.length) {
     const labels = [];
@@ -616,6 +633,7 @@ function chipLabel(trace) {
 }
 
 function chipTitle(trace) {
+  if (confirmedMemoryUsed(trace)) return `${confirmedMemoryLabel(trace)}\n${t("banner.confirmedDetail")}`;
   if (!trace || !advancedOn()) return "";
   const tau = trace.thresholds && trace.thresholds.router_tau;
   const scores = (trace.experts || []).map((item) => `${item.display_name || item.name} ${Number(item.sim).toFixed(3)}${item.considered ? "" : t("chip.notCompared")}`).join(" · ");
@@ -629,11 +647,12 @@ function recallChip(msg, extra) {
   const text = String(msg.content || "");
   if (text.includes("不在记忆里") || text.includes("还不知道") || text.includes("这件事不在记忆里") || text.includes("还没告诉过我") || text.includes("没提到") || text.includes("不记得") || text.includes("没记过")) return "";
   if (["memory_miss", "entity_grounded", "personal_unknown", "self_empty"].includes(trace.reason)) return "";
-  const idle = trace.mounted ? "" : " idle";
+  const idle = memoryUsed(trace) ? "" : " idle";
   return `<button type="button" class="recall-chip${idle}" data-recall="${esc(msg.id)}" title="${esc(chipTitle(trace))}">${esc(chipLabel(trace))}</button>`;
 }
 
 function bannerText(trace) {
+  if (confirmedMemoryUsed(trace)) return confirmedMemoryLabel(trace) + (advancedOn() ? ` · ${t("banner.confirmedDetail")}` : "");
   if (!trace || !trace.mounted) return trace && trace.reason === "statement_ack" ? t("banner.ack") : t("banner.idle");
   const row = (trace.experts || []).find((item) => item.name === trace.mounted_expert);
   const matched = trace.matched_facts || [];
@@ -665,8 +684,8 @@ function showRecallBanner(trace) {
     return;
   }
   banner.hidden = false;
-  banner.dataset.live = trace && trace.mounted ? "1" : "";
-  banner.classList.toggle("idle", !trace || !trace.mounted);
+  banner.dataset.live = memoryUsed(trace) ? "1" : "";
+  banner.classList.toggle("idle", !memoryUsed(trace));
   banner.textContent = bannerText(trace);
 }
 

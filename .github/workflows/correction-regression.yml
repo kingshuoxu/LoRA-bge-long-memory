@@ -21,3 +21,4 @@ jobs:
       - run: python -m unittest tests.test_correction_store tests.test_correction_immediate tests.test_correction_adapter tests.test_legacy_wal tests.test_extract tests.test_self_and_docs tests.test_migrate_0214 tests.test_recall_regression
       - run: python -m compileall -q memory_core backend
       - run: node --check desktop/ui/app.js
+      - run: node --test desktop/recall-ui.test.js
