@@ -717,11 +717,12 @@ class MemoryService:
             confirmed = confirmed_reply(self.home, content, self.expert_records)
             if confirmed is not None:
                 user_msg = self.convos.add_message(conv_id, "user", content)
-                decision = RouteDecision(False, confirmed["expert"], 1.0, "纠正", confirmed["reason"], True, True)
+                decision = RouteDecision(bool(confirmed["facts"]), confirmed["expert"], 1.0, "纠正", confirmed["reason"], True, bool(confirmed["facts"]))
                 recall = statement_trace()
                 recall.update({
                     "reason": confirmed["reason"], "expert": confirmed["expert"],
-                    "abstain": not bool(confirmed["facts"]), "mounted": False,
+                    "fired": bool(confirmed["facts"]), "abstain": not bool(confirmed["facts"]), "mounted": False,
+                    "authority": "confirmed_fact",
                     "matched_facts": matched_rows(confirmed["facts"]),
                     "reason_text": "回答采用已确认的当前事实，不使用旧适配器或旧检索结果",
                     "wording": "确认纠正后立即生效，训练不决定事实是否有效。",

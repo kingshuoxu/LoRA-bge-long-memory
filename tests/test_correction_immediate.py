@@ -61,6 +61,8 @@ class ImmediateCorrectionTests(unittest.TestCase):
             self.assertIn('Starport',result['assistant']['content'])
             self.assertNotIn('Qinglan',result['assistant']['content'])
             self.assertFalse(result['recall']['mounted'])
+            self.assertTrue(result['route']['fired'])
+            self.assertEqual(result['recall']['authority'], 'confirmed_fact')
             self.assertIn('Snow',self.ask(self.service,"What is Mira Chen's cat's name?")['assistant']['content'])
             with self.assertRaises(ServiceError):
                 self.ask(self.service,'What is the weather?')
