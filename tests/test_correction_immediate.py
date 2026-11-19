@@ -140,6 +140,31 @@ class ImmediateCorrectionTests(unittest.TestCase):
         self.service.delete_expert('expert_1000')
         self.assertEqual(active_corrections(self.home),[])
 
+    def test_no_extra_expert_scan_without_relevant_correction(self):
+        from memory_core.correction_reply import confirmed_reply
+        load=Mock(side_effect=AssertionError('no expert/tensor reads'))
+        self.assertIsNone(confirmed_reply(self.home,'Where does Mira Chen live?',load))
+        self.commit(fail=True)
+        self.assertIsNone(confirmed_reply(self.home,'What is the weather?',load))
+        self.assertIsNone(confirmed_reply(self.home,'Where does Elena Brooks live?',load))
+        load.assert_not_called()
+
+    def test_imported_old_document_cannot_override_fresh_chat_after_restart(self):
+        from memory_core.documents import import_document, load_indexed_docs
+        source=Path(self.temp.name)/'Mira.md'
+        source.write_text('# Mira Chen\n\nMira Chen lives in Qinglan.\n',encoding='utf-8')
+        import_document(self.home,source,embed=None,ask=None)
+        docs=load_indexed_docs(self.home)
+        self.assertTrue(docs)
+        self.assertIn('Qinglan',json.dumps(docs))
+        self.commit(fail=True)
+        reopened=self.open_service()
+        with patch.object(reopened,'_document_reply',side_effect=AssertionError('stale retrieval must not run')):
+            answer=self.ask(reopened,'Where does Mira Chen live?')['assistant']['content']
+        self.assertIn('Starport',answer)
+        self.assertNotIn('Qinglan',answer)
+        self.assertIn('Qinglan',json.dumps(load_indexed_docs(self.home)))
+
     def test_false_conversation_provenance_rejected(self):
         with self.assertRaises(ServiceError):
             self.service.commit_correction(self.proposal, self.original['id'])

@@ -714,7 +714,7 @@ class MemoryService:
 
         # This path is independent of both model availability and a running worker.
         with self._lock:
-            confirmed = confirmed_reply(self.home, content, self.expert_records())
+            confirmed = confirmed_reply(self.home, content, self.expert_records)
             if confirmed is not None:
                 user_msg = self.convos.add_message(conv_id, "user", content)
                 decision = RouteDecision(False, confirmed["expert"], 1.0, "纠正", confirmed["reason"], True, True)

@@ -48,6 +48,7 @@ def confirmed_reply(home, content: str, records: list) -> dict | None:
         return None
     # A direct ledger fallback keeps a committed correction available even if
     # an interrupted adapter registration temporarily removed its directory.
+    records = records() if callable(records) else records
     by_name = {r.name: r for r in records}
     for row in related:
         if row["expert"] not in by_name:
