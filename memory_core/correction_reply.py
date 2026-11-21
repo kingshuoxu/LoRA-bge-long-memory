@@ -13,12 +13,37 @@ from memory_core.correction_store import active_corrections
 from memory_core.prompts import has_cjk
 
 
+# A timeline of beliefs/reports is not evidence of a timeline of real states.
+# Scope this guard to the historical clause, so an explicit past state can still
+# be followed by "now I know ...". Ambiguous sources default to correction.
+_HISTORY_REPORT = re.compile(
+    r"以为|认为|觉得|相信|听说|据说|听闻|记得|印象|猜|推测|估计|记录|记载|资料|"
+    r"\b(?:think|thought|believ(?:e|ed)|assum(?:e|ed)|suppos(?:e|ed)|"
+    r"guess(?:ed)?|suspect(?:ed)?|understood|remember(?:ed)?|heard|told|"
+    r"report(?:ed|s)?|record(?:ed|s)?|apparently|allegedly)\b",
+    re.I,
+)
+_HISTORY_FRAME = re.compile(
+    r"(?:以前|过去|原来).*?(?P<zh_now>现在|如今|搬到)|"
+    r"\b(?:used to|previously|formerly)\b.*?\b(?P<en_now>now)\b",
+    re.I,
+)
+_CORRECTION_MARKER = re.compile(
+    r"错|纠正|更正|不对|从未|从来没|从没|从不|never|incorrect|mistak|wrong|"
+    r"correct(?:ed|ion)|\bnot\b", re.I,
+)
+
+
 def correction_kind(source: str, old: str, new: str) -> str:
     # Never infer a true historical state merely from the superseded row.
-    if old in source and new in source and (
-        re.search(r"(?:以前|过去|原来).*(?:现在|如今|搬到)", source)
-        or re.search(r"\b(?:used to|previously|formerly)\b.*\bnow\b", source, re.I)
-    ) and not re.search(r"错|纠正|更正|不对|从未|从来没|从没|从不|never|incorrect|mistak|wrong|correct(?:ed|ion)|\bnot\b", source, re.I):
+    if not old or not new or old == new or _CORRECTION_MARKER.search(source):
+        return "correction"
+    frame = _HISTORY_FRAME.search(source)
+    if frame is None:
+        return "correction"
+    transition = frame.start("zh_now") if frame.group("zh_now") else frame.start("en_now")
+    historical, current = source[:transition], source[transition:]
+    if old in historical and new in current and not _HISTORY_REPORT.search(historical):
         return "state_change"
     return "correction"
 
