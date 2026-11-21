@@ -95,6 +95,75 @@ class ImmediateCorrectionTests(unittest.TestCase):
         reply=self.ask(self.service,'Where did Mira Chen live previously?')['assistant']['content']
         self.assertEqual(reply,'Previously Qinglan; now Starport.')
 
+    def _assert_belief_correction(self, chinese=False):
+        source = ('我以前以为沈星河住青岚镇，现在知道他住星港' if chinese else
+                  'I used to think Mira Chen lived in Qinglan; now I know she lives in Starport')
+        old, new = ('青岚镇', '星港') if chinese else ('Qinglan', 'Starport')
+        current_q = '沈星河住在哪里？' if chinese else 'Where does Mira Chen live?'
+        history_q = '沈星河以前住在哪里？' if chinese else 'Where did Mira Chen live previously?'
+        disclaimer = '不能据此认定它曾经属实' if chinese else 'not confirmed as a past fact'
+        if chinese:
+            path = self.service.experts_dir/'expert_1000'/'fact_memory.json'
+            memory = read_json(path)
+            memory['entities'] = ['沈星河']
+            memory['facts'][0] = dict(expand_training_fact(dict(
+                entity='沈星河', attr='住址', value=old, answer=old,
+                statement='沈星河住青岚镇。', question=current_q)),
+                id='expert_1000-f1', source_conversations=[self.original])
+            atomic_write_json(path, memory)
+        self.proposal.update(new_value=new, source_text=source)
+        self.service.convos.add_message(self.correction['id'], 'user', source)
+        job = self.commit()  # Worker spawn mocked: no retraining has run.
+        self.assertEqual(job['status'], 'running')
+        row = active_corrections(self.home)[0]
+        self.assertEqual(row['new_fact']['correction_kind'], 'correction')
+        self.assertEqual(row['new_fact']['raw'], source)
+        self.assertEqual(row['new_fact']['source_conversations'][0]['id'], self.correction['id'])
+        self.assertEqual(row['new_fact']['original_source_conversations'][0]['id'], self.original['id'])
+        for service in (self.service, self.open_service()):
+            with patch.object(service, 'job_running', return_value=True):
+                current = self.ask(service, current_q)
+                self.assertIn(new, current['assistant']['content'])
+                self.assertNotIn(old, current['assistant']['content'])
+                self.assertEqual(current['recall']['authority'], 'confirmed_fact')
+                historical = self.ask(service, history_q)
+                self.assertIn(disclaimer, historical['assistant']['content'])
+                self.assertIn(new, historical['assistant']['content'])
+        # A fresh interpreter must preserve both classification and source trace.
+        import os, subprocess, sys, memory_core
+        code = """import json, sys
+from pathlib import Path
+from unittest.mock import Mock
+from memory_core.service import MemoryService
+from memory_core.correction_store import active_corrections
+s=MemoryService(home=Path(sys.argv[1]),models_dir=Path(sys.argv[2]),use_repo_experts=False,device='cpu')
+s.chat.ensure=Mock(side_effect=AssertionError('no models'))
+s.ensure_ready=Mock(side_effect=AssertionError('no models'))
+answers=[]
+for question in sys.argv[3:]:
+ c=s.create_conversation('restart question')
+ answers.append(s.send_message(c['id'],question)['assistant']['content'])
+print(json.dumps({'answers':answers,'fact':active_corrections(Path(sys.argv[1]))[0]['new_fact']},ensure_ascii=False))
+s.convos.close()
+"""
+        env = dict(os.environ, PYTHONPATH=str(Path(memory_core.__file__).resolve().parent.parent))
+        result = subprocess.run([sys.executable, '-c', code, str(self.home), str(self.models),
+                                 current_q, history_q], cwd=self.temp.name, env=env,
+                                capture_output=True, text=True, check=True)
+        persisted = json.loads(result.stdout)
+        self.assertIn(new, persisted['answers'][0])
+        self.assertNotIn(old, persisted['answers'][0])
+        self.assertIn(disclaimer, persisted['answers'][1])
+        self.assertEqual(persisted['fact']['correction_kind'], 'correction')
+        self.assertEqual(persisted['fact']['raw'], source)
+        self.assertEqual(persisted['fact']['source_conversations'][0]['id'], self.correction['id'])
+
+    def test_english_belief_correction_before_training_and_process_restart(self):
+        self._assert_belief_correction()
+
+    def test_chinese_belief_correction_before_training_and_process_restart(self):
+        self._assert_belief_correction(chinese=True)
+
     def test_missing_adapter_still_has_authoritative_fact(self):
         self.commit(fail=True)
         (self.service.experts_dir/'expert_1000'/'router_key.pt').unlink()
