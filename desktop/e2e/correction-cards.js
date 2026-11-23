@@ -2,12 +2,14 @@
 // Does not load model weights or train; this tests click-to-request binding.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { _electron: electron } = require("playwright");
 
 const desktop = path.resolve(__dirname, "..");
 const binary = path.join(desktop, "dist", "linux-unpacked", "lora-bge-memory");
+const packagedUi = path.join(path.dirname(binary), "resources", "ui");
 const conversation = { id: "same-fact-chat", title: "Correction fixture" };
 const proposals = ["Starport", "Newhaven"].map((value) => ({
   expert: "expert_fixture",
@@ -41,18 +43,92 @@ async function bounded(label, ms, run) {
   }
 }
 
+async function startFixture() {
+  const requests = [];
+  let rejectCommit = true;
+  let releaseCommit;
+  const held = new Promise((resolve) => { releaseCommit = resolve; });
+  const responses = {
+    "/api/settings": { locale: "en" },
+    "/api/health": { device: "cpu", models: { state: "ready" } },
+    "/api/conversations": { conversations: [conversation] },
+    [`/api/conversations/${conversation.id}`]: { ...conversation, messages },
+    "/api/nebula": { facts: [], experts: [], conversations: [] },
+    "/api/pending": { pending: [] },
+  };
+  const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
+    ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2" };
+  const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url, "http://127.0.0.1").pathname;
+    const json = (status, body) => {
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (pathname === "/api/corrections/commit" && req.method === "POST") {
+      let raw = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => { raw += chunk; });
+      req.on("end", () => {
+        try { requests.push(JSON.parse(raw)); }
+        catch (error) { json(400, { error: "Invalid fixture request" }); return; }
+        log(`observed correction POST #${requests.length}`);
+        if (rejectCommit) {
+          void held.then(() => json(409, { error: "Fixture: stale correction" }));
+        } else {
+          json(200, { job: { id: "fixture-job", status: "done" } });
+        }
+      });
+      return;
+    }
+    if (pathname.startsWith("/api/")) {
+      json(200, responses[pathname] || {});
+      return;
+    }
+    const relative = pathname === "/" ? "index.html" : pathname.slice(1);
+    if (!relative.split("/").every((part) => /^[\w.-]+$/.test(part) && part !== "..")) {
+      res.writeHead(404).end();
+      return;
+    }
+    const file = path.join(packagedUi, relative);
+    fs.readFile(file, (error, bytes) => {
+      if (error) { res.writeHead(404).end(); return; }
+      if (relative === "index.html") log("served packaged index.html");
+      res.writeHead(200, { "Content-Type": types[path.extname(file)] || "application/octet-stream" });
+      res.end(bytes);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return {
+    url: `http://127.0.0.1:${server.address().port}/`,
+    requests,
+    releaseCommit,
+    allowCommit: () => { rejectCommit = false; },
+    close: () => {
+      releaseCommit();
+      server.close();
+      server.closeAllConnections();
+    },
+  };
+}
+
 async function main() {
   fs.accessSync(binary, fs.constants.X_OK); // Deliberately no source fallback.
+  fs.accessSync(path.join(packagedUi, "app.js"), fs.constants.R_OK);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "yingyu-card-e2e-"));
   let app;
-  let releaseCommit = () => {};
-  let phase = "launch packaged Electron";
+  let fixture;
+  let phase = "start fixture HTTP server";
   function next(label) {
     phase = label;
     log(label);
   }
   try {
     next(phase);
+    fixture = await bounded("start fixture HTTP server", 5000, startFixture);
+    next("launch packaged Electron");
     app = await electron.launch({
       executablePath: binary,
       args: ["--no-sandbox", "--disable-gpu", `--user-data-dir=${home}`],
@@ -69,34 +145,13 @@ async function main() {
     const packaged = await bounded("app.isPackaged", 10000,
       () => app.evaluate(({ app: electronApp }) => electronApp.isPackaged));
     assert.equal(packaged, true);
-    const requests = [];
-    let rejectCommit = true;
-    const held = new Promise((resolve) => { releaseCommit = resolve; });
-    next("install fixture routes");
-    await page.route("**/api/**", async (route) => {
-      const pathname = new URL(route.request().url()).pathname;
-      const responses = {
-        "/api/settings": { locale: "en" },
-        "/api/health": { device: "cpu", models: { state: "ready" } },
-        "/api/conversations": { conversations: [conversation] },
-        [`/api/conversations/${conversation.id}`]: { ...conversation, messages },
-        "/api/nebula": { facts: [], experts: [], conversations: [] },
-        "/api/pending": { pending: [] },
-      };
-      if (pathname === "/api/corrections/commit") {
-        assert.equal(route.request().method(), "POST");
-        requests.push(route.request().postDataJSON());
-        log(`observed correction POST #${requests.length}`);
-        if (rejectCommit) {
-          await held;
-          return route.fulfill({ status: 409, json: { error: "Fixture: stale correction" } });
-        }
-        return route.fulfill({ json: { job: { id: "fixture-job", status: "done" } } });
-      }
-      return route.fulfill({ json: responses[pathname] || {} });
-    });
-    next("reload the window with fixtures");
-    await page.reload({ waitUntil: "domcontentloaded" });
+    const { requests } = fixture;
+    next("navigate the packaged window to the isolated fixture");
+    await bounded("start packaged window navigation", 10000, () =>
+      app.evaluate(({ BrowserWindow }, url) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        void win.loadURL(url).catch((error) => console.error(error));
+      }, fixture.url));
     next("wait for both confirmation cards");
     const cards = proposals.map((_, i) => page.locator(`[data-msg="card-${i}"] [data-confirm-correction]`));
     for (let i = 0; i < cards.length; i++) {
@@ -104,20 +159,21 @@ async function main() {
       const body = await page.locator(`[data-msg="card-${i}"] .proposal`).innerText();
       assert.ok(body.includes(proposals[i].new_statement));
     }
+    assert.equal(page.url(), fixture.url);
 
     next("click the first card and check a duplicate click");
     await cards[0].click();
     await page.waitForFunction(() => document.querySelector('[data-msg="card-0"] button').disabled);
     // Simulate a redundant handler invocation while the original request is pending.
     await cards[0].evaluate((button) => { void button.onclick(); });
-    releaseCommit();
+    fixture.releaseCommit();
     next("check stale-response handling and first request");
     await page.getByText("Fixture: stale correction", { exact: true }).waitFor();
     assert.deepEqual(requests, [{ proposal: proposals[0], conversation_id: conversation.id }]);
     assert.equal(await cards[0].isEnabled(), true);
 
     next("click the second card and check both requests");
-    rejectCommit = false;
+    fixture.allowCommit();
     await cards[1].click();
     await page.locator("#consolidate-view").waitFor({ state: "visible" });
     assert.deepEqual(requests, proposals.map((proposal) => ({ proposal, conversation_id: conversation.id })));
@@ -126,7 +182,7 @@ async function main() {
     console.error(`[correction-cards] Failed at: ${phase}`, error);
     process.exitCode = 1;
   } finally {
-    releaseCommit();
+    fixture?.close();
     if (app) {
       next("close Electron");
       try {
@@ -135,6 +191,7 @@ async function main() {
         console.error("[correction-cards] Cleanup failed:", error);
         process.exitCode = 1;
         app.process().kill("SIGKILL");
+        process.exit(1);
       }
     }
     fs.rmSync(home, { recursive: true, force: true });
