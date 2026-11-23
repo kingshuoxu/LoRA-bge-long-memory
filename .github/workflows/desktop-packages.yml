@@ -177,6 +177,7 @@ jobs:
 
       - name: Packaged correction cards submit their own proposals (Linux)
         if: runner.os == 'Linux'
+        timeout-minutes: 5
         working-directory: desktop
         run: xvfb-run -a node e2e/correction-cards.js
 

@@ -23,11 +23,36 @@ const messages = proposals.flatMap((proposal, i) => [
     extra: JSON.stringify({ kind: "correction_proposal", proposal }) },
 ]);
 
+function log(message) {
+  console.log(`[correction-cards] ${message}`);
+}
+
+async function bounded(label, ms, run) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(run),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out: ${label}`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main() {
   fs.accessSync(binary, fs.constants.X_OK); // Deliberately no source fallback.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "yingyu-card-e2e-"));
   let app;
+  let releaseCommit = () => {};
+  let phase = "launch packaged Electron";
+  function next(label) {
+    phase = label;
+    log(label);
+  }
   try {
+    next(phase);
     app = await electron.launch({
       executablePath: binary,
       args: ["--no-sandbox", "--disable-gpu", `--user-data-dir=${home}`],
@@ -35,14 +60,19 @@ async function main() {
       env: { ...process.env, LORA_MEMORY_HOME: home, LORA_MEMORY_PORT: "0", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" },
       timeout: 120000,
     });
-    const packaged = await app.evaluate(({ app: electronApp }) => electronApp.isPackaged);
-    assert.equal(packaged, true);
+    next("wait for the first window");
     const page = await app.firstWindow({ timeout: 120000 });
-    page.setDefaultTimeout(30000);
+    page.setDefaultTimeout(20000);
+    page.setDefaultNavigationTimeout(20000);
+    page.on("pageerror", (error) => console.error("[correction-cards] renderer error:", error));
+    next("verify the executable is packaged");
+    const packaged = await bounded("app.isPackaged", 10000,
+      () => app.evaluate(({ app: electronApp }) => electronApp.isPackaged));
+    assert.equal(packaged, true);
     const requests = [];
     let rejectCommit = true;
-    let releaseCommit;
     const held = new Promise((resolve) => { releaseCommit = resolve; });
+    next("install fixture routes");
     await page.route("**/api/**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       const responses = {
@@ -56,6 +86,7 @@ async function main() {
       if (pathname === "/api/corrections/commit") {
         assert.equal(route.request().method(), "POST");
         requests.push(route.request().postDataJSON());
+        log(`observed correction POST #${requests.length}`);
         if (rejectCommit) {
           await held;
           return route.fulfill({ status: 409, json: { error: "Fixture: stale correction" } });
@@ -64,7 +95,9 @@ async function main() {
       }
       return route.fulfill({ json: responses[pathname] || {} });
     });
-    await page.reload();
+    next("reload the window with fixtures");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    next("wait for both confirmation cards");
     const cards = proposals.map((_, i) => page.locator(`[data-msg="card-${i}"] [data-confirm-correction]`));
     for (let i = 0; i < cards.length; i++) {
       await cards[i].waitFor({ state: "visible" });
@@ -72,23 +105,40 @@ async function main() {
       assert.ok(body.includes(proposals[i].new_statement));
     }
 
+    next("click the first card and check a duplicate click");
     await cards[0].click();
     await page.waitForFunction(() => document.querySelector('[data-msg="card-0"] button').disabled);
     // Simulate a redundant handler invocation while the original request is pending.
     await cards[0].evaluate((button) => { void button.onclick(); });
     releaseCommit();
+    next("check stale-response handling and first request");
     await page.getByText("Fixture: stale correction", { exact: true }).waitFor();
     assert.deepEqual(requests, [{ proposal: proposals[0], conversation_id: conversation.id }]);
     assert.equal(await cards[0].isEnabled(), true);
 
+    next("click the second card and check both requests");
     rejectCommit = false;
     await cards[1].click();
     await page.locator("#consolidate-view").waitFor({ state: "visible" });
     assert.deepEqual(requests, proposals.map((proposal) => ({ proposal, conversation_id: conversation.id })));
     console.log("PACKAGED_CORRECTION_CARDS_OK: exact proposals and sources, stale error, duplicate suppression");
+  } catch (error) {
+    console.error(`[correction-cards] Failed at: ${phase}`, error);
+    process.exitCode = 1;
   } finally {
-    if (app) await app.close();
+    releaseCommit();
+    if (app) {
+      next("close Electron");
+      try {
+        await bounded("close Electron", 10000, () => app.close());
+      } catch (error) {
+        console.error("[correction-cards] Cleanup failed:", error);
+        process.exitCode = 1;
+        app.process().kill("SIGKILL");
+      }
+    }
     fs.rmSync(home, { recursive: true, force: true });
+    log("cleanup completed");
   }
 }
 
