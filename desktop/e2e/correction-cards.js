@@ -35,7 +35,7 @@ async function main() {
       env: { ...process.env, LORA_MEMORY_HOME: home, LORA_MEMORY_PORT: "0", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" },
       timeout: 120000,
     });
-    const packaged = await app.evaluate(() => require("electron").app.isPackaged);
+    const packaged = await app.evaluate(({ app: electronApp }) => electronApp.isPackaged);
     assert.equal(packaged, true);
     const page = await app.firstWindow({ timeout: 120000 });
     page.setDefaultTimeout(30000);
