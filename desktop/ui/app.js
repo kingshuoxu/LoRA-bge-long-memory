@@ -769,21 +769,27 @@ async function openConversation(id, switchView, revealId) {
   }
   box.querySelectorAll("[data-confirm-correction]").forEach((button) => {
     button.onclick = async () => {
-      const bubble = button.closest(".bubble");
-      const messages = conv.messages.filter((msg) => parseExtra(msg) && parseExtra(msg).proposal && parseExtra(msg).proposal.fact_id === button.dataset.confirmCorrection);
-      const extra = messages.length ? parseExtra(messages[messages.length - 1]) : null;
-      if (!extra) return;
+      if (button.disabled || !box.contains(button) || state.currentId !== id) return;
+      const messageId = button.closest(".bubble.assistant[data-msg]")?.dataset.msg;
+      const message = messageId && conv.messages.find((msg) => msg.role === "assistant" && String(msg.id) === messageId);
+      const extra = parseExtra(message);
+      if (extra?.kind !== "correction_proposal" || !extra.proposal
+          || String(extra.proposal.fact_id) !== button.dataset.confirmCorrection) return;
+      button.disabled = true;
+      let data;
       try {
-        const data = await api("/api/corrections/commit", {
+        data = await api("/api/corrections/commit", {
           method: "POST",
           body: JSON.stringify({ proposal: extra.proposal, conversation_id: id }),
         });
-        state.job = data.job;
-        state.preview = null;
-        await openConsolidate();
       } catch (error) {
+        button.disabled = false;
         showError(error);
+        return;
       }
+      state.job = data.job;
+      state.preview = null;
+      await openConsolidate().catch(showError);
     };
   });
   box.querySelectorAll("[data-recall]").forEach((button) => {

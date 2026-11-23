@@ -175,6 +175,11 @@ jobs:
         working-directory: desktop
         run: npm install --no-save playwright
 
+      - name: Packaged correction cards submit their own proposals (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: xvfb-run -a node e2e/correction-cards.js
+
       - name: Desktop UI end to end
         if: runner.os == 'Linux'
         working-directory: desktop

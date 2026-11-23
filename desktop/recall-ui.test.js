@@ -35,3 +35,69 @@ for (const locale of ['zh-CN', 'en']) {
     }
   });
 }
+
+test('same-fact correction cards submit only the clicked proposal and source', async () => {
+  const app = fs.readFileSync(path.join(__dirname, 'ui/app.js'), 'utf8');
+  const proposal = (value) => ({
+    fact_id: 'shared-fact', new_value: value, source_text: `Mira lives in ${value}.`,
+  });
+  const makeMessage = (id, value) => ({
+    id, role: 'assistant', content: 'Correction suggested.',
+    extra: JSON.stringify({ kind: 'correction_proposal', proposal: proposal(value) }),
+  });
+  const conv = { title: 'Synthetic corrections', messages: [makeMessage('old', 'Starport'), makeMessage('new', 'Newhaven')] };
+  const makeButton = (id, fact = 'shared-fact') => ({
+    disabled: false, dataset: { confirmCorrection: fact },
+    closest: () => id ? { dataset: { msg: id } } : null,
+  });
+  const oldCard = makeButton('old');
+  const newCard = makeButton('new');
+  const badCards = [makeButton(null), makeButton('missing'), makeButton('old', 'wrong-fact')];
+  const buttons = [oldCard, newCard, ...badCards];
+  const box = {
+    contains: (button) => buttons.includes(button),
+    querySelectorAll: (selector) => selector === '[data-confirm-correction]' ? buttons : [],
+  };
+  const requests = [];
+  const errors = [];
+  const state = { view: 'chat' };
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const ctx = vm.createContext({
+    state, $: (id) => id === 'messages' ? box : {}, tx: (value) => value, t: (key) => key,
+    esc: String, advancedOn: () => false, proposalCard: () => '', recallChip: () => '',
+    renderConversations() {}, openConsolidate: async () => {}, showError: (error) => errors.push(error.message),
+    api: async (url, options) => {
+      if (url === '/api/conversations/fixture') return conv;
+      assert.equal(url, '/api/corrections/commit');
+      assert.equal(options.method, 'POST');
+      requests.push(JSON.parse(options.body));
+      if (requests.length === 2) {
+        await held;
+        throw new Error('stale correction');
+      }
+      return { job: { id: 'job' } };
+    },
+  });
+  vm.runInContext(app.slice(app.indexOf('function parseExtra('), app.indexOf('function formatEta(')), ctx);
+  vm.runInContext(app.slice(app.indexOf('async function openConversation('), app.indexOf('async function loadMemory(')), ctx);
+
+  await ctx.openConversation('fixture', false);
+  await oldCard.onclick();
+  assert.deepEqual(requests, [{ proposal: proposal('Starport'), conversation_id: 'fixture' }]);
+  assert.equal(oldCard.disabled, true);
+  await oldCard.onclick();
+  for (const button of badCards) await button.onclick();
+  state.currentId = 'different conversation';
+  await newCard.onclick();
+  state.currentId = 'fixture';
+  assert.equal(requests.length, 1);
+  const pending = newCard.onclick();
+  await newCard.onclick();
+  assert.equal(newCard.disabled, true);
+  release();
+  await pending;
+  assert.equal(newCard.disabled, false);
+  assert.deepEqual(errors, ['stale correction']);
+  assert.deepEqual(requests, ['Starport', 'Newhaven'].map((value) => ({ proposal: proposal(value), conversation_id: 'fixture' })));
+});
