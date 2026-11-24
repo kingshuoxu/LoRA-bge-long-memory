@@ -10,6 +10,7 @@ const { _electron: electron } = require("playwright");
 const desktop = path.resolve(__dirname, "..");
 const binary = path.join(desktop, "dist", "linux-unpacked", "lora-bge-memory");
 const packagedUi = path.join(path.dirname(binary), "resources", "ui");
+const evidenceDir = path.join(desktop, "e2e-shots", "correction-cards");
 const conversation = { id: "same-fact-chat", title: "Correction fixture" };
 const proposals = ["Starport", "Newhaven"].map((value) => ({
   expert: "expert_fixture",
@@ -71,7 +72,7 @@ async function startFixture() {
       req.on("end", () => {
         try { requests.push(JSON.parse(raw)); }
         catch (error) { json(400, { error: "Invalid fixture request" }); return; }
-        log(`observed correction POST #${requests.length}`);
+        log(`observed correction POST #${requests.length}: ${JSON.stringify(requests.at(-1))}`);
         if (rejectCommit) {
           void held.then(() => json(409, { error: "Fixture: stale correction" }));
         } else {
@@ -120,6 +121,8 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "yingyu-card-e2e-"));
   let app;
   let fixture;
+  let page;
+  fs.mkdirSync(evidenceDir, { recursive: true });
   let phase = "start fixture HTTP server";
   function next(label) {
     phase = label;
@@ -136,8 +139,9 @@ async function main() {
       env: { ...process.env, LORA_MEMORY_HOME: home, LORA_MEMORY_PORT: "0", HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" },
       timeout: 120000,
     });
+    app.process().stderr.on("data", (chunk) => process.stderr.write(chunk));
     next("wait for the first window");
-    const page = await app.firstWindow({ timeout: 120000 });
+    page = await app.firstWindow({ timeout: 120000 });
     page.setDefaultTimeout(20000);
     page.setDefaultNavigationTimeout(20000);
     page.on("pageerror", (error) => console.error("[correction-cards] renderer error:", error));
@@ -146,12 +150,13 @@ async function main() {
       () => app.evaluate(({ app: electronApp }) => electronApp.isPackaged));
     assert.equal(packaged, true);
     const { requests } = fixture;
+    // firstWindow resolves before main.js's awaited initial loadURL finishes.
+    // Interrupting it raises ERR_ABORTED and opens a blocking native error box.
+    next("wait for the original backend page to finish loading");
+    await page.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\//, { waitUntil: "load" });
+    log(`initial backend page loaded: ${page.url()}`);
     next("navigate the packaged window to the isolated fixture");
-    await bounded("start packaged window navigation", 10000, () =>
-      app.evaluate(({ BrowserWindow }, url) => {
-        const win = BrowserWindow.getAllWindows()[0];
-        void win.loadURL(url).catch((error) => console.error(error));
-      }, fixture.url));
+    await page.goto(fixture.url, { waitUntil: "load" });
     next("wait for both confirmation cards");
     const cards = proposals.map((_, i) => page.locator(`[data-msg="card-${i}"] [data-confirm-correction]`));
     for (let i = 0; i < cards.length; i++) {
@@ -160,6 +165,7 @@ async function main() {
       assert.ok(body.includes(proposals[i].new_statement));
     }
     assert.equal(page.url(), fixture.url);
+    await page.screenshot({ path: path.join(evidenceDir, "01-two-cards.png") });
 
     next("click the first card and check a duplicate click");
     await cards[0].click();
@@ -171,16 +177,31 @@ async function main() {
     await page.getByText("Fixture: stale correction", { exact: true }).waitFor();
     assert.deepEqual(requests, [{ proposal: proposals[0], conversation_id: conversation.id }]);
     assert.equal(await cards[0].isEnabled(), true);
+    await page.screenshot({ path: path.join(evidenceDir, "02-first-card-stale.png") });
 
     next("click the second card and check both requests");
     fixture.allowCommit();
+    const secondButton = await cards[1].elementHandle();
     await cards[1].click();
     await page.locator("#consolidate-view").waitFor({ state: "visible" });
     assert.deepEqual(requests, proposals.map((proposal) => ({ proposal, conversation_id: conversation.id })));
+    await secondButton.evaluate((button) => button.onclick());
+    assert.deepEqual(requests, proposals.map((proposal) => ({ proposal, conversation_id: conversation.id })));
+    await page.screenshot({ path: path.join(evidenceDir, "03-second-card-accepted.png") });
+    fs.writeFileSync(path.join(evidenceDir, "requests.json"), JSON.stringify({
+      packaged, requests, pendingDuplicateSuppressed: true, acceptedDuplicateSuppressed: true,
+      scope: "Real packaged Electron UI clicks; synthetic HTTP API; no model generation or persistence",
+    }, null, 2));
     console.log("PACKAGED_CORRECTION_CARDS_OK: exact proposals and sources, stale error, duplicate suppression");
   } catch (error) {
     console.error(`[correction-cards] Failed at: ${phase}`, error);
     process.exitCode = 1;
+    if (page) {
+      log(`failure URL: ${page.url()}`);
+      await bounded("failure screenshot", 3000, () =>
+        page.screenshot({ path: path.join(evidenceDir, "failure.png"), timeout: 2500 })
+      ).catch((captureError) => console.error(captureError.message));
+    }
   } finally {
     fixture?.close();
     if (app) {

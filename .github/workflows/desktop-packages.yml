@@ -181,6 +181,15 @@ jobs:
         working-directory: desktop
         run: xvfb-run -a node e2e/correction-cards.js
 
+      - name: Upload correction card evidence (Linux)
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: correction-cards-linux-${{ github.sha }}
+          path: desktop/e2e-shots/correction-cards/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Desktop UI end to end
         if: runner.os == 'Linux'
         working-directory: desktop
