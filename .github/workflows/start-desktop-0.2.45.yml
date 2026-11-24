@@ -1,0 +1,77 @@
+name: Start desktop 0.2.45 release
+on:
+  push:
+    branches: [ops/release-desktop-0.2.45-e1bd12a]
+    paths: [.github/workflows/start-desktop-0.2.45.yml]
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: start-desktop-0.2.45
+  cancel-in-progress: false
+jobs:
+  start:
+    if: github.repository == 'kingshuoxu/LoRA-bge-long-memory'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify exact merged source and dispatch existing release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, time, urllib.request, urllib.error
+          repo = "kingshuoxu/LoRA-bge-long-memory"
+          target = "e1bd12a3eeac63b79e031172f6d11d859ba8e8d5"
+          tested = "e5d09f5e94ead9ce65d022bb3f04656e015c0af6"
+          tag = "desktop-v0.2.45"
+          base = "https://api.github.com/repos/" + repo + "/"
+          def api(path, data=None, missing=False):
+              req = urllib.request.Request(base + path,
+                  data=None if data is None else json.dumps(data).encode(),
+                  headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                           "Accept": "application/vnd.github+json",
+                           "X-GitHub-Api-Version": "2022-11-28",
+                           "Content-Type": "application/json"})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as response:
+                      raw = response.read()
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as error:
+                  if missing and error.code == 404:
+                      return None
+                  raise
+          assert api("git/ref/heads/main")["object"]["sha"] == target, "main changed"
+          pr = api("pulls/16")
+          assert pr["merged"] and pr["merge_commit_sha"] == target
+          tree = api("git/commits/" + target)["tree"]["sha"]
+          assert tree == api("git/commits/" + tested)["tree"]["sha"], "tested tree differs"
+          package = api("contents/desktop/package.json?ref=" + target)
+          assert json.loads(base64.b64decode(package["content"]))["version"] == "0.2.45"
+          for run_id in (45317822468, 45317822501):
+              run = api("actions/runs/" + str(run_id))
+              assert run["head_sha"] == tested and run["conclusion"] == "success", run_id
+          assert api("releases/tags/" + tag, missing=True) is None, "release already exists; do not overwrite"
+          ref = api("git/ref/tags/" + tag, missing=True)
+          if ref is None:
+              ref = api("git/refs", {"ref": "refs/tags/" + tag, "sha": target})
+          assert ref["object"]["type"] == "commit" and ref["object"]["sha"] == target, "tag differs; do not move"
+          print("Verified tag", tag, "->", target, flush=True)
+          path = "actions/workflows/desktop-packages.yml/runs?event=workflow_dispatch&branch=" + tag
+          existing = api(path)["workflow_runs"]
+          matching = [run for run in existing if run["head_sha"] == target]
+          if matching:
+              print("Existing release run:", matching[0]["html_url"], flush=True)
+          else:
+              api("actions/workflows/desktop-packages.yml/dispatches", {"ref": tag})
+              for attempt in range(20):
+                  runs = api(path)["workflow_runs"]
+                  matching = [run for run in runs if run["head_sha"] == target]
+                  if matching:
+                      break
+                  time.sleep(3)
+              assert matching, "Dispatch accepted; run not yet visible. Check before retrying."
+              print("Started release run:", matching[0]["html_url"], flush=True)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("Exact source: " + target + "\n\nTag: " + tag + "\n\nRelease workflow: " + matching[0]["html_url"] + "\n")
+          PY
