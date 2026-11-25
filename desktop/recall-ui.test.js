@@ -62,14 +62,20 @@ test('same-fact correction cards submit only the clicked proposal and source', a
   const requests = [];
   const errors = [];
   const state = { view: 'chat' };
+  let consolidations = 0;
+  let jobBarRenders = 0;
   let release;
   const held = new Promise((resolve) => { release = resolve; });
+  let releaseSuccess;
+  const heldSuccess = new Promise((resolve) => { releaseSuccess = resolve; });
   const ctx = vm.createContext({
     state, $: (id) => id === 'messages' ? box : {}, tx: (value) => value, t: (key) => key,
     esc: String, advancedOn: () => false, proposalCard: () => '', recallChip: () => '',
-    renderConversations() {}, openConsolidate: async () => {}, showError: (error) => errors.push(error.message),
+    renderConversations() {}, renderJobBar: () => jobBarRenders++,
+    openConsolidate: async () => { consolidations++; }, showError: (error) => errors.push(error.message),
     api: async (url, options) => {
       if (url === '/api/conversations/fixture') return conv;
+      if (url === '/api/conversations/other') return { title: 'Other', messages: [] };
       assert.equal(url, '/api/corrections/commit');
       assert.equal(options.method, 'POST');
       requests.push(JSON.parse(options.body));
@@ -77,16 +83,19 @@ test('same-fact correction cards submit only the clicked proposal and source', a
         await held;
         throw new Error('stale correction');
       }
-      return { job: { id: 'job' } };
+      if (requests.length === 3) await heldSuccess;
+      return { job: { id: `job-${requests.length}` } };
     },
   });
   vm.runInContext(app.slice(app.indexOf('function parseExtra('), app.indexOf('function formatEta(')), ctx);
+  vm.runInContext(app.slice(app.indexOf('let navigationVersion = 0;'), app.indexOf('function setView(')), ctx);
   vm.runInContext(app.slice(app.indexOf('let conversationRequest = 0;'), app.indexOf('async function loadMemory(')), ctx);
 
   await ctx.openConversation('fixture', false);
   await oldCard.onclick();
   assert.deepEqual(requests, [{ proposal: proposal('Starport'), conversation_id: 'fixture' }]);
   assert.equal(oldCard.disabled, true);
+  assert.equal(consolidations, 1);
   await oldCard.onclick();
   for (const button of badCards) await button.onclick();
   state.currentId = 'different conversation';
@@ -101,4 +110,14 @@ test('same-fact correction cards submit only the clicked proposal and source', a
   assert.equal(newCard.disabled, false);
   assert.deepEqual(errors, ['stale correction']);
   assert.deepEqual(requests, ['Starport', 'Newhaven'].map((value) => ({ proposal: proposal(value), conversation_id: 'fixture' })));
+
+  const successful = newCard.onclick();
+  await ctx.openConversation('other', false);
+  releaseSuccess();
+  await successful;
+  assert.deepEqual(requests[2], { proposal: proposal('Newhaven'), conversation_id: 'fixture' });
+  assert.equal(state.currentId, 'other');
+  assert.equal(state.job.id, 'job-3');
+  assert.equal(consolidations, 1);
+  assert.equal(jobBarRenders, 2);
 });
