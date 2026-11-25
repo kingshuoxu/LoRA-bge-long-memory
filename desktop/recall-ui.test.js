@@ -56,6 +56,7 @@ test('same-fact correction cards submit only the clicked proposal and source', a
   const buttons = [oldCard, newCard, ...badCards];
   const box = {
     contains: (button) => buttons.includes(button),
+    querySelector: () => null, scrollTop: 0, scrollHeight: 0, clientHeight: 0,
     querySelectorAll: (selector) => selector === '[data-confirm-correction]' ? buttons : [],
   };
   const requests = [];
@@ -80,7 +81,7 @@ test('same-fact correction cards submit only the clicked proposal and source', a
     },
   });
   vm.runInContext(app.slice(app.indexOf('function parseExtra('), app.indexOf('function formatEta(')), ctx);
-  vm.runInContext(app.slice(app.indexOf('async function openConversation('), app.indexOf('async function loadMemory(')), ctx);
+  vm.runInContext(app.slice(app.indexOf('let conversationRequest = 0;'), app.indexOf('async function loadMemory(')), ctx);
 
   await ctx.openConversation('fixture', false);
   await oldCard.onclick();

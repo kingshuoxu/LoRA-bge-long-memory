@@ -65,9 +65,13 @@ async function assertAnswer(page, text) {
 
 async function send(page, text) {
   const input = page.locator("#input");
+  const confirmed = page.locator("#messages .bubble.user:not([data-pending-turn])");
+  const priorCount = await confirmed.count();
   await input.fill(text);
   await page.locator("#send").click();
-  await page.locator(".bubble.user", { hasText: text }).first().waitFor({ timeout: 20000 });
+  // A locally echoed message does not yet imply the backend accepted this
+  // turn, and a repeat question can match an earlier bubble.
+  await confirmed.nth(priorCount).waitFor({ timeout: 20000 });
 }
 
 async function main() {

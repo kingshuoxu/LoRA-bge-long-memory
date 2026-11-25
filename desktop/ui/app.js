@@ -9,6 +9,7 @@ const state = {
   preview: null,
   job: null,
   sending: false,
+  pendingTurn: null,
   nebula: null,
   nebulaData: null,
   star: null,
@@ -38,7 +39,11 @@ async function api(path, options = {}) {
     ...options,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || t("error.request"));
+  if (!res.ok) {
+    const error = new Error(data.error || t("error.request"));
+    error.status = res.status;
+    throw error;
+  }
   return data;
 }
 
@@ -88,6 +93,11 @@ function setView(view) {
   document.querySelectorAll(".nav").forEach((button) => button.classList.remove("active"));
   const nav = { chat: "nav-chat", consolidate: "nav-consolidate", nebula: "nav-nebula", memory: "memory-tab" }[view];
   if ($(nav)) $(nav).classList.add("active");
+  document.querySelectorAll(".nav").forEach((button) => {
+    if (button.id === nav) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  syncPendingTurn();
   const labels = { chat: "nav.chat", consolidate: "nav.consolidate", nebula: "nav.nebula", memory: "nav.memory" };
   $("eyebrow").textContent = t(labels[view] || "nav.chat");
   document.body.classList.toggle("sky-on", view === "nebula");
@@ -500,12 +510,15 @@ function renderLoss(trace) {
     </svg>`;
 }
 
-async function loadConversations() {
+async function loadConversations({ refreshChat = true } = {}) {
   const data = await api("/api/conversations");
   state.conversations = data.conversations;
   if (!state.currentId && state.conversations[0]) state.currentId = state.conversations[0].id;
   renderConversations();
-  if (state.view === "chat" && state.currentId) await openConversation(state.currentId, false);
+  if (refreshChat && state.view === "chat" && state.currentId) await openConversation(state.currentId, false);
+  else if (refreshChat && state.view === "chat" && !state.pendingTurn) {
+    $("messages").innerHTML = `<div class="empty">${esc(t("empty.chat"))}</div>`;
+  }
 }
 
 function dayKey(value) {
@@ -534,6 +547,8 @@ function visibleConversations() {
 
 function renderConversations() {
   const root = $("conv-list");
+  const offset = root.scrollTop;
+  const focused = root.contains(document.activeElement) ? document.activeElement.dataset : null;
   const conversations = visibleConversations();
   if (!conversations.length) {
     root.innerHTML = `<div class="empty">${esc(t("empty.conversations"))}</div>`;
@@ -555,20 +570,23 @@ function renderConversations() {
     const rows = group.items.map((conv) => `
       <div class="conv ${conv.id === state.currentId && state.view === "chat" ? "active" : ""}">
         <input type="checkbox" data-pick="${esc(conv.id)}" ${state.selected.has(conv.id) ? "checked" : ""} aria-label="${esc(t("pick.conversation", { title: tx(conv.title) }))}" />
-        <button class="link" type="button" data-open="${esc(conv.id)}" title="${esc(tx(conv.title || t("title.new")))}">${esc(tx(conv.title || t("title.new")))}</button>
+        <button class="link" type="button" data-open="${esc(conv.id)}" ${conv.id === state.currentId && state.view === "chat" ? 'aria-current="true"' : ""} title="${esc(tx(conv.title || t("title.new")))}">${esc(tx(conv.title || t("title.new")))}</button>
       </div>
     `).join("");
     return `<div class="conv-day">${esc(dayLabel(group.key, sample))}</div>${rows}`;
   }).join("");
   root.querySelectorAll("[data-open]").forEach((button) => {
-    button.onclick = () => openConversation(button.dataset.open, true);
+    if (focused?.open === button.dataset.open) button.focus({ preventScroll: true });
+    button.onclick = () => openConversation(button.dataset.open, true).catch(showError);
   });
   root.querySelectorAll("[data-pick]").forEach((box) => {
+    if (focused?.pick === box.dataset.pick) box.focus({ preventScroll: true });
     box.onchange = () => {
       if (box.checked) state.selected.add(box.dataset.pick);
       else state.selected.delete(box.dataset.pick);
     };
   });
+  root.scrollTop = offset;
 }
 
 function proposalCard(extra) {
@@ -716,18 +734,7 @@ function flyToStars(fromEl, points) {
   requestAnimationFrame(step);
 }
 
-function revealText(node, full) {
-  if (!node || reducedMotion()) return;
-  node.textContent = "";
-  let index = 0;
-  const timer = window.setInterval(() => {
-    index = Math.min(full.length, index + Math.max(1, Math.ceil(full.length / 26)));
-    node.textContent = full.slice(0, index);
-    if (index >= full.length) window.clearInterval(timer);
-  }, 36);
-}
-
-async function playRecall(trace, fromEl, streamNode, fullText) {
+async function playRecall(trace, fromEl) {
   state.recall = trace || null;
   showRecallBanner(trace);
   if (!state.nebula) return;
@@ -742,21 +749,58 @@ async function playRecall(trace, fromEl, streamNode, fullText) {
   flyToStars(fromEl, points);
 }
 
-async function openConversation(id, switchView, revealId) {
+let conversationRequest = 0;
+
+function syncPendingTurn() {
+  const turn = state.pendingTurn;
+  const visible = turn && state.view === "chat" && turn.id === state.currentId;
+  const box = $("messages");
+  let outgoing = box.querySelector("[data-pending-turn]");
+  if (visible && !turn.acknowledged && !turn.inHistory) {
+    if (!outgoing) {
+      outgoing = document.createElement("div");
+      outgoing.className = "bubble user";
+      outgoing.dataset.pendingTurn = "";
+      box.append(outgoing);
+    }
+    outgoing.textContent = turn.text;
+  } else if (outgoing) {
+    outgoing.remove();
+  }
+  $("typing").hidden = !visible || turn.acknowledged;
+}
+
+async function openConversation(id, switchView, revealId, keepScroll = false) {
+  const request = ++conversationRequest;
+  const changed = state.currentId !== id;
+  const box = $("messages");
   state.currentId = id;
   if (switchView) {
     setView("chat");
-    $("title").textContent = t("title.new");
+    if (changed) {
+      $("title").textContent = tx(state.conversations.find((item) => item.id === id)?.title) || t("title.new");
+      box.textContent = "";
+      syncPendingTurn();
+    }
   }
   const conv = await api(`/api/conversations/${id}`);
-  if (state.view === "chat") $("title").textContent = tx(conv.title) || t("title.new");
-  const box = $("messages");
-  if (!conv.messages.length) {
+  if (request !== conversationRequest || state.currentId !== id || state.view !== "chat") return;
+  $("title").textContent = tx(conv.title) || t("title.new");
+  const previousTop = box.scrollTop;
+  const turn = state.pendingTurn;
+  if (turn?.id === id && !turn.acknowledged) {
+    const latest = conv.messages.findLast((msg) => msg.role === "user");
+    // The service writes the user message before generating the response.
+    // Reopening the conversation should not show both copies.
+    turn.inHistory = !!latest && String(latest.id) !== turn.previousUserId && latest.content === turn.text;
+  }
+  const atBottom = box.scrollHeight - box.clientHeight - previousTop < 48;
+  if (!conv.messages.length && !(state.pendingTurn?.id === id && !state.pendingTurn.acknowledged)) {
     box.innerHTML = `<div class="empty">${esc(t("empty.chat"))}</div>`;
   } else {
     box.innerHTML = conv.messages.map((msg) => {
       const extra = parseExtra(msg);
-      if (msg.role === "user") return `<div class="bubble user">${esc(msg.content)}</div>`;
+      if (msg.role === "user") return `<div class="bubble user" data-user-message="${esc(msg.id)}">${esc(msg.content)}</div>`;
       const memory = msg.fired ? "memory" : "";
       const label = tx(msg.expert_label || (msg.fired ? "记忆" : "基座"));
       const sim = advancedOn() && msg.sim != null ? ` · ${Number(msg.sim).toFixed(2)}` : "";
@@ -800,10 +844,11 @@ async function openConversation(id, switchView, revealId) {
       if (state.view !== "chat" && state.view !== "nebula") setView("chat");
       await ensureNebula();
       const bubble = button.closest(".bubble");
-      await playRecall(trace, bubble, null, "");
+      await playRecall(trace, bubble);
     };
   });
-  box.scrollTop = box.scrollHeight;
+  syncPendingTurn();
+  box.scrollTop = keepScroll && !atBottom ? previousTop : box.scrollHeight;
   renderConversations();
   if (revealId) {
     const message = conv.messages.find((item) => item.id === revealId);
@@ -811,8 +856,7 @@ async function openConversation(id, switchView, revealId) {
     const trace = recallTrace(parseExtra(message));
     if (bubble && trace) {
       await ensureNebula();
-      const body = bubble.querySelector(".body");
-      await playRecall(trace, bubble, body, message.content || "");
+      if (request === conversationRequest && state.view === "chat" && state.currentId === id) await playRecall(trace, bubble);
     }
   }
 }
@@ -1235,10 +1279,10 @@ window.addEventListener("drop", (event) => {
 $("new-chat").onclick = async () => {
   try {
     const conv = await api("/api/conversations", { method: "POST", body: JSON.stringify({ title: t("title.new") }) });
-    state.currentId = conv.id;
-    await loadConversations();
-    await openConversation(conv.id, true);
-    $("input").focus();
+    const open = openConversation(conv.id, true);
+    await open;
+    if (state.currentId === conv.id && state.view === "chat") $("input").focus();
+    await loadConversations({ refreshChat: false });
   } catch (error) { showError(error); }
 };
 
@@ -1289,45 +1333,74 @@ $("editor-commit").onclick = async () => {
 $("modal-close").onclick = () => { $("modal").hidden = true; state.proposal = null; };
 $("modal-commit").onclick = () => commitStar().catch(showError);
 
+const composerInput = $("input");
+
+function syncComposer() {
+  $("send").disabled = state.sending || !composerInput.value.trim();
+}
+composerInput.addEventListener("input", syncComposer);
+
 $("composer").onsubmit = async (event) => {
   event.preventDefault();
-  const text = $("input").value.trim();
+  const draft = composerInput.value;
+  const text = draft.trim();
   if (!text || state.sending) return;
+  const previousUserId = [...$("messages").querySelectorAll("[data-user-message]")].at(-1)?.dataset.userMessage;
+  const turn = { id: state.currentId, text, previousUserId, acknowledged: false, inHistory: false };
+  const active = () => state.view === "chat" && state.currentId === turn.id;
+  const navigation = conversationRequest;
+  state.pendingTurn = turn;
   state.sending = true;
-  $("send").disabled = true;
-  $("typing").hidden = false;
+  composerInput.value = "";
+  composerInput.focus();
+  syncComposer();
+  $("messages").querySelector(".empty")?.remove();
+  syncPendingTurn();
+  $("messages").scrollTop = $("messages").scrollHeight;
+  let submitted = false;
   try {
-    if (!state.currentId) {
+    if (!turn.id) {
       const conv = await api("/api/conversations", { method: "POST", body: JSON.stringify({ title: t("title.new") }) });
-      state.currentId = conv.id;
+      if (active() && navigation === conversationRequest) state.currentId = conv.id;
+      turn.id = conv.id;
+      syncPendingTurn();
     }
-    $("input").value = "";
-    const sent = await api(`/api/conversations/${state.currentId}/messages`, {
+    const sent = await api(`/api/conversations/${turn.id}/messages`, {
       method: "POST",
       body: JSON.stringify({ content: text }),
     });
-    $("typing").hidden = true;
-    await loadConversations();
-    await openConversation(state.currentId, true, sent.assistant && sent.assistant.id);
+    submitted = true;
+    turn.acknowledged = true;
+    if (active()) await openConversation(turn.id, false, sent.assistant?.id, true);
+    await loadConversations({ refreshChat: false });
   } catch (error) {
+    if (!submitted && active()) {
+      turn.acknowledged = true;
+      // The backend can persist the user message before generation fails.
+      // Reconcile the transcript, but never issue an automatic resend.
+      if (turn.id) await openConversation(turn.id, false, null, true).catch(() => {});
+      if (active() && !composerInput.value && (!turn.id || error.status === 400)) {
+        composerInput.value = draft;
+      }
+    }
     showError(error);
   } finally {
+    state.pendingTurn = null;
     state.sending = false;
-    $("send").disabled = false;
-    const typing = $("typing");
-    if (typing) typing.hidden = true;
-    const comet = $("recall-comet");
-    if (comet && state.view !== "nebula") comet.hidden = true;
-    $("input").focus();
+    syncPendingTurn();
+    syncComposer();
   }
 };
 
-$("input").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+composerInput.addEventListener("keydown", (event) => {
+  // Some Chromium/OS IMEs report keyCode 229 for the candidate-commit key
+  // even when isComposing is false.
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault();
     $("composer").requestSubmit();
   }
 });
+syncComposer();
 
 function applyShotJob() {
   if (!window.__shotJob) return false;
@@ -1396,6 +1469,9 @@ function bindLanguage() {
   });
   window.i18n.onChange(() => {
     setView(state.view);
+    if (state.view === "chat" && !state.currentId && !state.pendingTurn) {
+      $("messages").innerHTML = `<div class="empty">${esc(t("empty.chat"))}</div>`;
+    }
     renderJobBar();
     renderConversations();
     if (state.recall) showRecallBanner(state.recall);
