@@ -81,7 +81,10 @@ function formatEta(seconds) {
   return min ? t("eta.min", { min, sec }) : t("eta.sec", { sec });
 }
 
+let navigationVersion = 0;
+
 function setView(view) {
+  if (state.view !== view) navigationVersion++;
   state.view = view;
   $("chat-view").hidden = view !== "chat";
   $("consolidate-view").hidden = view !== "consolidate";
@@ -773,6 +776,7 @@ function syncPendingTurn() {
 async function openConversation(id, switchView, revealId, keepScroll = false) {
   const request = ++conversationRequest;
   const changed = state.currentId !== id;
+  if (changed) navigationVersion++;
   const box = $("messages");
   state.currentId = id;
   if (switchView) {
@@ -820,6 +824,7 @@ async function openConversation(id, switchView, revealId, keepScroll = false) {
       if (extra?.kind !== "correction_proposal" || !extra.proposal
           || String(extra.proposal.fact_id) !== button.dataset.confirmCorrection) return;
       button.disabled = true;
+      const confirmationNavigation = navigationVersion;
       let data;
       try {
         data = await api("/api/corrections/commit", {
@@ -833,7 +838,12 @@ async function openConversation(id, switchView, revealId, keepScroll = false) {
       }
       state.job = data.job;
       state.preview = null;
-      await openConsolidate().catch(showError);
+      renderJobBar();
+      if (navigationVersion === confirmationNavigation && state.view === "chat" && state.currentId === id) {
+        await openConsolidate().catch(showError);
+      } else if (state.view === "consolidate") {
+        renderStages();
+      }
     };
   });
   box.querySelectorAll("[data-recall]").forEach((button) => {
