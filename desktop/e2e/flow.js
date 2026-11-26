@@ -63,11 +63,30 @@ async function assertAnswer(page, text) {
   throw new Error(`回答没有画出来：${text} ${JSON.stringify(last)}`);
 }
 
+async function newChat(page) {
+  const existingIds = await page.locator("[data-open]").evaluateAll(
+    (buttons) => buttons.map((button) => button.dataset.open),
+  );
+  await page.locator("#new-chat").click();
+  // The click starts an async POST and history load. Don't count the old
+  // conversation's messages until a newly created chat is visibly active.
+  await page.waitForFunction((known) => {
+    const active = document.querySelector('[data-open][aria-current="true"]');
+    return active && !known.includes(active.dataset.open)
+      && !document.getElementById("chat-view").hidden
+      && !document.querySelector("#messages .bubble");
+  }, existingIds, { timeout: 20000 });
+}
+
 async function send(page, text) {
   const input = page.locator("#input");
+  const confirmed = page.locator("#messages .bubble.user:not([data-pending-turn])");
+  const priorCount = await confirmed.count();
   await input.fill(text);
   await page.locator("#send").click();
-  await page.locator(".bubble.user", { hasText: text }).first().waitFor({ timeout: 20000 });
+  // A locally echoed message does not yet imply the backend accepted this
+  // turn, and a repeat question can match an earlier bubble.
+  await confirmed.nth(priorCount).waitFor({ timeout: 20000 });
 }
 
 async function main() {
@@ -163,7 +182,7 @@ async function main() {
     }, null, { timeout: 180000 });
     await shot(page, "05-name-trained.png");
 
-    await page.locator("#new-chat").click();
+    await newChat(page);
     await send(page, "我是谁？");
     await assertAnswer(page, "你是徐金朔");
     await page.locator("#messages .recall-chip").getByText("关于你").waitFor();
@@ -293,7 +312,7 @@ async function main() {
     await page.locator("#memory-view").getByText("还没有导入的文档").waitFor();
     await shot(page, "15-doc-deleted.png");
 
-    await page.locator("#new-chat").click();
+    await newChat(page);
     await send(page, "白鹭塔建于哪一年？");
     await assertAnswer(page, "1873");
     const memory = await page.locator("#messages .bubble.assistant .body").last().innerText();

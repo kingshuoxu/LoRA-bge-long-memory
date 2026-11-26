@@ -190,6 +190,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Packaged composer and navigation experience (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        working-directory: desktop
+        env:
+          YINGYU_E2E_PACKAGED: "1"
+        run: xvfb-run -a node e2e/chat-experience.js
+
+      - name: Upload chat experience evidence (Linux)
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-experience-linux-${{ github.sha }}
+          path: desktop/e2e-shots/chat-experience/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Desktop UI end to end
         if: runner.os == 'Linux'
         working-directory: desktop

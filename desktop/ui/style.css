@@ -123,7 +123,14 @@ button:hover {
   border-color: var(--line-strong);
   box-shadow: 0 0 0 1px rgba(183, 215, 255, 0.12), 0 8px 24px rgba(0, 0, 0, 0.18);
 }
-button:active { transform: translateY(1px); }
+button:not(:disabled):active {
+  transform: translateY(1px);
+  transition-duration: 0s;
+}
+:where(button, input, textarea, a):focus-visible {
+  outline: 2px solid #b7d7ff;
+  outline-offset: 3px;
+}
 button.primary {
   background: #f4f4f5;
   color: #17171a;
@@ -281,6 +288,18 @@ button:disabled { opacity: 0.45; cursor: default; }
   white-space: nowrap;
   min-width: 0;
 }
+/* Keep memory review discoverable without competing with the active task. */
+#consolidate {
+  border-color: rgba(242, 210, 145, 0.32);
+  background: rgba(242, 210, 145, 0.09);
+  color: var(--gold);
+}
+#consolidate:hover { background: rgba(242, 210, 145, 0.14); }
+#consolidate span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
 .ico { width: 16px; height: 16px; flex: none; }
 .nav {
   border-radius: 14px;
@@ -331,6 +350,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   word-break: normal;
 }
 main {
+  --chat-inset: max(clamp(18px, 3vw, 40px), (100% - 840px) / 2);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -348,6 +368,7 @@ main {
   flex-wrap: wrap;
   padding: 20px 28px 8px;
 }
+main:has(#chat-view:not([hidden])) .top { padding-inline: var(--chat-inset); }
 .top h2 {
   margin: 0;
   max-width: min(46vw, 640px);
@@ -407,7 +428,14 @@ main {
 .recall-host { display: none !important; }
 .chat-column, .recall-host, .nebula-host, .nebula-column { min-width: 0; min-height: 0; }
 .nebula-host, .recall-host { flex: 1; display: flex; flex-direction: column; }
-.chat-column { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* A single reading rail keeps the transcript and composer aligned on both
+   compact and wide windows, while the transcript uses all available height. */
+.chat-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .nebula-column {
   display: flex;
   flex-direction: column;
@@ -422,10 +450,11 @@ main {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 8px 22px 12px;
+  padding-block: 14px 20px;
+  padding-inline: var(--chat-inset);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 .bubble {
   max-width: min(720px, 100%);
@@ -433,6 +462,7 @@ main {
   border-radius: 0;
   line-height: 1.7;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .bubble.user {
   align-self: flex-end;
@@ -480,38 +510,63 @@ main {
 .proposal p { margin: 0 0 6px; }
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: end;
-  margin: 0 22px 18px;
-  padding: 10px 10px 10px 16px;
+  flex: 0 0 auto;
+  margin: 0 var(--chat-inset) 18px;
+  padding: 6px 6px 6px 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 28px;
+  border-radius: 22px;
   background: #212226;
 }
+.composer:focus-within { border-color: #8799b2; }
 .composer textarea {
   border: 0;
   background: transparent;
-  padding: 8px 4px;
-  min-height: 52px;
+  backdrop-filter: none;
+  field-sizing: content;
+  min-height: 44px;
+  max-height: min(24vh, 144px);
+  overflow: auto;
+  padding: 10px 4px;
+  line-height: 1.45;
   resize: none;
 }
-#send { min-width: 76px; height: 44px; border-radius: 22px; }
+.composer textarea:focus-visible { outline: none; } /* focus ring is on the composer */
+#send {
+  min-width: 76px;
+  min-height: 44px;
+  border-radius: 16px;
+  letter-spacing: 0;
+}
+#send:disabled {
+  background: #292b31;
+  border-color: var(--line);
+  box-shadow: none;
+  color: var(--muted);
+  opacity: 1;
+}
 .typing {
   display: flex;
-  gap: 5px;
-  padding: 0 28px 8px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--chat-inset) 10px;
+  color: var(--muted);
+  font-size: 13px;
 }
-.typing[hidden] { display: none !important; }
-.typing span {
-  width: 7px;
-  height: 7px;
+.typing-dot {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #d4d4d8;
-  animation: pulse 1s infinite ease-in-out;
+  background: #f2d291;
+  animation: pulse 1.2s infinite ease-in-out;
 }
-.typing span:nth-child(2) { animation-delay: 0.15s; }
-.typing span:nth-child(3) { animation-delay: 0.3s; }
+.messages > .empty {
+  max-width: 46ch;
+  margin: auto;
+  letter-spacing: 0;
+}
 .toast {
   position: fixed;
   left: 348px;
@@ -876,11 +931,11 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  button:not(:disabled):active { transform: none; }
 }
 @media (max-width: 1180px) {
   .app { grid-template-columns: 220px minmax(0, 1fr); }
   .chat-split, .stage-panel { grid-template-columns: 1fr; }
-  .messages { max-height: 42vh; flex: none; }
   .nebula-column { height: auto; }
   .nebula-wrap { height: 360px; flex: none; }
   .stage-panel { max-height: 52vh; }
@@ -890,6 +945,7 @@ textarea, input[type="text"], input[type="url"], .fact input, .fact textarea {
   border: 0;
   background: transparent;
   box-shadow: none;
+  backdrop-filter: none;
 }
 .side, .top, .sheet, .boot-card {
   background: var(--panel);

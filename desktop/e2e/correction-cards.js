@@ -12,6 +12,8 @@ const binary = path.join(desktop, "dist", "linux-unpacked", "lora-bge-memory");
 const packagedUi = path.join(path.dirname(binary), "resources", "ui");
 const evidenceDir = path.join(desktop, "e2e-shots", "correction-cards");
 const conversation = { id: "same-fact-chat", title: "Correction fixture" };
+const otherConversation = { id: "other-chat", title: "Other conversation" };
+const runningJob = { id: "background-fixture-job", status: "running", message: "Correction training in background" };
 const proposals = ["Starport", "Newhaven"].map((value) => ({
   expert: "expert_fixture",
   fact_id: "shared-fact",
@@ -49,10 +51,17 @@ async function startFixture() {
   let rejectCommit = true;
   let releaseCommit;
   const held = new Promise((resolve) => { releaseCommit = resolve; });
+  let holdSuccess = false;
+  let releaseSuccess;
+  const heldSuccess = new Promise((resolve) => { releaseSuccess = resolve; });
   const responses = {
     "/api/settings": { locale: "en" },
     "/api/health": { device: "cpu", models: { state: "ready" } },
-    "/api/conversations": { conversations: [conversation] },
+    "/api/conversations": { conversations: [conversation, otherConversation] },
+    [`/api/conversations/${otherConversation.id}`]: { ...otherConversation, messages: [
+      { id: "other-message", role: "user", content: "Keep this conversation visible." },
+    ] },
+    [`/api/jobs/${runningJob.id}`]: runningJob,
     [`/api/conversations/${conversation.id}`]: { ...conversation, messages },
     "/api/nebula": { facts: [], experts: [], conversations: [] },
     "/api/pending": { pending: [] },
@@ -75,6 +84,8 @@ async function startFixture() {
         log(`observed correction POST #${requests.length}: ${JSON.stringify(requests.at(-1))}`);
         if (rejectCommit) {
           void held.then(() => json(409, { error: "Fixture: stale correction" }));
+        } else if (holdSuccess) {
+          void heldSuccess.then(() => json(200, { job: runningJob }));
         } else {
           json(200, { job: { id: "fixture-job", status: "done" } });
         }
@@ -107,8 +118,11 @@ async function startFixture() {
     requests,
     releaseCommit,
     allowCommit: () => { rejectCommit = false; },
+    holdSuccessfulCommit: () => { holdSuccess = true; },
+    releaseSuccess,
     close: () => {
       releaseCommit();
+      releaseSuccess();
       server.close();
       server.closeAllConnections();
     },
@@ -188,11 +202,34 @@ async function main() {
     await secondButton.evaluate((button) => button.onclick());
     assert.deepEqual(requests, proposals.map((proposal) => ({ proposal, conversation_id: conversation.id })));
     await page.screenshot({ path: path.join(evidenceDir, "03-second-card-accepted.png") });
+    next("switch conversations before a successful confirmation returns");
+    await page.locator(`[data-open="${conversation.id}"]`).click();
+    await cards[0].waitFor({ state: "visible" });
+    fixture.holdSuccessfulCommit();
+    const pendingRequest = page.waitForRequest((request) =>
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/corrections/commit");
+    await cards[0].click();
+    await pendingRequest;
+    await page.locator(`[data-open="${otherConversation.id}"]`).click();
+    await page.getByText("Keep this conversation visible.", { exact: true }).waitFor();
+    await page.locator("#input").fill("Keep my draft here.");
+    fixture.releaseSuccess();
+    await page.locator("#jobbar").getByText(runningJob.message, { exact: true }).waitFor();
+    assert.equal(await page.locator("#chat-view").isVisible(), true);
+    assert.equal(await page.locator("#consolidate-view").isVisible(), false);
+    assert.equal(await page.locator("#title").innerText(), otherConversation.title);
+    assert.equal(await page.locator("#input").inputValue(), "Keep my draft here.");
+    assert.equal(await page.locator("#input").evaluate((input) => input === document.activeElement), true);
+    assert.deepEqual(requests, [proposals[0], proposals[1], proposals[0]].map((proposal) => ({
+      proposal, conversation_id: conversation.id,
+    })));
+    await page.screenshot({ path: path.join(evidenceDir, "04-background-confirmation.png") });
     fs.writeFileSync(path.join(evidenceDir, "requests.json"), JSON.stringify({
       packaged, requests, pendingDuplicateSuppressed: true, acceptedDuplicateSuppressed: true,
+      backgroundConfirmationPreservedConversation: true,
       scope: "Real packaged Electron UI clicks; synthetic HTTP API; no model generation or persistence",
     }, null, 2));
-    console.log("PACKAGED_CORRECTION_CARDS_OK: exact proposals and sources, stale error, duplicate suppression");
+    console.log("PACKAGED_CORRECTION_CARDS_OK: exact proposals and sources, stale error, duplicate suppression, navigation preserved");
   } catch (error) {
     console.error(`[correction-cards] Failed at: ${phase}`, error);
     process.exitCode = 1;

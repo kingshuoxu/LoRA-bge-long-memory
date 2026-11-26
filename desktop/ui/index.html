@@ -80,10 +80,10 @@
         <div class="chat-split">
           <div class="chat-column">
             <div id="messages" class="messages"></div>
-            <div id="typing" class="typing" hidden aria-hidden="true"><span></span><span></span><span></span></div>
+            <div id="typing" class="typing" hidden><span class="typing-dot" aria-hidden="true"></span><span id="typing-status" role="status" data-i18n="composer.replying">正在生成回复…</span></div>
             <form id="composer" class="composer">
-              <textarea id="input" rows="3" data-i18n-placeholder="composer.placeholder" data-i18n-title="composer.hint" placeholder="发消息…" title="若要改一条已经记住的事实，直接说出新的取值"></textarea>
-              <button id="send" type="submit" data-i18n="action.send">发送</button>
+              <textarea id="input" rows="1" aria-label="消息" data-i18n-aria="composer.label" data-i18n-placeholder="composer.placeholder" data-i18n-title="composer.hint" placeholder="发消息…" title="Enter 发送，Shift + Enter 换行"></textarea>
+              <button id="send" class="primary" type="submit" disabled data-i18n="action.send">发送</button>
             </form>
           </div>
           <div id="recall-host" class="recall-host">
