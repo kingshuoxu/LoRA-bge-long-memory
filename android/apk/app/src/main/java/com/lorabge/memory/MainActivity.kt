@@ -237,7 +237,7 @@ private fun PhoneApp(
     var generating by remember { mutableStateOf(false) }
     var streaming by remember { mutableStateOf("") }
     var currentId by remember { mutableStateOf(store.listConversations().firstOrNull()?.id) }
-    var pending by remember { mutableStateOf<PendingCorrection?>(null) }
+    val correctionMemory = remember(store) { CorrectionMemory(store.root) }
     var entity by remember { mutableStateOf("") }
     var statement by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
@@ -326,6 +326,7 @@ private fun PhoneApp(
     val conversations = remember(tick) { store.listConversations() }
     val current = currentId?.let { store.loadConversation(it) }
     val experts = remember(tick, lang) { skyExperts(store, lang) }
+    val correctionCards = remember(tick) { correctionMemory.read().associateBy { it.id } }
     val highlight = current?.messages?.lastOrNull { it.role == "assistant" }?.expert
     val loss = remember(tick) { readLoss(File(store.trainDir, "train.log")) }
     val record = engine.backendRecord()
@@ -476,7 +477,10 @@ private fun PhoneApp(
         tab = tab,
         training = training,
         status = presentTrainStatus(lang, statusFile.takeIf { it.exists() }?.readText().orEmpty()),
-        messages = current?.messages?.map { SkyMessage(it.role, it.content, it.expert, it.reason, it.noticed, it.sources) } ?: emptyList(),
+        messages = current?.messages?.map {
+            SkyMessage(it.role, it.content, it.expert, it.reason, it.noticed, it.sources,
+                it.correctionId?.let(correctionCards::get)?.takeIf { card -> card.conversationId == currentId })
+        } ?: emptyList(),
         streaming = streaming,
         generating = generating,
         draft = draft,
@@ -485,7 +489,6 @@ private fun PhoneApp(
         loss = loss,
         experts = experts,
         highlightExpert = highlight,
-        pending = pending,
         entity = entity,
         statement = statement,
         value = value,
@@ -611,9 +614,22 @@ private fun PhoneApp(
                     }.start()
                     return@SkyFrame
                 }
+                if (isExplicitCorrection(text)) {
+                    val fact = parseCorrection(text)
+                    val card = if (fact != null) runCatching { correctionMemory.propose(conversation.id, fact) }.getOrNull() else null
+                    val reply = when {
+                        card != null -> if (langNow == "en") "Confirm the memory you want to update." else "请确认要更新的记忆。"
+                        fact != null -> if (langNow == "en") "Couldn't prepare the update. Please try again." else "无法准备这次更新，请重试。"
+                        else -> if (langNow == "en") "Which fact should I update? Include the name, field and new value."
+                            else "要更正哪条记忆？请说清楚名称、要改的内容和新值。"
+                    }
+                    store.saveConversation(conversation.copy(title = title, updated = now,
+                        messages = withUser + ChatMessage("assistant", reply, correctionId = card?.id)))
+                    tick++
+                    return@SkyFrame
+                }
                 val facts = FactNotice.drafts(text)
-                val noticed = facts.isNotEmpty() || FactNotice.noticed(text)
-                if (noticed) {
+                if (facts.isNotEmpty()) {
                     val storedNow = experts.flatMap { it.facts }
                     val embed = if (engine.bgeModel() != null) {
                         { lines: List<String> -> engine.embedTexts(lines) }
@@ -631,7 +647,6 @@ private fun PhoneApp(
                         value = fact.value
                         question = fact.question
                         answer = fact.answer
-                        pending = null
                     } else if (known.isNotEmpty()) {
                         statement = ""
                         entity = ""
@@ -639,18 +654,13 @@ private fun PhoneApp(
                         value = ""
                         question = ""
                         answer = ""
-                        pending = null
-                    } else if (looksLikeCorrection(text)) {
-                        pending = guessCorrection(text)
                     }
                     val reply = when {
                         fresh.isNotEmpty() -> FactNotice.acknowledgeAll(fresh, langNow)
-                        known.isNotEmpty() -> FactNotice.already(known.first(), langNow)
-                        langNow == "en" -> "Okay, I'll remember."
-                        else -> "好的，记住了。"
+                        else -> FactNotice.already(known.first(), langNow)
                     }
                     val taught = facts.firstOrNull()
-                    val taughtEntity = taught?.entity ?: if (looksLikeCorrection(text)) guessCorrection(text).entity else ""
+                    val taughtEntity = taught?.entity.orEmpty()
                     val taughtExpert = if (facts.isNotEmpty() && facts.all { it.entity == "我" } || taughtEntity == "我") {
                         SELF_EXPERT
                     } else {
@@ -671,12 +681,15 @@ private fun PhoneApp(
                 val grounded = groundedRaw?.takeUnless { it.answer.startsWith("已导入《") }
                 val useSelf = selfKind != null && selfKind != "assistant"
                 Thread {
-                    val hit = try {
+                    val hit = if (grounded?.expert?.startsWith("correction:") == true) {
+                        RouteHit(null, false, "confirmed_correction", 0.0)
+                    } else try {
                         client.route(text)
                     } catch (ex: Throwable) {
                         RouteHit(null, false, ex.message ?: "route", 0.0)
                     }
-                    val indexed = if (useSelf) emptyList() else loadIndexedDocs(docsRoot(store))
+                    val preferMemory = useSelf || grounded?.expert?.startsWith("correction:") == true
+                    val indexed = if (preferMemory) emptyList() else loadIndexedDocs(docsRoot(store))
                     val queryVector = if (indexed.any { it.vectors != null } && engine.binariesReady() && engine.bgeModel() != null) {
                         runCatching { engine.embedTexts(listOf(text)).firstOrNull() }.getOrNull()
                     } else {
@@ -694,15 +707,15 @@ private fun PhoneApp(
                     } else {
                         null
                     }
-                    val memory = if (useSelf) grounded else grounded?.takeIf { doc == null }
+                    val memory = if (preferMemory) grounded else grounded?.takeIf { doc == null }
                     writeLastRoute(context, text, hit, memory)
                     val expert = when {
-                        useSelf -> grounded?.expert
+                        preferMemory -> grounded?.expert
                         doc != null -> doc.expert
                         else -> grounded?.expert ?: if (hit.fired) hit.expert else null
                     }
                     val reason = when {
-                        useSelf -> grounded?.reason ?: hit.reason
+                        preferMemory -> grounded?.reason ?: hit.reason
                         doc != null -> "document"
                         else -> grounded?.reason ?: hit.reason
                     }
@@ -710,7 +723,7 @@ private fun PhoneApp(
                     recallJson = trace
                     recallBanner = org.json.JSONObject(trace).optString("banner")
                     val reply = when {
-                        useSelf && grounded != null -> grounded.answer
+                        preferMemory && grounded != null -> grounded.answer
                         doc != null -> doc.answer
                         grounded != null -> grounded.answer
                         miss != null -> miss
@@ -724,7 +737,7 @@ private fun PhoneApp(
                             }
                         }
                     }
-                    val sources = if (doc != null && !useSelf) doc.chips else emptyList()
+                    val sources = if (doc != null && !preferMemory) doc.chips else emptyList()
                     val saved = store.loadConversation(conversation.id) ?: withUser.let {
                         conversation.copy(title = title, updated = now, messages = withUser)
                     }
@@ -743,22 +756,13 @@ private fun PhoneApp(
                     tick++
                 }.start()
             }
-            SkyEvent.DismissCorrection -> pending = null
-            SkyEvent.ConfirmCorrection -> {
-                val item = pending ?: return@SkyFrame
-                val fact = ReviewedFact(
-                    entity = item.entity.ifBlank { "事实" },
-                    statement = item.statement,
-                    value = item.value.ifBlank { item.statement },
-                    qa = listOf(item.statement to item.value),
-                    sources = listOfNotNull(currentId),
-                    selected = true,
-                )
-                beginImmediate(store, listOf(fact))
-                onTrain()
-                pending = null
-                tab = SkyTab.Consolidate
-                tick++
+            is SkyEvent.ResolveCorrection -> {
+                val id = currentId ?: return@SkyFrame
+                val resolved = runCatching { correctionMemory.resolve(id, event.id, event.confirm) }.getOrElse {
+                    toast = if (lang == "en") "Couldn't save the update. Try again." else "无法保存这次更新，请重试。"
+                    false
+                }
+                if (resolved) tick++
             }
             is SkyEvent.Field -> when (event.key) {
                 "entity" -> entity = event.text

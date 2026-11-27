@@ -1,0 +1,86 @@
+name: Android correction regression
+
+on:
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-correction.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  correction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [released-source, candidate]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Use unchanged 0.1.33 app sources for the reproduction
+        if: matrix.version == 'released-source'
+        run: |
+          test_file=android/apk/app/src/androidTest/java/com/lorabge/memory/CorrectionChatTest.kt
+          cp "$test_file" "$RUNNER_TEMP/CorrectionChatTest.kt"
+          git fetch --no-tags origin tag android-v0.1.33
+          git checkout --detach android-v0.1.33
+          cp "$RUNNER_TEMP/CorrectionChatTest.kt" "$test_file"
+      - name: Install SDK and boot API 35 emulator
+        run: |
+          set -eu
+          sudo chmod 660 /dev/kvm
+          sudo chgrp "$(id -gn)" /dev/kvm
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          echo no | avdmanager create avd -n correction -k "system-images;android-35;default;x86_64" -f
+          emulator -avd correction -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect -no-metrics > "$RUNNER_TEMP/correction-emulator.log" 2>&1 &
+          adb wait-for-device
+          timeout 360 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 3; done'
+          adb shell input keyevent 82
+          adb shell wm size 480x920
+          adb shell wm density 180
+      - name: Build and run correction unit tests
+        working-directory: android/apk
+        env:
+          CORRECTION_VERSION: ${{ matrix.version }}
+        run: |
+          bash ./gradlew assembleDebug assembleDebugAndroidTest -Plorabge.skipNative=true --no-daemon
+          if [ "$CORRECTION_VERSION" = candidate ]; then
+            bash ./gradlew testDebugUnitTest --tests 'com.lorabge.memory.CorrectionMemoryTest' --tests 'com.lorabge.memory.EntityGroundTest' --tests 'com.lorabge.memory.FactNoticeTest' -Plorabge.skipNative=true --no-daemon
+          fi
+      - name: Exercise the actual chat composer and memory recall
+        working-directory: android/apk
+        env:
+          CORRECTION_VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          adb install app/build/outputs/apk/debug/app-debug.apk
+          adb install -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          check() {
+            adb shell am instrument -w -r -e class com.lorabge.memory.CorrectionChatTest -e correctionMode "$1" com.lorabge.memory.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/correction-${1}.log"
+            grep -Fq 'OK (1 test)' "$RUNNER_TEMP/correction-${1}.log"
+          }
+          if [ "$CORRECTION_VERSION" = released-source ]; then
+            check legacy
+          else
+            check candidate
+            adb shell am force-stop com.lorabge.memory
+            check restart
+          fi
+      - name: Capture emulator logs
+        if: always()
+        run: adb logcat -d -t 1000 > "$RUNNER_TEMP/correction-logcat.txt" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: correction-${{ matrix.version }}
+          path: |
+            ${{ runner.temp }}/correction-*.log
+            ${{ runner.temp }}/correction-logcat.txt
