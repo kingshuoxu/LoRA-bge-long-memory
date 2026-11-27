@@ -115,6 +115,17 @@ internal fun parseCorrection(text: String): FactDraft? {
     return fact
 }
 
+/** Library displays confirmed facts separately from the trained expert snapshots. */
+internal class CorrectionLibrary(rows: Collection<ChatCorrection>) {
+    private val current = rows.filter { it.status == CorrectionStatus.Confirmed }.asReversed()
+    private val slots = current.map { it.fact.slot() }.toSet()
+
+    val statements: List<String> get() = current.map { it.fact.statement }
+
+    fun isCurrentSnapshot(entity: String, statement: String, value: String = "", attr: String = "") =
+        slots.isEmpty() || StoredFact("", entity, statement, value, attr = attr).slot() !in slots
+}
+
 private fun FactDraft.slot() = StoredFact("", entity, statement, value, attr = attr).slot()
 
 private fun StoredFact.slot(): Pair<String, String> {

@@ -30,6 +30,11 @@ class CorrectionMemoryTest {
         assertEquals("星舟测试公司成立于1979年。", EntityGround.reply("星舟测试公司是哪一年成立的？", facts)?.answer)
         assertTrue(facts.any { it.value == "南京" })
         assertFalse(facts.any { it.value == "杭州" || it.value == "1980" })
+        val library = CorrectionLibrary(CorrectionMemory(root).read())
+        assertEquals(listOf(hq.fact.statement), library.statements)
+        assertFalse(library.isCurrentSnapshot("星舟测试", old[0].statement))
+        assertTrue(library.isCurrentSnapshot("星舟测试", old[1].statement))
+        assertTrue(library.isCurrentSnapshot("另一家公司", old[2].statement))
     }
 
     @Test fun newerConfirmedCardSupersedesAnOlderPendingCardButNotOtherFields() {

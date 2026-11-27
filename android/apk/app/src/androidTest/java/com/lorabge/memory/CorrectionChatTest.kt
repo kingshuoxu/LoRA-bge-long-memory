@@ -81,6 +81,11 @@ class CorrectionChatTest {
         send("星舟测试公司是哪一年成立的？")
         waitText("星舟测试公司成立于1979年。")
         waitSavedReply("星舟测试公司成立于1979年。")
+        device.wait(Until.findObject(By.desc("tab-library")), 8_000)?.click() ?: error("missing Library tab")
+        waitText("已更正的记忆")
+        waitText("星舟测试公司的总部是苏州。")
+        assertFalse("old city is still displayed in the Memory Library", device.hasObject(By.textContains("杭州")))
+        check(device.wait(Until.hasObject(By.textContains("1979")), 8_000)) { "unrelated expert fact stopped showing" }
     }
 
     private fun launch() {

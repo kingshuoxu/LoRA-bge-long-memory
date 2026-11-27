@@ -327,12 +327,16 @@ private fun PhoneApp(
     val current = currentId?.let { store.loadConversation(it) }
     val experts = remember(tick, lang) { skyExperts(store, lang) }
     val correctionCards = remember(tick) { correctionMemory.read().associateBy { it.id } }
+    val correctionLibrary = remember(correctionCards) { CorrectionLibrary(correctionCards.values) }
+    val libraryExperts = remember(tick, lang, correctionLibrary, experts) {
+        if (correctionLibrary.statements.isEmpty()) experts else skyExperts(store, lang, correctionLibrary)
+    }
     val highlight = current?.messages?.lastOrNull { it.role == "assistant" }?.expert
     val loss = remember(tick) { readLoss(File(store.trainDir, "train.log")) }
     val record = engine.backendRecord()
     val storageLabel = remember(tick) { formatBytes(modelBytes(context)) }
     val versionName = remember {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.33"
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.34"
     }
     var nebulaCanvas by remember { mutableStateOf(false) }
     val sessionGate = remember {
@@ -519,7 +523,10 @@ private fun PhoneApp(
         nebulaCanvas = nebulaCanvas,
         e2e = e2e,
         pendingFacts = waiting.map { it.statement },
-        rememberedFacts = remembered.map { it.statement },
+        rememberedFacts = remembered.filter { correctionLibrary.isCurrentSnapshot(it.entity, it.statement, it.value, it.attr) }
+            .map { it.statement },
+        libraryExperts = libraryExperts,
+        correctedFacts = correctionLibrary.statements,
         pendingDrafts = waiting.map {
             SkyPending(it.entity, it.statement, it.value, it.question, it.answer, it.attr, it.merged)
         },
@@ -1047,12 +1054,15 @@ internal fun consolidatedStatements(store: MemoryStore): List<String> {
     }
 }
 
-private fun skyExperts(store: MemoryStore, lang: String): List<SkyExpert> {
+private fun skyExperts(store: MemoryStore, lang: String, corrections: CorrectionLibrary? = null): List<SkyExpert> {
     return store.listExperts().filter { !it.expert.startsWith("doc_") }.map { record ->
         val raw = NebulaGraph.readFacts(File(store.expertsDir, record.expert))
+        val visible = raw.filter {
+            corrections?.isCurrentSnapshot(it.optString("entity"), it.optString("statement"), it.optString("value"), it.optString("attr")) != false
+        }
         SkyExpert(
             record.expert,
-            raw.map { it.optString("statement") }.filter { it.isNotBlank() },
+            visible.map { it.optString("statement") }.filter { it.isNotBlank() },
             NebulaGraph.displayName(raw.map { it.optString("entity") }, lang),
         )
     }

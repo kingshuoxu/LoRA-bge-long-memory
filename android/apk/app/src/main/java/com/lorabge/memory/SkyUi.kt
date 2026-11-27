@@ -225,6 +225,8 @@ data class SkyState(
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
     val rememberedFacts: List<String> = emptyList(),
+    val libraryExperts: List<SkyExpert>? = null,
+    val correctedFacts: List<String> = emptyList(),
     val pendingDrafts: List<SkyPending> = emptyList(),
     val batchItems: List<SkyBatchItem> = emptyList(),
     val editorOpen: Boolean = false,
@@ -2210,7 +2212,29 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             Spacer(Modifier.height(8.dp))
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(state.experts, key = { it.name }) { expert ->
+            if (state.correctedFacts.isNotEmpty()) {
+                item(key = "corrected-memories") {
+                    Text(
+                        if (state.lang == "en") "Confirmed corrections" else "已更正的记忆",
+                        color = Muted, fontSize = 13.sp,
+                    )
+                }
+                items(state.correctedFacts) { line ->
+                    Text(
+                        line, color = Ink, fontSize = 15.sp, lineHeight = 22.sp,
+                        modifier = Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(14.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    )
+                }
+                item(key = "trained-snapshots") {
+                    Text(
+                        if (state.lang == "en") "Trained experts · deleting an expert keeps confirmed corrections"
+                        else "已训练专家 · 删除专家不影响已确认的更正",
+                        color = Muted, fontSize = 13.sp,
+                    )
+                }
+            }
+            items(state.libraryExperts ?: state.experts, key = { it.name }) { expert ->
                 Row(
                     Modifier
                         .fillMaxWidth()
