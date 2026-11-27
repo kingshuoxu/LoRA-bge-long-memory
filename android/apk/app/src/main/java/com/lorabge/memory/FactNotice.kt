@@ -17,7 +17,7 @@ object FactNotice {
     fun drafts(text: String): List<FactDraft> {
         val raw = text.trim()
         if (raw.length < 4 || raw.length > 600) return emptyList()
-        if (isQuestion(raw) || looksLikeCorrection(raw) || isChore(raw)) return emptyList()
+        if (isQuestion(raw) || looksLikeCorrection(raw) || isExplicitCorrection(raw) || isChore(raw)) return emptyList()
         val body = stripRemember(raw)
         if (body.length < 4) return emptyList()
         val parts = sentences(body)

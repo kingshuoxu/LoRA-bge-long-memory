@@ -42,7 +42,7 @@ object EntityGround {
                 )
             }
         }
-        return out
+        return CorrectionMemory(store.root).overlay(out)
     }
 
     fun reply(query: String, facts: List<StoredFact>, lang: String = "zh"): GroundedReply? {
@@ -56,9 +56,14 @@ object EntityGround {
             facts.filter { personalHit(query, it) || possessionHit(query, it) || questionMatches(query, it) }
         }
         if (related.isEmpty()) return null
-        val fact = alias?.first ?: related.first()
         val kind = askedKind(query)
-        val picked = if (kind == null) related else related.filter { factKind(it.statement) == kind }
+        val correctedField = related.filter { it.expert.startsWith("correction:") && it.attr.isNotBlank() && it.attr in query }
+        val picked = when {
+            correctedField.isNotEmpty() -> correctedField
+            kind != null -> related.filter { factKind(it.statement) == kind }
+            else -> related
+        }
+        val fact = picked.firstOrNull { it.expert.startsWith("correction:") } ?: alias?.first ?: related.first()
         val lines = (if (picked.isNotEmpty()) picked else related)
             .map { finish(assistantVoice(it.statement, it.entity)) }
             .distinct()
