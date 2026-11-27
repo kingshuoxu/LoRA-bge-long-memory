@@ -30,17 +30,18 @@ jobs:
         run: |
           test_file=android/apk/app/src/androidTest/java/com/lorabge/memory/CorrectionChatTest.kt
           cp "$test_file" "$RUNNER_TEMP/CorrectionChatTest.kt"
+          cp android/scripts/upgrade_preserve.sh "$RUNNER_TEMP/upgrade_preserve.sh"
           git fetch --no-tags origin tag android-v0.1.33
           git checkout --detach android-v0.1.33
           cp "$RUNNER_TEMP/CorrectionChatTest.kt" "$test_file"
+          cp "$RUNNER_TEMP/upgrade_preserve.sh" android/scripts/upgrade_preserve.sh
       - name: Install SDK and emulator dependencies
         run: |
           set -eu
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb x11-utils libnss3 libx11-xcb1 libxcomposite1 libxcursor1 libxcb-cursor0 libxi6 libxtst6 libxdamage1 libxrandr2 libpulse0
           sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
-          sudo chmod 660 /dev/kvm
-          sudo chgrp "$(id -gn)" /dev/kvm
+          sudo chmod 666 /dev/kvm
           SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
           CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
           test -n "$CMDLINE"
@@ -59,55 +60,17 @@ jobs:
           if [ "$CORRECTION_VERSION" = candidate ]; then
             bash ./gradlew testDebugUnitTest --tests 'com.lorabge.memory.CorrectionMemoryTest' --tests 'com.lorabge.memory.EntityGroundTest' --tests 'com.lorabge.memory.FactNoticeTest' -Plorabge.skipNative=true --no-daemon
           fi
-      - name: Boot API 35 emulator
-        timeout-minutes: 8
-        run: |
-          set -eu
-          LOG="$RUNNER_TEMP/correction-emulator.log"
-          echo no | avdmanager create avd -n correction -k "system-images;android-35;default;x86_64" -f
-          Xvfb :99 -screen 0 1280x1600x24 -ac +extension GLX +render -noreset >"$RUNNER_TEMP/correction-xvfb.log" 2>&1 &
-          export DISPLAY=:99
-          timeout 15 bash -c 'until xdpyinfo >/dev/null 2>&1; do sleep 0.2; done'
-          emulator -avd correction -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect -memory 2048 -accel on -no-metrics >"$LOG" 2>&1 &
-          pid=$!
-          for unused in $(seq 1 180); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then
-              adb shell input keyevent 82
-              adb shell wm size 480x920
-              adb shell wm density 180
-              exit 0
-            fi
-            kill -0 "$pid" 2>/dev/null || break
-            sleep 2
-          done
-          tail -80 "$LOG" >&2
-          exit 1
-      - name: Exercise the actual chat composer and memory recall
-        working-directory: android/apk
+      - name: Exercise chat on the upgrade gate emulator
+        timeout-minutes: 12
         env:
           CORRECTION_VERSION: ${{ matrix.version }}
-        run: |
-          set -euo pipefail
-          adb install app/build/outputs/apk/debug/app-debug.apk
-          adb install -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          check() {
-            adb shell am instrument -w -r -e class com.lorabge.memory.CorrectionChatTest -e correctionMode "$1" com.lorabge.memory.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/correction-${1}.log"
-            grep -Fq 'OK (1 test)' "$RUNNER_TEMP/correction-${1}.log"
-          }
-          if [ "$CORRECTION_VERSION" = released-source ]; then
-            check legacy
-          else
-            check candidate
-            adb shell am force-stop com.lorabge.memory
-            check restart
-          fi
-      - name: Capture emulator logs
-        if: always()
-        run: adb logcat -d -t 1000 > "$RUNNER_TEMP/correction-logcat.txt" || true
+        run: sh android/scripts/upgrade_preserve.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: correction-${{ matrix.version }}
           path: |
-            ${{ runner.temp }}/correction-*.log
-            ${{ runner.temp }}/correction-logcat.txt
+            android/out/upgrade/emulator.log
+            android/out/upgrade/avdmanager.log
+            android/out/upgrade/xvfb.log
+            android/out/upgrade/correction-*.log

@@ -46,6 +46,7 @@ class CorrectionMemoryTest {
         assertTrue(isExplicitCorrection("不对，总部是苏州。"))
         assertNull(parseCorrection("不对，总部是苏州。"))
         assertNull(parseCorrection("更正：它的总部是苏州。"))
+        assertTrue(FactNotice.drafts("纠正：星舟测试公司的总部是苏州。").isEmpty())
         assertNull(parseCorrection("不对，星舟测试公司的总部是苏州吗？"))
         assertNull(parseCorrection("更正：星舟测试公司的总部是苏州。它成立于2020年。"))
         assertFalse(isExplicitCorrection("这份报告可能不对，我看看。"))

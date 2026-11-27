@@ -143,27 +143,29 @@ fi
 EMU_PID=$!
 
 cd "$ROOT/android/apk"
-./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.32 --no-daemon
-cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.32.apk"
-./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.33 --no-daemon
-cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.33.apk"
+if [ -z "${CORRECTION_VERSION:-}" ]; then
+  ./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.32 --no-daemon
+  cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.32.apk"
+  ./gradlew assembleDebug -Plorabge.skipNative=true -Plorabge.versionName=0.1.33 --no-daemon
+  cp app/build/outputs/apk/debug/app-debug.apk "$STAGE/app-0.1.33.apk"
 
-badging() {
-  "$AAPT" dump badging "$1"
-}
-echo "$(badging "$STAGE/app-0.1.32.apk")" | grep -q "versionCode='1032'"
-echo "$(badging "$STAGE/app-0.1.32.apk")" | grep -q "versionName='0.1.32'"
-echo "$(badging "$STAGE/app-0.1.33.apk")" | grep -q "versionCode='1033'"
-echo "$(badging "$STAGE/app-0.1.33.apk")" | grep -q "versionName='0.1.33'"
-if unzip -l "$STAGE/app-0.1.33.apk" | grep -q '\.so$'; then
-  echo "升级测试包不应带原生库，否则 x86_64 模拟器装不上" >&2
-  exit 1
+  badging() {
+    "$AAPT" dump badging "$1"
+  }
+  echo "$(badging "$STAGE/app-0.1.32.apk")" | grep -q "versionCode='1032'"
+  echo "$(badging "$STAGE/app-0.1.32.apk")" | grep -q "versionName='0.1.32'"
+  echo "$(badging "$STAGE/app-0.1.33.apk")" | grep -q "versionCode='1033'"
+  echo "$(badging "$STAGE/app-0.1.33.apk")" | grep -q "versionName='0.1.33'"
+  if unzip -l "$STAGE/app-0.1.33.apk" | grep -q '\.so$'; then
+    echo "升级测试包不应带原生库，否则 x86_64 模拟器装不上" >&2
+    exit 1
+  fi
+
+  CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.32.apk" | grep 'SHA-256 digest' | head -1)
+  CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.33.apk" | grep 'SHA-256 digest' | head -1)
+  test -n "$CERT_A"
+  test "$CERT_A" = "$CERT_B"
 fi
-
-CERT_A=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.32.apk" | grep 'SHA-256 digest' | head -1)
-CERT_B=$("$APKSIGNER" verify --print-certs "$STAGE/app-0.1.33.apk" | grep 'SHA-256 digest' | head -1)
-test -n "$CERT_A"
-test "$CERT_A" = "$CERT_B"
 
 i=0
 boot=""
@@ -173,7 +175,7 @@ while [ "$i" -lt 180 ]; do
     tail -40 "$STAGE/emulator.log" >&2 || true
     exit 1
   fi
-  boot=$("$ADB" -s "emulator-$PORT" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') || boot=""
+  boot=$(timeout 5 "$ADB" -s "emulator-$PORT" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') || boot=""
   if [ "$boot" = "1" ]; then
     break
   fi
@@ -186,6 +188,30 @@ if [ "$boot" != "1" ]; then
   exit 1
 fi
 "$ADB" -s "emulator-$PORT" shell input keyevent 82 >/dev/null 2>&1 || true
+if [ -n "${CORRECTION_VERSION:-}" ]; then
+  target="emulator-$PORT"
+  timeout 60 "$ADB" -s "$target" install app/build/outputs/apk/debug/app-debug.apk
+  timeout 60 "$ADB" -s "$target" install -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+  run_correction() {
+    rc=0
+    timeout 155 "$ADB" -s "$target" shell am instrument -w -r \
+      -e class com.lorabge.memory.CorrectionChatTest -e correctionMode "$1" \
+      com.lorabge.memory.test/androidx.test.runner.AndroidJUnitRunner >"$STAGE/correction-$1.log" 2>&1 || rc=$?
+    cat "$STAGE/correction-$1.log"
+    test "$rc" -eq 0
+    grep -Fq 'OK (1 test)' "$STAGE/correction-$1.log"
+  }
+  case "$CORRECTION_VERSION" in
+    released-source) run_correction legacy ;;
+    candidate)
+      run_correction candidate
+      timeout 10 "$ADB" -s "$target" shell am force-stop com.lorabge.memory
+      run_correction restart
+      ;;
+    *) echo "Unknown correction test version: $CORRECTION_VERSION" >&2; exit 1 ;;
+  esac
+  exit 0
+fi
 sleep 2
 DISPLAY=:99 xwininfo -root -tree >"$STAGE/xwin.txt" 2>/dev/null || true
 python3 - "$STAGE/xwin.txt" "$STAGE/grab.env" << 'PY'
