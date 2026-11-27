@@ -69,19 +69,20 @@ class WorkflowTests(unittest.TestCase):
     def test_every_failed_skipped_or_cancelled_gate_blocks_publish(self):
         self.assertIn('    needs: [build, upgrade, inapp-update]', self.publish)
         expression = re.search(r'^    if: \$\{\{ (.+) \}\}$', self.publish, re.M)[1]
-        for event, build, upgrade, update, success in itertools.product(
+        for event, ref, build, upgrade, update, success in itertools.product(
             ['push', 'workflow_dispatch', 'pull_request'],
+            ['refs/heads/main', 'refs/heads/topic', 'refs/tags/android-v0.1.34'],
             ['success', 'failure', 'skipped', 'cancelled'],
             ['success', 'failure', 'skipped', 'cancelled'],
             ['success', 'failure', 'skipped', 'cancelled'], [True, False],
         ):
             translated = expression.replace('&&', ' and ').replace('success()', repr(success))
-            for key, value in {'github.event_name': event, 'needs.build.result': build,
+            for key, value in {'github.event_name': event, 'github.ref': ref, 'needs.build.result': build,
                                'needs.upgrade.result': upgrade, 'needs.inapp-update.result': update}.items():
                 translated = translated.replace(key, repr(value))
             allowed = eval(translated, {'__builtins__': {}}, {})
-            expected = success and event != 'pull_request' and build == upgrade == update == 'success'
-            self.assertEqual(allowed, expected, (event, build, upgrade, update, success))
+            expected = success and event != 'pull_request' and ref == 'refs/heads/main' and build == upgrade == update == 'success'
+            self.assertEqual(allowed, expected, (event, ref, build, upgrade, update, success))
 
     def test_existing_releases_are_not_rewritten(self):
         self.assertNotIn('gh release delete', self.publish)
