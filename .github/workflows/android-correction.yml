@@ -38,8 +38,15 @@ jobs:
           set -eu
           sudo chmod 660 /dev/kvm
           sudo chgrp "$(id -gn)" /dev/kvm
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
-          echo no | avdmanager create avd -n correction -k "system-images;android-35;default;x86_64" -f
+          SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}
+          CMDLINE=$(find "$SDK/cmdline-tools" -path '*/bin/sdkmanager' | head -1)
+          test -n "$CMDLINE"
+          printf '%s\n' "$SDK/platform-tools" >> "$GITHUB_PATH"
+          mkdir -p "$SDK/licenses"
+          printf '%s\n' 24333f8a63b6825ea9c5514f83c2829b004d1fee d56f5187479451eabf01fb78af6dfcb131a6481e > "$SDK/licenses/android-sdk-license"
+          "$CMDLINE" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          export PATH="$SDK/platform-tools:$SDK/emulator:$PATH"
+          echo no | "$(dirname "$CMDLINE")/avdmanager" create avd -n correction -k "system-images;android-35;default;x86_64" -f
           emulator -avd correction -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect -no-metrics > "$RUNNER_TEMP/correction-emulator.log" 2>&1 &
           adb wait-for-device
           timeout 360 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 3; done'
