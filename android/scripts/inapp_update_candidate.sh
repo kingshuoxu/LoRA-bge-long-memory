@@ -68,3 +68,22 @@ python3 "$ROOT/android/scripts/verify_candidate_update.py" seed "$RELEASE" "$STA
 INSTRUMENT_PID=$!
 # Installing the candidate kills instrumentation. Never use that exit status as PASS.
 python3 "$ROOT/android/scripts/verify_candidate_update.py" verify "$RELEASE" "$STAGE"
+
+# The exact installed candidate (not the synthetic baseline) now exercises
+# correction before and after a fresh process. The preservation gate above
+# must run first: the UI fixture intentionally replaces disposable test memory.
+timeout 30 "$ADB" -s "$ANDROID_SERIAL" shell am force-stop com.lorabge.memory
+timeout 30 "$ADB" -s "$ANDROID_SERIAL" shell wm size 480x920
+timeout 30 "$ADB" -s "$ANDROID_SERIAL" shell wm density 180
+run_candidate_correction() {
+  rc=0
+  timeout 165 "$ADB" -s "$ANDROID_SERIAL" shell am instrument -w -r \
+    -e class com.lorabge.memory.CorrectionChatTest -e correctionMode "$1" \
+    com.lorabge.memory.test/androidx.test.runner.AndroidJUnitRunner > "$STAGE/correction-$1.log" 2>&1 || rc=$?
+  cat "$STAGE/correction-$1.log"
+  test "$rc" -eq 0
+  grep -Fq 'OK (1 test)' "$STAGE/correction-$1.log"
+}
+run_candidate_correction candidate
+timeout 30 "$ADB" -s "$ANDROID_SERIAL" shell am force-stop com.lorabge.memory
+run_candidate_correction restart

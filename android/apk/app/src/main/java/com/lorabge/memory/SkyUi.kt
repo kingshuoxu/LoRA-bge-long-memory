@@ -56,6 +56,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -157,6 +158,7 @@ data class SkyMessage(
     val reason: String? = null,
     val noticed: Boolean = false,
     val sources: List<DocChip> = emptyList(),
+    val correction: ChatCorrection? = null,
 )
 
 data class SkyExpert(val name: String, val facts: List<String>, val label: String = "")
@@ -189,7 +191,6 @@ data class SkyState(
     val loss: List<Float> = emptyList(),
     val experts: List<SkyExpert> = emptyList(),
     val highlightExpert: String? = null,
-    val pending: PendingCorrection? = null,
     val entity: String = "",
     val statement: String = "",
     val value: String = "",
@@ -224,6 +225,8 @@ data class SkyState(
     val train: TrainSnapshot = TrainSnapshot(),
     val pendingFacts: List<String> = emptyList(),
     val rememberedFacts: List<String> = emptyList(),
+    val libraryExperts: List<SkyExpert>? = null,
+    val correctedFacts: List<String> = emptyList(),
     val pendingDrafts: List<SkyPending> = emptyList(),
     val batchItems: List<SkyBatchItem> = emptyList(),
     val editorOpen: Boolean = false,
@@ -244,8 +247,7 @@ sealed class SkyEvent {
     data class Tab(val tab: SkyTab) : SkyEvent()
     data class Draft(val text: String) : SkyEvent()
     data object Send : SkyEvent()
-    data object ConfirmCorrection : SkyEvent()
-    data object DismissCorrection : SkyEvent()
+    data class ResolveCorrection(val id: String, val confirm: Boolean) : SkyEvent()
     data class Field(val key: String, val text: String) : SkyEvent()
     data class Force(val on: Boolean) : SkyEvent()
     data object Train : SkyEvent()
@@ -1301,6 +1303,7 @@ private fun ChatPane(state: SkyState, ime: Dp, onEvent: (SkyEvent) -> Unit) {
                         state.liveMotion,
                         onCopied = { copied = true },
                         onSource = { onEvent(SkyEvent.OpenPassage(it)) },
+                        onCorrection = { id, confirm -> onEvent(SkyEvent.ResolveCorrection(id, confirm)) },
                     )
                 }
             }
@@ -1456,6 +1459,7 @@ private fun Bubble(
     liveMotion: Boolean,
     onCopied: () -> Unit = {},
     onSource: (DocChip) -> Unit = {},
+    onCorrection: (String, Boolean) -> Unit = { _, _ -> },
 ) {
     val user = message.role == "user"
     val typing = streaming && message.text.isBlank()
@@ -1513,7 +1517,9 @@ private fun Bubble(
                 )
             }
             if (!user && !streaming && !typing) {
-                if (message.sources.isNotEmpty()) {
+                if (message.correction != null) {
+                    CorrectionCard(lang, message.correction, onCorrection)
+                } else if (message.sources.isNotEmpty()) {
                     Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         message.sources.forEach { chip ->
                             Text(
@@ -1544,6 +1550,35 @@ private fun Bubble(
                     Text(skyText(lang, "memoryNone"), color = Muted.copy(alpha = 0.7f), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CorrectionCard(lang: String, card: ChatCorrection, resolve: (String, Boolean) -> Unit) {
+    val en = lang == "en"
+    Column(
+        Modifier.fillMaxWidth().padding(top = 8.dp)
+            .background(SurfaceHi, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(EntityGround.assistantVoice(card.fact.statement, card.fact.entity), color = Ink)
+        when (card.status) {
+            CorrectionStatus.Pending -> {
+                TextButton(onClick = { resolve(card.id, true) }) {
+                    Text(if (en) "Confirm update" else "确认更新", color = Accent)
+                }
+                TextButton(onClick = { resolve(card.id, false) }) {
+                    Text(if (en) "Don't update" else "不更新", color = Ink)
+                }
+            }
+            else -> Text(
+                when (card.status) {
+                    CorrectionStatus.Confirmed -> if (en) "Memory updated" else "记忆已更新"
+                    CorrectionStatus.Superseded -> if (en) "Replaced by a newer correction" else "已被更新的纠正替代"
+                    else -> if (en) "Not updated" else "未更新"
+                },
+                color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }
@@ -2177,7 +2212,29 @@ private fun LibraryPane(state: SkyState, onEvent: (SkyEvent) -> Unit) {
             Spacer(Modifier.height(8.dp))
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(state.experts, key = { it.name }) { expert ->
+            if (state.correctedFacts.isNotEmpty()) {
+                item(key = "corrected-memories") {
+                    Text(
+                        if (state.lang == "en") "Confirmed corrections" else "已更正的记忆",
+                        color = Muted, fontSize = 13.sp,
+                    )
+                }
+                items(state.correctedFacts) { line ->
+                    Text(
+                        line, color = Ink, fontSize = 15.sp, lineHeight = 22.sp,
+                        modifier = Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(14.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    )
+                }
+                item(key = "trained-snapshots") {
+                    Text(
+                        if (state.lang == "en") "Trained experts · deleting an expert keeps confirmed corrections"
+                        else "已训练专家 · 删除专家不影响已确认的更正",
+                        color = Muted, fontSize = 13.sp,
+                    )
+                }
+            }
+            items(state.libraryExperts ?: state.experts, key = { it.name }) { expert ->
                 Row(
                     Modifier
                         .fillMaxWidth()

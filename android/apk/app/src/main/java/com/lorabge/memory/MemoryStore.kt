@@ -362,6 +362,7 @@ data class ChatMessage(
     val reason: String? = null,
     val noticed: Boolean = false,
     val sources: List<DocChip> = emptyList(),
+    val correctionId: String? = null,
 )
 
 data class Conversation(
@@ -378,6 +379,7 @@ data class Conversation(
             if (message.expert != null) obj.put("expert", message.expert)
             if (message.reason != null) obj.put("reason", message.reason)
             if (message.noticed) obj.put("noticed", true)
+            if (message.correctionId != null) obj.put("correction_id", message.correctionId)
             if (message.sources.isNotEmpty()) {
                 val sources = JSONArray()
                 message.sources.forEach { chip ->
@@ -436,6 +438,7 @@ data class Conversation(
                         reason = m.optString("reason").ifBlank { null },
                         noticed = m.optBoolean("noticed"),
                         sources = sources,
+                        correctionId = m.optString("correction_id").ifBlank { null },
                     ),
                 )
             }
