@@ -58,7 +58,7 @@ jobs:
         run: |
           bash ./gradlew assembleDebug assembleDebugAndroidTest -Plorabge.skipNative=true --no-daemon
           if [ "$CORRECTION_VERSION" = candidate ]; then
-            bash ./gradlew testDebugUnitTest --tests 'com.lorabge.memory.CorrectionMemoryTest' --tests 'com.lorabge.memory.EntityGroundTest' --tests 'com.lorabge.memory.FactNoticeTest' -Plorabge.skipNative=true --no-daemon
+            bash ./gradlew testDebugUnitTest --tests 'com.lorabge.memory.CorrectionMemoryTest' --tests 'com.lorabge.memory.EntityGroundTest' --tests 'com.lorabge.memory.FactNoticeTest' --tests 'com.lorabge.memory.AppUpdateTest' -Plorabge.skipNative=true --no-daemon
           fi
       - name: Exercise chat on the upgrade gate emulator
         timeout-minutes: 12

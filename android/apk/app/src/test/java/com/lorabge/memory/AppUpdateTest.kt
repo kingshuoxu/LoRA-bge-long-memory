@@ -118,7 +118,7 @@ class AppUpdateTest {
         assertNull(versionNameOfTag("v0.1.3"))
         assertNull(versionNameOfTag("android-v0.1"))
         val gradle = File("build.gradle.kts").readText()
-        assertTrue(gradle.contains(""""0.1.33""""))
+        assertTrue(gradle.contains("?: \"0.1.34\""))
         assertTrue(gradle.contains("releaseVersionCode(appVersion)"))
     }
 
