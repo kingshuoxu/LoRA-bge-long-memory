@@ -83,7 +83,8 @@ class CorrectionChatTest {
         waitSavedReply("星舟测试公司成立于1979年。")
         device.wait(Until.findObject(By.desc("tab-library")), 8_000)?.click() ?: error("missing Library tab")
         waitText("已更正的记忆")
-        waitText("星舟测试公司的总部是苏州。")
+        val display = By.text(java.util.regex.Pattern.compile("星舟测试公司的总部是苏州。?"))
+        check(device.wait(Until.hasObject(display), 8_000)) { "updated city not displayed in the Memory Library" }
         assertFalse("old city is still displayed in the Memory Library", device.hasObject(By.textContains("杭州")))
         check(device.wait(Until.hasObject(By.textContains("1979")), 8_000)) { "unrelated expert fact stopped showing" }
     }
